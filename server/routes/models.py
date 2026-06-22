@@ -8,6 +8,7 @@ Endpoints:
   GET    /api/ps              — list running llama-server processes
   POST   /api/models/{name}/load    — pre-load a model
   POST   /api/models/{name}/unload  — stop a running model
+  POST   /api/models/{name}/reload  — restart a running model to apply param changes
 """
 from __future__ import annotations
 
@@ -156,6 +157,36 @@ async def unload_model(name: str, pm=Depends(get_pm)):
     if not stopped:
         raise HTTPException(status_code=404, detail=f"Model '{name}' is not running")
     return {"status": "stopped", "name": name}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/models/{name}/reload
+# ---------------------------------------------------------------------------
+@router.post("/models/{name:path}/reload")
+async def reload_model(name: str, pm=Depends(get_pm), registry=Depends(get_registry)):
+    """Restart a running backend so it picks up the latest registry params.
+
+    No-op if the model isn't running: live params already reload from disk, so a
+    stopped model applies the new params on its next load.
+    """
+    try:
+        entry = registry.get(name)
+        model_path = registry.resolve_path(entry)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not pm.is_running(name):
+        return {"status": "not_running", "name": name}
+    await pm.stop(name)
+    try:
+        inst = await pm.get_or_start(name, entry, model_path)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {
+        "status": "reloaded",
+        "name": name,
+        "port": inst.port,
+        "base_url": inst.base_url,
+    }
 
 
 # ---------------------------------------------------------------------------

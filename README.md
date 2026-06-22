@@ -132,6 +132,7 @@ run <name>             Interactive chat with a model (streams reasoning)
 ps                     Show running model processes
 load <name>            Pre-load a model (start llama-server)
 unload <name>          Stop a running model (alias: stop)
+reload <name>          Restart a running model to apply registry param changes
 logs <name>            Tail logs for a model
 health                 Show daemon health status
 version                Show version info
@@ -192,6 +193,8 @@ models:
       ctx_size: 8192
       n_gpu_layers: 99
 ```
+
+> **Applying changes:** The registry reloads from disk automatically, so adding, editing, or removing an entry takes effect on the next request — no daemon restart. The one exception is a model that's **already running**: its `llama-server` keeps the params it launched with, so run `zallama reload <name>` to restart it with the new params. (Changes to `config.yaml` are read only at startup and do require `systemctl restart zallama`.)
 
 Each entry may declare:
 - **`modality`** — `text` (default), or the planned `asr` / `tts` / `image`. Determines which endpoints the model may serve. Requests to a mismatched endpoint return a clear `400`.

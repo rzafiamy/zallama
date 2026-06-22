@@ -519,6 +519,21 @@ def cmd_unload(args: list[str]):
         _err(f"Failed: {r.json().get('detail', r.text)}")
 
 
+def cmd_reload(args: list[str]):
+    if not args:
+        _err("Usage: zallama reload <model>"); sys.exit(1)
+    model = args[0]
+    print(_color(f"⏳ Reloading '{model}'...", YELLOW), end="", flush=True)
+    r = _api("POST", f"/api/models/{model}/reload")
+    if r.status_code != 200:
+        print(); _err(f"Failed: {r.json().get('detail', r.text)}"); return
+    d = r.json()
+    if d["status"] == "not_running":
+        print(); _info(f"'{model}' isn't running — new params apply on next load.")
+    else:
+        print(_color(f" ready on port {d['port']}", GREEN))
+
+
 def _resolved_paths() -> dict:
     """Resolve every zallama path via the daemon's own config loader.
 
@@ -769,6 +784,7 @@ COMMANDS = {
     "load": cmd_load,
     "unload": cmd_unload,
     "stop": cmd_unload,
+    "reload": cmd_reload,
     "logs": cmd_logs,
     "paths": cmd_paths,
     "health": cmd_health,
@@ -805,6 +821,7 @@ def main():
             ("ps", "Show running model processes"),
             ("load <name>", "Pre-load a model into memory"),
             ("unload <name>", "Stop a running model"),
+            ("reload <name>", "Restart a running model to apply registry param changes"),
             ("logs <name>", "Tail llama-server logs for a model"),
             ("paths", "Show where zallama stores its files"),
             ("health", "Show daemon health status"),

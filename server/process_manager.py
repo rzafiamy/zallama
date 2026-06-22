@@ -144,6 +144,11 @@ class ProcessManager:
         await self._kill_instance(inst)
         return True
 
+    def is_running(self, model_name: str) -> bool:
+        """True if the model has a live instance."""
+        inst = self._instances.get(model_name)
+        return inst is not None and inst.is_alive()
+
     def list_running(self) -> list[dict]:
         """Return info about all running instances."""
         result = []
