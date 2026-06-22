@@ -74,25 +74,75 @@ AUTHOR_EMAIL = "wservice@infodev.ovh"
 AUTHOR_URL = "https://infodev.ovh"
 
 BOLD   = "\033[1m"
-GREEN  = "\033[92m"
-YELLOW = "\033[93m"
-RED    = "\033[91m"
-CYAN   = "\033[96m"
-DIM    = "\033[2m"
 RESET  = "\033[0m"
 CLEAR  = "\033[2J\033[H"
 
+# MS Fluent 2 Design Guidelines - Truecolor Palette
+F_BLUE    = "\033[38;2;71;158;245m"    # Primary Accent / Brand Blue
+F_TEAL    = "\033[38;2;16;185;129m"    # Success / Active Teal
+F_ORANGE  = "\033[38;2;245;158;11m"    # Warning Orange
+F_RED     = "\033[38;2;239;68;68m"     # Error Red
+F_PURPLE  = "\033[38;2;168;85;247m"    # Reasoning / Purple
+F_GRAY    = "\033[38;2;148;163;184m"   # Secondary Neutral
+F_DIM     = "\033[38;2;100;116;139m"   # Tertiary Neutral
+F_WHITE   = "\033[38;2;255;255;255m"   # Primary Neutral Text
 
-def _color(text: str, color: str) -> str:
+# Legacy color mappings for backward compatibility
+GREEN  = F_TEAL
+YELLOW = F_ORANGE
+RED    = F_RED
+CYAN   = F_BLUE
+DIM    = F_DIM
+
+
+def _color(text: str, color_code: str) -> str:
     if sys.stdout.isatty():
-        return f"{color}{text}{RESET}"
+        return f"{color_code}{text}{RESET}"
     return text
 
 
-def _ok(msg: str): print(_color(f"✓ {msg}", GREEN))
-def _warn(msg: str): print(_color(f"⚠ {msg}", YELLOW), file=sys.stderr)
-def _err(msg: str): print(_color(f"✗ {msg}", RED), file=sys.stderr)
-def _info(msg: str): print(_color(f"  {msg}", DIM))
+def _ok(msg: str): print(f"{_color('●', F_TEAL)} {msg}")
+def _warn(msg: str): print(f"{_color('⚠', F_ORANGE)} {msg}", file=sys.stderr)
+def _err(msg: str): print(f"{_color('✗', F_RED)} {msg}", file=sys.stderr)
+def _info(msg: str): print(f"{_color('ℹ', F_BLUE)} {msg}")
+
+
+def _print_table(headers: list[str], rows: list[list[str]], col_aligns: list[str] | None = None):
+    """Render a clean Fluent-style table with elegant Unicode borders."""
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            clean_cell = re.sub(r'\033\[[0-9;]*m', '', str(cell))
+            widths[idx] = max(widths[idx], len(clean_cell))
+    
+    c_tl, c_tr, c_bl, c_br = "┌", "┐", "└", "┘"
+    c_hl, c_vl, c_t = "─", "│", "┬"
+    c_b, c_l, c_r = "┴", "├", "┤"
+    c_x = "┼"
+    
+    top = c_tl + c_hl.join(c_hl * (w + 2) for w in widths) + c_tr
+    print(_color(top, F_DIM))
+    
+    header_str = c_vl + c_vl.join(f" {h:<{widths[i]}} " for i, h in enumerate(headers)) + c_vl
+    print(header_str)
+    
+    sep = c_l + c_x.join(c_hl * (w + 2) for w in widths) + c_r
+    print(_color(sep, F_DIM))
+    
+    for row in rows:
+        line_parts = []
+        for i, cell in enumerate(row):
+            clean_cell = re.sub(r'\033\[[0-9;]*m', '', str(cell))
+            padding = widths[i] - len(clean_cell)
+            align = col_aligns[i] if col_aligns else "left"
+            if align == "right":
+                line_parts.append(f" {' ' * padding}{cell} ")
+            else:
+                line_parts.append(f" {cell}{' ' * padding} ")
+        print(c_vl + c_vl.join(line_parts) + c_vl)
+        
+    bot = c_bl + c_hl.join(c_hl * (w + 2) for w in widths) + c_br
+    print(_color(bot, F_DIM))
 
 
 # ---------------------------------------------------------------------------
@@ -149,19 +199,17 @@ def _print_remote_presets():
     try:
         r = _api("GET", "/api/models/shorthands")
         shorthands = r.json().get("shorthands", {})
-        print(f"\n{BOLD}{CYAN}Available Remote Preset Models (HuggingFace / Unsloth):{RESET}")
-        print(f"{'NAME':<22} {'HF REPOSITORY & FILENAME':<55} {'DESCRIPTION'}")
-        print("─" * 110)
+        print(f"\n{BOLD}{F_BLUE} Available Remote Presets (HuggingFace / Unsloth){RESET}")
+        headers = ["PRESET", "HF REPOSITORY / FILENAME", "DESCRIPTION"]
+        rows = []
         for name, info in shorthands.items():
             repo_file = f"{info['repo']}/{info['file']}"
-            if len(repo_file) > 52:
-                repo_file = repo_file[:49] + "..."
+            if len(repo_file) > 55:
+                repo_file = repo_file[:52] + "..."
             desc = info.get("description", "")
-            colored_name = _color(name, GREEN)
-            padding = 22 - len(name)
-            if padding < 0: padding = 0
-            print(f"{colored_name}{' ' * padding} {repo_file:<55} {desc}")
-        print(f"\n{DIM}To pull a model: zallama pull <name_or_custom_hf_path>{RESET}\n")
+            rows.append([_color(name, F_TEAL + BOLD), repo_file, desc])
+        _print_table(headers, rows)
+        print(f"\n{F_DIM}  To pull a model: {RESET}{BOLD}zallama pull <preset_name_or_custom_hf_path>{RESET}\n")
     except Exception as e:
         _err(f"Could not retrieve remote presets: {e}")
 
@@ -177,24 +225,27 @@ def cmd_list(args: list[str]):
     models = data.get("models", [])
 
     if not models:
-        print(_color("No models registered yet.", DIM))
+        print(_color("No models registered yet.", F_DIM))
         _info("Add a model with: zallama add <name> <path-to.gguf>")
         _info("Or pull a remote model: zallama pull <name>")
         return
 
-    # Header
-    print(f"\n{'NAME':<25} {'STATUS':<12} {'SIZE':<10} {'DESCRIPTION'}")
-    print("─" * 75)
+    print(f"\n{BOLD}{F_BLUE} Registered Models{RESET}")
+    headers = ["MODEL", "STATUS", "SIZE", "DESCRIPTION"]
+    rows = []
     for m in models:
         name = m["name"]
-        status = _color("● RUNNING", GREEN) if m["running"] else _color("○ stopped", DIM)
+        status = _color("● RUNNING", F_TEAL) if m["running"] else _color("○ stopped", F_DIM)
         size = m.get("file_size", 0)
-        size_str = f"{size / 1e9:.1f}GB" if size > 0 else "?"
+        size_str = f"{size / 1e9:.1f} GB" if size > 0 else "?"
         file_ok = m.get("file_ok", False)
         if not file_ok:
-            size_str = _color("FILE MISSING", RED)
-        desc = m.get("description", "")[:40]
-        print(f"{name:<25} {status:<22} {size_str:<10} {desc}")
+            size_str = _color("FILE MISSING", F_RED)
+        desc = m.get("description", "")
+        if len(desc) > 40:
+            desc = desc[:37] + "..."
+        rows.append([_color(name, F_BLUE + BOLD), status, size_str, desc])
+    _print_table(headers, rows)
     print()
 
 
@@ -311,7 +362,7 @@ def cmd_remove(args: list[str]):
 import threading
 
 class Spinner:
-    def __init__(self, message="Assistant is thinking..."):
+    def __init__(self, message="Thinking..."):
         self.message = message
         self.running = False
         self.thread = None
@@ -320,12 +371,11 @@ class Spinner:
         chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         idx = 0
         while self.running:
-            sys.stdout.write(f"\r{_color(chars[idx], GREEN)} {self.message}")
+            sys.stdout.write(f"\r{_color(chars[idx], F_BLUE + BOLD)} {F_DIM}{self.message}{RESET}")
             sys.stdout.flush()
             idx = (idx + 1) % len(chars)
-            time.sleep(0.1)
-        # Clear spinner line completely
-        sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
+            time.sleep(0.08)
+        sys.stdout.write("\r" + " " * (len(self.message) + 15) + "\r")
         sys.stdout.flush()
 
     def start(self):
@@ -346,41 +396,49 @@ def cmd_run(args: list[str]):
         sys.exit(1)
     model = args[0]
 
-    print(_color(f"\n🦙 Zallama — {model}", CYAN + BOLD))
-    print(_color("Type your message. Use /exit or Ctrl+C to quit.\n", DIM))
+    # Print a beautiful Fluent 2 style banner header
+    print(_color("\n╭──────────────────────────────────────────────────────────╮", F_BLUE))
+    print(f"{_color('│', F_BLUE)}  {BOLD}{F_WHITE}ZALLAMA INTERACTIVE CHAT{RESET}                             {_color('│', F_BLUE)}")
+    model_line = f"Model: {model}"
+    padded_model = model_line + " " * (52 - len(model_line))
+    print(f"{_color('│', F_BLUE)}  {F_GRAY}{padded_model}{RESET} {_color('│', F_BLUE)}")
+    info_line = "Type message and press Enter. /exit to quit."
+    padded_info = info_line + " " * (52 - len(info_line))
+    print(f"{_color('│', F_BLUE)}  {F_DIM}{padded_info}{RESET} {_color('│', F_BLUE)}")
+    print(_color("╰──────────────────────────────────────────────────────────╯", F_BLUE))
 
     # First, ensure the model is loaded (may take a moment)
-    print(_color(f"⏳ Loading model '{model}'...", YELLOW), end="", flush=True)
+    print(_color(f"⏳ Loading model '{model}'...", F_ORANGE), end="", flush=True)
     r = _api("POST", f"/api/models/{model}/load")
     if r.status_code != 200:
         print()
         _err(f"Failed to load model: {r.json().get('detail', r.text)}")
         sys.exit(1)
-    print(_color(" ready!", GREEN))
+    print(_color(" Ready!", F_TEAL))
 
     history = []
 
     while True:
         try:
-            user_input = input(_color("\nYou: ", CYAN + BOLD)).strip()
+            user_input = input(_color("\nUser › ", F_BLUE + BOLD)).strip()
         except (KeyboardInterrupt, EOFError):
-            print("\n" + _color("Goodbye! 👋", DIM))
+            print("\n" + _color("Goodbye! 👋", F_DIM))
             break
 
         if not user_input:
             continue
         if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
-            print(_color("Goodbye! 👋", DIM))
+            print(_color("Goodbye! 👋", F_DIM))
             break
         if user_input == "/clear":
             history = []
-            print(_color("History cleared.", DIM))
+            print(_color("History cleared.", F_DIM))
             continue
 
         history.append({"role": "user", "content": user_input})
 
         payload = {"model": model, "messages": history, "stream": True}
-        spinner = Spinner("Assistant is thinking...")
+        spinner = Spinner("Thinking...")
         spinner.start()
 
         full_response = ""
@@ -398,17 +456,18 @@ def cmd_run(args: list[str]):
                     err_msg = r.json().get("detail", r.text)
                 except Exception:
                     err_msg = r.text
-                print(_color(f"\nError: {err_msg}", RED))
+                print(_color(f"\nError: {err_msg}", F_RED))
                 continue
 
             buffer = b""
             spinner_stopped = False
+            in_reasoning = False
+            in_content = False
 
             done = False
             for chunk in r.iter_content(chunk_size=None):
                 if not spinner_stopped:
                     spinner.stop()
-                    print(_color("Assistant: ", GREEN + BOLD), end="", flush=True)
                     spinner_stopped = True
 
                 buffer += chunk
@@ -430,14 +489,22 @@ def cmd_run(args: list[str]):
                         chunk_json = json.loads(text)
                         delta = chunk_json["choices"][0]["delta"]
                         
-                        # Support thinking / reasoning models
                         reasoning_content = delta.get("reasoning_content", "")
                         delta_content = delta.get("content", "")
                         
                         if reasoning_content:
-                            print(_color(reasoning_content, DIM), end="", flush=True)
+                            if not in_reasoning:
+                                in_reasoning = True
+                                print(f"\n{BOLD}{F_PURPLE}🧠 Thinking Process:{RESET}")
+                            print(_color(reasoning_content, F_DIM), end="", flush=True)
                             full_response += reasoning_content
                         elif delta_content:
+                            if in_reasoning:
+                                in_reasoning = False
+                                print(f"\n")
+                            if not in_content:
+                                in_content = True
+                                print(f"\n{BOLD}{F_TEAL}🦙 Assistant:{RESET}")
                             print(delta_content, end="", flush=True)
                             full_response += delta_content
                     except Exception:
@@ -447,10 +514,10 @@ def cmd_run(args: list[str]):
 
         except Exception as e:
             spinner.stop()
-            print(_color(f"\nError: {e}", RED))
+            print(_color(f"\nError: {e}", F_RED))
         except KeyboardInterrupt:
             spinner.stop()
-            print(_color("\n[interrupted]", DIM))
+            print(_color("\n[interrupted]", F_DIM))
 
         print()
         if full_response:
@@ -464,21 +531,29 @@ def cmd_ps(args: list[str]):
     procs = data.get("processes", [])
     mem = data.get("memory", {})
     if not procs:
-        print(_color("No models currently running.", DIM))
+        print(_color("\nNo models currently running.", F_DIM))
         _print_mem_status(mem)
         return
 
-    print(f"\n{'NAME':<25} {'PORT':<8} {'MEM':<8} {'UPTIME':<12} {'LAST USED'}")
-    print("─" * 73)
+    print(f"\n{BOLD}{F_BLUE} Running Model Processes{RESET}")
+    headers = ["MODEL", "PORT", "MEMORY", "UPTIME", "LAST USED"]
+    rows = []
     now = time.time()
     for p in procs:
         name = p["name"]
-        port = p["port"]
+        port = str(p["port"])
         mem_gb = p.get("mem_gb", 0)
-        mem_str = f"{mem_gb:.1f}GB" if mem_gb else "?"
+        mem_str = f"{mem_gb:.1f} GB" if mem_gb else "?"
         uptime = int(now - p.get("started_at", now))
         last = int(now - p.get("last_used", now))
-        print(f"{name:<25} {port:<8} {mem_str:<8} {_fmt_duration(uptime):<12} {_fmt_duration(last)} ago")
+        rows.append([
+            _color(name, F_TEAL + BOLD),
+            _color(port, F_BLUE),
+            mem_str,
+            _fmt_duration(uptime),
+            f"{_fmt_duration(last)} ago"
+        ])
+    _print_table(headers, rows)
     _print_mem_status(mem)
     print()
 
@@ -491,9 +566,9 @@ def _print_mem_status(mem: dict):
     count = mem.get("loaded_count", 0)
     if budget > 0:
         head = mem.get("headroom_gb", 0)
-        print(_color(f"\nMemory: {loaded:.1f}GB / {budget:.1f}GB used  •  {head:.1f}GB free  •  {count} loaded", DIM))
+        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB / {budget:.1f} GB used  •  {head:.1f} GB free  •  {count} model(s) loaded", F_BLUE))
     elif count:
-        print(_color(f"\nMemory: {loaded:.1f}GB across {count} model(s)  •  budget: unlimited", DIM))
+        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB loaded across {count} model(s)", F_BLUE))
 
 
 def cmd_load(args: list[str]):
@@ -568,11 +643,15 @@ def cmd_paths(args: list[str]):
     except Exception as e:
         _err(f"Could not resolve paths: {e}")
         sys.exit(1)
-    print(f"\n{BOLD}Zallama file locations:{RESET}")
+    
+    print(f"\n{BOLD}{F_BLUE} Zallama File Locations{RESET}")
+    headers = ["COMPONENT", "PATH", "STATUS"]
+    rows = []
     for label, value in paths.items():
         exists = isinstance(value, Path) and value.exists()
-        mark = f"{GREEN}✓{RESET}" if exists else (f"{DIM}—{RESET}" if isinstance(value, Path) else " ")
-        print(f"  {mark} {_color(label, CYAN):<28}{value}")
+        status = _color("✓ exists", F_TEAL) if exists else (_color("—", F_DIM) if isinstance(value, Path) else _color("unknown", F_ORANGE))
+        rows.append([label, str(value), status])
+    _print_table(headers, rows)
     print()
 
 
@@ -613,7 +692,7 @@ def cmd_pull(args: list[str]):
     
     resp_data = r.json()
     model = resp_data.get("model", model)
-    print(_color(f"⏳ Initiated pull for '{model}'...", CYAN))
+    print(_color(f"⏳ Initiating pull for '{model}'...", F_BLUE))
     
     last_status = None
     while True:
@@ -629,7 +708,7 @@ def cmd_pull(args: list[str]):
             status = task["status"]
             if status != last_status:
                 last_status = status
-                print(_color(f"\nStatus: {status.upper()}", YELLOW))
+                print(_color(f"\nStatus: {status.upper()}", F_ORANGE))
                 
             if status == "completed":
                 print()
@@ -646,20 +725,20 @@ def cmd_pull(args: list[str]):
                 speed = task.get("speed", 0.0)
                 eta = task.get("eta", 0.0)
                 
-                bar_width = 30
+                bar_width = 25
                 filled = int(percent / 100 * bar_width)
-                bar = "#" * filled + "-" * (bar_width - filled)
+                bar = _color("█" * filled, F_BLUE) + _color("░" * (bar_width - filled), F_DIM)
                 
                 speed_str = f"{speed / 1024 / 1024:.2f} MB/s" if speed > 1024*1024 else f"{speed / 1024:.2f} KB/s"
-                size_str = f"{completed / 1024 / 1024 / 1024:.2f}GB / {total / 1024 / 1024 / 1024:.2f}GB"
+                size_str = f"{completed / 1024 / 1024 / 1024:.2f} GB / {total / 1024 / 1024 / 1024:.2f} GB"
                 eta_str = f"ETA: {int(eta)}s" if eta > 0 else "ETA: unknown"
                 
-                sys.stdout.write(f"\r[{bar}] {percent:.1f}% ({size_str}) • {speed_str} • {eta_str}")
+                sys.stdout.write(f"\r  {bar}  {BOLD}{F_BLUE}{percent:.1f}%{RESET} ({size_str}) • {F_TEAL}{speed_str}{RESET} • {F_DIM}{eta_str}{RESET}")
                 sys.stdout.flush()
                 
             time.sleep(0.5)
         except (KeyboardInterrupt, SystemExit):
-            print("\n" + _color("Download continuing in background daemon.", DIM))
+            print("\n" + _color("Download continuing in background daemon.", F_DIM))
             break
 
 
@@ -686,12 +765,12 @@ def cmd_search(args: list[str]):
     if resp_type == "repo_list":
         results = data.get("results", [])
         if not results:
-            print(_color("No GGUF models found matching query.", DIM))
+            print(_color("No GGUF models found matching query.", F_DIM))
             return
             
-        print(f"\n{BOLD}{CYAN}HuggingFace GGUF Repositories matching '{query}':{RESET}")
-        print(f"{'REPOSITORY ID':<50} {'DOWNLOADS':<12} {'LIKES':<8}")
-        print("─" * 75)
+        print(f"\n{BOLD}{F_BLUE} HuggingFace GGUF Repositories matching '{query}'{RESET}")
+        headers = ["REPOSITORY ID", "DOWNLOADS", "LIKES"]
+        rows = []
         for repo in results:
             rep_id = repo["id"]
             dls = repo["downloads"]
@@ -700,12 +779,10 @@ def cmd_search(args: list[str]):
             dls_str = f"{dls:,}" if dls < 1000 else (f"{dls/1000:.1f}k" if dls < 1e6 else f"{dls/1e6:.1f}M")
             likes_str = f"{likes:,}"
             
-            colored_id = _color(rep_id, GREEN)
-            padding = 50 - len(rep_id)
-            if padding < 0: padding = 0
-            print(f"{colored_id}{' ' * padding} {dls_str:<12} {likes_str:<8}")
-        print(f"\n{DIM}To view files in a repo: zallama search <repository_id>{RESET}")
-        print(f"{DIM}To pull a model:         zallama pull <repository_id>/<filename.gguf>{RESET}\n")
+            rows.append([_color(rep_id, F_TEAL + BOLD), dls_str, likes_str])
+        _print_table(headers, rows)
+        print(f"\n{F_DIM}  To view files in a repo: {RESET}{BOLD}zallama search <repository_id>{RESET}")
+        print(f"{F_DIM}  To pull a model:         {RESET}{BOLD}zallama pull <repository_id>/<filename.gguf>{RESET}\n")
         
     elif resp_type == "file_list":
         repo_id = data.get("repo")
@@ -714,13 +791,13 @@ def cmd_search(args: list[str]):
         likes = data.get("likes", 0)
         
         if not files:
-            print(_color(f"No GGUF files found in repository '{repo_id}'.", DIM))
+            print(_color(f"No GGUF files found in repository '{repo_id}'.", F_DIM))
             return
             
-        print(f"\n{BOLD}{CYAN}GGUF Files in '{repo_id}' (Downloads: {dls:,}, Likes: {likes:,}):{RESET}")
-        print("─" * 75)
-        for f in files:
-            print(f"  • {f}")
+        print(f"\n{BOLD}{F_BLUE} GGUF Files in '{repo_id}'{RESET}  {F_DIM}(Downloads: {dls:,} • Likes: {likes:,}){RESET}")
+        headers = ["FILE NAME"]
+        rows = [[f] for f in files]
+        _print_table(headers, rows)
         
         suggested_file = files[0]
         # suggest a reasonable Q4_K_M or Q4_0 file if possible
@@ -728,32 +805,36 @@ def cmd_search(args: list[str]):
             if "q4_k_m" in f.lower() or "q4_0" in f.lower() or "q4_1" in f.lower():
                 suggested_file = f
                 break
-        print(f"\n{DIM}To pull one of these: zallama pull {repo_id}/{suggested_file}{RESET}\n")
+        print(f"\n{F_DIM}  To pull this model: {RESET}{BOLD}zallama pull {repo_id}/{suggested_file}{RESET}\n")
 
 
 def cmd_health(args: list[str]):
     r = _api("GET", "/api/health")
     d = r.json()
-    print(_color("\n🦙 Zallama Health", CYAN + BOLD))
-    print(f"  Status:   {_color(d.get('status','?'), GREEN)}")
-    print(f"  Version:  {d.get('version','?')}")
-    print(f"  Platform: {d.get('platform','?')}")
-    print(f"  Models registered: {d.get('models_registered',0)}")
-    print(f"  Models running:    {d.get('models_running',0)}")
+    print(f"\n{BOLD}{F_BLUE} Zallama Health Status{RESET}")
+    headers = ["PROPERTY", "VALUE"]
+    rows = [
+        ["Status", _color(d.get("status", "?").upper(), F_TEAL if d.get("status") == "ok" else F_RED)],
+        ["Version", d.get("version", "?")],
+        ["Platform", d.get("platform", "?")],
+        ["Models Registered", str(d.get("models_registered", 0))],
+        ["Models Running", str(d.get("models_running", 0))]
+    ]
+    _print_table(headers, rows)
     print()
 
 
 def cmd_version(args: list[str]):
-    print(f"\n  {_color('🦙 Zallama', CYAN)} {_color('v' + VERSION, BOLD)}")
-    print(f"  {_color(DESCRIPTION, DIM)}\n")
+    print(f"\n{BOLD}{F_BLUE} Zallama Version Information{RESET}")
+    headers = ["PROPERTY", "VALUE"]
     rows = [
-        ("Developed by", AUTHOR),
-        ("Contact", AUTHOR_EMAIL),
-        ("Website", AUTHOR_URL),
-        ("License", "see LICENSE"),
+        ["Product", "Zallama Local LLM Server"],
+        ["Version", VERSION],
+        ["Developed by", AUTHOR],
+        ["Contact", AUTHOR_EMAIL],
+        ["Website", AUTHOR_URL],
     ]
-    for label, value in rows:
-        print(f"  {_color(f'{label:<13}', CYAN)}{value}")
+    _print_table(headers, rows)
     print()
 
 
