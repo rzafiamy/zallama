@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""
+zallama — Zallama CLI
+Usage: zallama <command> [args]
+
+Commands:
+  serve           Start the Zallama daemon
+  list            List registered models
+  add <name> <file>  Register a local .gguf model
+  remove <name>   Remove a model from registry
+  run <name>      Interactive chat with a model
+  ps              Show running model processes
+  load <name>     Pre-load a model (start llama-server)
+  unload <name>   Stop a running model
+  logs <name>     Tail logs for a model
+  health          Show daemon health status
+  version         Show version
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+import readline
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Try to import requests (used for API calls); gracefully degrade
+# ---------------------------------------------------------------------------
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+ZALLAMA_HOST = os.environ.get("ZALLAMA_HOST", "http://localhost:11434")
+VERSION = "1.0.0"
+
+BOLD   = "\033[1m"
+GREEN  = "\033[92m"
+YELLOW = "\033[93m"
+RED    = "\033[91m"
+CYAN   = "\033[96m"
+DIM    = "\033[2m"
+RESET  = "\033[0m"
+CLEAR  = "\033[2J\033[H"
+
+
+def _color(text: str, color: str) -> str:
+    if sys.stdout.isatty():
+        return f"{color}{text}{RESET}"
+    return text
+
+
+def _ok(msg: str): print(_color(f"✓ {msg}", GREEN))
+def _warn(msg: str): print(_color(f"⚠ {msg}", YELLOW), file=sys.stderr)
+def _err(msg: str): print(_color(f"✗ {msg}", RED), file=sys.stderr)
+def _info(msg: str): print(_color(f"  {msg}", DIM))
+
+
+# ---------------------------------------------------------------------------
+# API helpers
+# ---------------------------------------------------------------------------
+def _api(method: str, path: str, data: dict | None = None, stream=False):
+    if not HAS_REQUESTS:
+        _err("'requests' library not installed. Run: pip install requests")
+        sys.exit(1)
+    url = f"{ZALLAMA_HOST}{path}"
+    try:
+        if method == "GET":
+            r = requests.get(url, timeout=10, stream=stream)
+        elif method == "POST":
+            r = requests.post(url, json=data, timeout=None, stream=stream)
+        elif method == "DELETE":
+            r = requests.delete(url, timeout=10)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        return r
+    except requests.exceptions.ConnectionError:
+        _err(f"Cannot connect to Zallama at {ZALLAMA_HOST}")
+        _info("Run 'zallama serve' to start the daemon.")
+        sys.exit(1)
+
+
+def _check_daemon():
+    try:
+        r = requests.get(f"{ZALLAMA_HOST}/health", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_serve(args: list[str]):
+    """Start the Zallama daemon (foreground)."""
+    print(_color("🦙 Starting Zallama daemon...", CYAN + BOLD))
+    root = Path(__file__).parent
+    sys.path.insert(0, str(root))
+    try:
+        from server.main import main
+        main()
+    except ImportError as e:
+        _err(f"Import error: {e}")
+        _info("Ensure dependencies are installed: pip install -r requirements.txt")
+        sys.exit(1)
+
+
+def cmd_list(args: list[str]):
+    """List all registered models."""
+    r = _api("GET", "/api/models")
+    data = r.json()
+    models = data.get("models", [])
+
+    if not models:
+        print(_color("No models registered yet.", DIM))
+        _info("Add a model with: zallama add <name> <path-to.gguf>")
+        return
+
+    # Header
+    print(f"\n{'NAME':<25} {'STATUS':<12} {'SIZE':<10} {'DESCRIPTION'}")
+    print("─" * 75)
+    for m in models:
+        name = m["name"]
+        status = _color("● RUNNING", GREEN) if m["running"] else _color("○ stopped", DIM)
+        size = m.get("file_size", 0)
+        size_str = f"{size / 1e9:.1f}GB" if size > 0 else "?"
+        file_ok = m.get("file_ok", False)
+        if not file_ok:
+            size_str = _color("FILE MISSING", RED)
+        desc = m.get("description", "")[:40]
+        print(f"{name:<25} {status:<22} {size_str:<10} {desc}")
+    print()
+
+
+def cmd_add(args: list[str]):
+    """Register a model: zallama add <name> <file>"""
+    if len(args) < 2:
+        _err("Usage: zallama add <name> <path-to-model.gguf> [description]")
+        sys.exit(1)
+    name, file_path = args[0], args[1]
+    desc = " ".join(args[2:]) if len(args) > 2 else ""
+    abs_path = str(Path(file_path).expanduser().resolve())
+    r = _api("POST", "/api/models/add", {"name": name, "file": abs_path, "description": desc})
+    if r.status_code == 200:
+        _ok(f"Model '{name}' registered → {abs_path}")
+    else:
+        _err(f"Failed: {r.json().get('detail', r.text)}")
+        sys.exit(1)
+
+
+def cmd_remove(args: list[str]):
+    """Remove a model: zallama remove <name>"""
+    if not args:
+        _err("Usage: zallama remove <name>")
+        sys.exit(1)
+    name = args[0]
+    r = _api("DELETE", f"/api/models/{name}")
+    if r.status_code == 200:
+        _ok(f"Model '{name}' removed from registry")
+    else:
+        _err(f"Failed: {r.json().get('detail', r.text)}")
+        sys.exit(1)
+
+
+def cmd_run(args: list[str]):
+    """Interactive chat: zallama run <model>"""
+    if not args:
+        _err("Usage: zallama run <model-name>")
+        sys.exit(1)
+    model = args[0]
+
+    print(_color(f"\n🦙 Zallama — {model}", CYAN + BOLD))
+    print(_color("Type your message. Use /exit or Ctrl+C to quit.\n", DIM))
+
+    # First, ensure the model is loaded (may take a moment)
+    print(_color(f"⏳ Loading model '{model}'...", YELLOW), end="", flush=True)
+    r = _api("POST", f"/api/models/{model}/load")
+    if r.status_code != 200:
+        print()
+        _err(f"Failed to load model: {r.json().get('detail', r.text)}")
+        sys.exit(1)
+    print(_color(" ready!", GREEN))
+
+    history = []
+
+    while True:
+        try:
+            user_input = input(_color("\nYou: ", CYAN + BOLD)).strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n" + _color("Goodbye! 👋", DIM))
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
+            print(_color("Goodbye! 👋", DIM))
+            break
+        if user_input == "/clear":
+            history = []
+            print(_color("History cleared.", DIM))
+            continue
+
+        history.append({"role": "user", "content": user_input})
+
+        payload = {"model": model, "messages": history, "stream": True}
+        print(_color("Assistant: ", GREEN + BOLD), end="", flush=True)
+
+        full_response = ""
+        try:
+            r = requests.post(
+                f"{ZALLAMA_HOST}/v1/chat/completions",
+                json=payload,
+                stream=True,
+                timeout=None,
+            )
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                text = line.decode("utf-8")
+                if text.startswith("data: "):
+                    text = text[6:]
+                if text == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(text)
+                    delta = chunk["choices"][0]["delta"].get("content", "")
+                    if delta:
+                        print(delta, end="", flush=True)
+                        full_response += delta
+                except Exception:
+                    pass
+        except KeyboardInterrupt:
+            print(_color("\n[interrupted]", DIM))
+
+        print()
+        if full_response:
+            history.append({"role": "assistant", "content": full_response})
+
+
+def cmd_ps(args: list[str]):
+    """Show running model processes."""
+    r = _api("GET", "/api/ps")
+    procs = r.json().get("processes", [])
+    if not procs:
+        print(_color("No models currently running.", DIM))
+        return
+
+    print(f"\n{'NAME':<25} {'PORT':<8} {'UPTIME':<12} {'LAST USED'}")
+    print("─" * 65)
+    now = time.time()
+    for p in procs:
+        name = p["name"]
+        port = p["port"]
+        uptime = int(now - p.get("started_at", now))
+        last = int(now - p.get("last_used", now))
+        status = _color("● ALIVE", GREEN) if p.get("alive") else _color("✗ DEAD", RED)
+        print(f"{name:<25} {port:<8} {_fmt_duration(uptime):<12} {_fmt_duration(last)} ago")
+    print()
+
+
+def cmd_load(args: list[str]):
+    if not args:
+        _err("Usage: zallama load <model>"); sys.exit(1)
+    model = args[0]
+    print(_color(f"⏳ Loading '{model}'...", YELLOW), end="", flush=True)
+    r = _api("POST", f"/api/models/{model}/load")
+    if r.status_code == 200:
+        d = r.json()
+        print(_color(f" ready on port {d['port']}", GREEN))
+    else:
+        print(); _err(f"Failed: {r.json().get('detail', r.text)}")
+
+
+def cmd_unload(args: list[str]):
+    if not args:
+        _err("Usage: zallama unload <model>"); sys.exit(1)
+    r = _api("POST", f"/api/models/{args[0]}/unload")
+    if r.status_code == 200:
+        _ok(f"Model '{args[0]}' stopped")
+    else:
+        _err(f"Failed: {r.json().get('detail', r.text)}")
+
+
+def cmd_logs(args: list[str]):
+    """Tail model logs: zallama logs <name>"""
+    if not args:
+        _err("Usage: zallama logs <model>"); sys.exit(1)
+    name = args[0].replace(":", "_")
+    # Find logs dir from config
+    cfg_path = Path(__file__).parent / "config" / "config.yaml"
+    logs_dir = Path.home() / ".zallama" / "logs"  # default
+    if cfg_path.exists():
+        try:
+            import yaml
+            with open(cfg_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            d = cfg.get("zallama", {}).get("logs_dir", "~/.zallama/logs")
+            logs_dir = Path(d).expanduser()
+        except Exception:
+            pass
+    log_file = logs_dir / f"{name}.log"
+    if not log_file.exists():
+        _err(f"No log file found: {log_file}")
+        _info("Model may not have been run yet.")
+        return
+    try:
+        os.execvp("tail", ["tail", "-f", "-n", "50", str(log_file)])
+    except Exception:
+        with open(log_file) as f:
+            print(f.read())
+
+
+def cmd_health(args: list[str]):
+    r = _api("GET", "/api/health")
+    d = r.json()
+    print(_color("\n🦙 Zallama Health", CYAN + BOLD))
+    print(f"  Status:   {_color(d.get('status','?'), GREEN)}")
+    print(f"  Version:  {d.get('version','?')}")
+    print(f"  Platform: {d.get('platform','?')}")
+    print(f"  Models registered: {d.get('models_registered',0)}")
+    print(f"  Models running:    {d.get('models_running',0)}")
+    print()
+
+
+def cmd_version(args: list[str]):
+    print(f"zallama {VERSION}")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _fmt_duration(secs: int) -> str:
+    if secs < 60: return f"{secs}s"
+    if secs < 3600: return f"{secs//60}m{secs%60}s"
+    return f"{secs//3600}h{(secs%3600)//60}m"
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+COMMANDS = {
+    "serve": cmd_serve,
+    "list": cmd_list,
+    "ls": cmd_list,
+    "add": cmd_add,
+    "remove": cmd_remove,
+    "rm": cmd_remove,
+    "run": cmd_run,
+    "ps": cmd_ps,
+    "load": cmd_load,
+    "unload": cmd_unload,
+    "stop": cmd_unload,
+    "logs": cmd_logs,
+    "health": cmd_health,
+    "version": cmd_version,
+    "--version": cmd_version,
+    "-v": cmd_version,
+}
+
+BANNER = f"""{CYAN}{BOLD}
+  ███████╗ █████╗ ██╗     ██╗      █████╗ ███╗   ███╗ █████╗
+  ╚════██║██╔══██╗██║     ██║     ██╔══██╗████╗ ████║██╔══██╗
+      ██╔╝███████║██║     ██║     ███████║██╔████╔██║███████║
+     ██╔╝ ██╔══██║██║     ██║     ██╔══██║██║╚██╔╝██║██╔══██║
+     ██║  ██║  ██║███████╗███████╗██║  ██║██║ ╚═╝ ██║██║  ██║
+     ╚═╝  ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝
+{RESET}{DIM}     Local LLM server powered by llama.cpp  •  v{VERSION}{RESET}
+"""
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("help", "--help", "-h"):
+        print(BANNER)
+        print(f"{BOLD}Usage:{RESET}  zallama <command> [args]\n")
+        print(f"{BOLD}Commands:{RESET}")
+        cmds = [
+            ("serve", "Start the Zallama daemon"),
+            ("list", "List all registered models"),
+            ("add <name> <file>", "Register a local .gguf model"),
+            ("remove <name>", "Remove a model from registry"),
+            ("run <name>", "Interactive chat with a model"),
+            ("ps", "Show running model processes"),
+            ("load <name>", "Pre-load a model into memory"),
+            ("unload <name>", "Stop a running model"),
+            ("logs <name>", "Tail llama-server logs for a model"),
+            ("health", "Show daemon health status"),
+            ("version", "Show version"),
+        ]
+        for cmd, desc in cmds:
+            print(f"  {_color(cmd, CYAN):<35}{DIM}{desc}{RESET}")
+        print(f"\n{DIM}Daemon URL: {ZALLAMA_HOST}  (override with ZALLAMA_HOST env var){RESET}\n")
+        return
+
+    cmd = sys.argv[1]
+    rest = sys.argv[2:]
+
+    fn = COMMANDS.get(cmd)
+    if fn is None:
+        _err(f"Unknown command: '{cmd}'")
+        _info("Run 'zallama help' for usage.")
+        sys.exit(1)
+
+    fn(rest)
+
+
+if __name__ == "__main__":
+    main()
