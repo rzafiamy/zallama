@@ -100,6 +100,14 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   echo -e "${GREEN}✓${RESET} systemd service installed: systemctl enable --now zallama"
+
+  # If the service is already running (re-install), the new unit/code won't take
+  # effect until a restart — do it so re-running the installer behaves as users
+  # expect rather than silently leaving the old process in place.
+  if systemctl is-active --quiet zallama; then
+    systemctl restart zallama
+    echo -e "${GREEN}✓${RESET} Restarted running zallama service"
+  fi
 fi
 
 echo ""

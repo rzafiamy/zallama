@@ -120,11 +120,19 @@ SHORTHANDS = {
 
 
 class DownloadTask:
-    def __init__(self, model_name: str, repo: str, filename: str, local_path: Path):
+    def __init__(self, model_name: str, repo: str, filename: str, local_path: Path,
+                 mmproj_filename: str | None = None):
         self.model_name = model_name
         self.repo = repo
         self.filename = filename
         self.local_path = local_path
+        # Optional multimodal projector (vision). When set, it lives in the same
+        # repo and is downloaded alongside the main gguf, then registered as the
+        # `mmproj` artifact so the model is vision-capable with no extra steps.
+        self.mmproj_filename = mmproj_filename
+        self.mmproj_path: Path | None = (
+            local_path.parent / mmproj_filename if mmproj_filename else None
+        )
         self.total_bytes = 0
         self.completed_bytes = 0
         self.status = "queued"  # queued, downloading, completed, failed
@@ -162,7 +170,8 @@ class DownloadManager:
             })
         return result
 
-    async def _auto_detect_gguf(self, repo: str) -> str:
+    async def _list_gguf_siblings(self, repo: str) -> list[str]:
+        """Return all .gguf filenames in a HuggingFace repo."""
         url = f"https://huggingface.co/api/models/{repo}"
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url)
@@ -170,17 +179,49 @@ class DownloadManager:
                 raise RuntimeError(f"HuggingFace repository '{repo}' not found or inaccessible (HTTP {resp.status_code}).")
             data = resp.json()
             siblings = data.get("siblings", [])
-            files = [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(".gguf")]
-            if not files:
-                raise RuntimeError(f"No GGUF files found in repository '{repo}'.")
-            
-            # Prefer standard medium quantizations first
-            pref_keywords = ["q4_k_m", "q4_0", "q4_k_s", "q4_1", "q5_k_m", "q5_0", "q8_0", "q3_k_m", "q3_k_s"]
-            for keyword in pref_keywords:
-                for f in files:
-                    if keyword in f.lower():
-                        return f
-            return files[0]
+            return [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(".gguf")]
+
+    async def _auto_detect_gguf(self, repo: str) -> str:
+        files = await self._list_gguf_siblings(repo)
+        if not files:
+            raise RuntimeError(f"No GGUF files found in repository '{repo}'.")
+
+        # Skip projector files — those are picked separately as the mmproj artifact.
+        main_files = [f for f in files if not self._is_mmproj(f)] or files
+
+        # Prefer standard medium quantizations first
+        pref_keywords = ["q4_k_m", "q4_0", "q4_k_s", "q4_1", "q5_k_m", "q5_0", "q8_0", "q3_k_m", "q3_k_s"]
+        for keyword in pref_keywords:
+            for f in main_files:
+                if keyword in f.lower():
+                    return f
+        return main_files[0]
+
+    @staticmethod
+    def _is_mmproj(filename: str) -> bool:
+        """A multimodal projector (vision) gguf, by HF naming convention."""
+        return "mmproj" in filename.lower()
+
+    async def _detect_mmproj(self, repo: str) -> str | None:
+        """Find a vision projector in the repo, if any.
+
+        Vision GGUF repos ship the projector alongside the weights as an
+        `mmproj-*.gguf` file. Projectors are small, so we prefer the F16/BF16
+        variant for best vision quality and fall back to whatever exists.
+        Returns None for plain text repos (no projector present).
+        """
+        try:
+            files = await self._list_gguf_siblings(repo)
+        except RuntimeError:
+            return None
+        projectors = [f for f in files if self._is_mmproj(f)]
+        if not projectors:
+            return None
+        for keyword in ("f16", "bf16", "f32"):
+            for f in projectors:
+                if keyword in f.lower():
+                    return f
+        return projectors[0]
 
     async def start_pull(self, model_name_or_url: str) -> tuple[str, str]:
         """Parse HF repo, create tasks, and spin off background downloader."""
@@ -221,13 +262,20 @@ class DownloadManager:
             if model_name in self._tasks and self._tasks[model_name].status in ("queued", "downloading"):
                 return model_name, f"Model '{model_name}' download is already in progress."
 
+            # Vision models ship a projector in the same repo; grab it too so the
+            # pulled model is vision-capable with no manual registry editing.
+            mmproj_filename = await self._detect_mmproj(repo)
+
             local_path = self.models_dir / filename
-            task = DownloadTask(model_name, repo, filename, local_path)
+            task = DownloadTask(model_name, repo, filename, local_path, mmproj_filename)
             self._tasks[model_name] = task
 
             # Trigger background task
             asyncio.create_task(self._download_loop(task))
-            return model_name, f"Started downloading '{model_name}' in the background."
+            msg = f"Started downloading '{model_name}' in the background."
+            if mmproj_filename:
+                msg += f" (vision projector '{mmproj_filename}' included)"
+            return model_name, msg
 
     async def _download_loop(self, task: DownloadTask):
         """Asynchronously download the model file using aria2c or concurrent Python requests."""
@@ -253,6 +301,12 @@ class DownloadManager:
             if temp_path.exists():
                 temp_path.rename(task.local_path)
 
+            # Vision projector: small, single-stream fetch alongside the weights.
+            artifacts = None
+            if task.mmproj_filename and task.mmproj_path is not None:
+                await self._fetch_mmproj(task)
+                artifacts = {"mmproj": str(task.mmproj_path)}
+
             task.status = "completed"
             task.speed = 0
             task.eta = 0
@@ -266,7 +320,8 @@ class DownloadManager:
                 name=task.model_name,
                 file_path=str(task.local_path),
                 description=description,
-                params={"ctx_size": 4096, "n_gpu_layers": 99}
+                params={"ctx_size": 4096, "n_gpu_layers": 99},
+                artifacts=artifacts,
             )
             logger.info(f"Completed and registered model: {task.model_name}")
 
@@ -274,13 +329,40 @@ class DownloadManager:
             task.status = "failed"
             task.error = str(e)
             logger.error(f"Download failed for '{task.model_name}': {e}")
-            # Cleanup temp files
-            for path in (temp_path, temp_path.with_suffix(".download.aria2"), temp_path.parent / (temp_path.name + ".aria2")):
+            # Cleanup temp files (main weights + any partial projector)
+            cleanup = [temp_path, temp_path.with_suffix(".download.aria2"),
+                       temp_path.parent / (temp_path.name + ".aria2")]
+            if task.mmproj_path is not None:
+                cleanup.append(task.mmproj_path.with_suffix(task.mmproj_path.suffix + ".download"))
+            for path in cleanup:
                 if path.exists():
                     try:
                         os.remove(path)
                     except Exception:
                         pass
+
+    async def _fetch_mmproj(self, task: DownloadTask):
+        """Download the vision projector into models_dir (single stream).
+
+        Projectors are small (tens to a few hundred MB), so a plain streaming
+        download is enough and keeps the main task's progress untouched.
+        """
+        url = f"https://huggingface.co/{task.repo}/resolve/main/{task.mmproj_filename}"
+        dest = task.mmproj_path
+        logger.info(f"Downloading vision projector '{task.mmproj_filename}' from {url}")
+        temp = dest.with_suffix(dest.suffix + ".download")
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"Failed to download projector '{task.mmproj_filename}': "
+                        f"HTTP {resp.status_code}"
+                    )
+                with open(temp, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
+                        f.write(chunk)
+        temp.rename(dest)
+        logger.info(f"Vision projector ready: {dest}")
 
     async def _check_range_support(self, url: str) -> tuple[int, bool]:
         """Check if target server supports HTTP Range requests and get content length."""
