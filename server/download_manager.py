@@ -18,8 +18,12 @@ from .model_registry import ModelRegistry
 
 logger = logging.getLogger("zallama.download_manager")
 
-# Default Unsloth repository mapping shorthands
 SHORTHANDS = {
+    "llama3.3:70b": {
+        "repo": "unsloth/Llama-3.3-70B-Instruct-GGUF",
+        "file": "Llama-3.3-70B-Instruct-Q4_K_M.gguf",
+        "description": "Llama 3.3 70B Instruct (Q4_K_M)"
+    },
     "llama3.2:3b": {
         "repo": "unsloth/Llama-3.2-3B-Instruct-GGUF",
         "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
@@ -30,25 +34,30 @@ SHORTHANDS = {
         "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
         "description": "Llama 3.2 1B Instruct (Q4_K_M)"
     },
+    "phi4:14b": {
+        "repo": "unsloth/phi-4-GGUF",
+        "file": "phi-4-Q4_K_M.gguf",
+        "description": "Phi-4 14B Instruct (Q4_K_M)"
+    },
     "qwen2.5:7b": {
         "repo": "unsloth/Qwen2.5-7B-Instruct-GGUF",
         "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         "description": "Qwen 2.5 7B Instruct (Q4_K_M)"
     },
-    "qwen2.5:1.5b": {
-        "repo": "unsloth/Qwen2.5-1.5B-Instruct-GGUF",
-        "file": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
-        "description": "Qwen 2.5 1.5B Instruct (Q4_K_M)"
+    "qwen2.5-coder:32b": {
+        "repo": "unsloth/Qwen2.5-Coder-32B-Instruct-GGUF",
+        "file": "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf",
+        "description": "Qwen 2.5 Coder 32B Instruct (Q4_K_M)"
     },
     "qwen2.5-coder:7b": {
         "repo": "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF",
         "file": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
         "description": "Qwen 2.5 Coder 7B Instruct (Q4_K_M)"
     },
-    "qwen2.5-coder:1.5b": {
-        "repo": "unsloth/Qwen2.5-Coder-1.5B-Instruct-GGUF",
-        "file": "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf",
-        "description": "Qwen 2.5 Coder 1.5B Instruct (Q4_K_M)"
+    "deepseek-r1:32b": {
+        "repo": "unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF",
+        "file": "DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf",
+        "description": "DeepSeek R1 Distilled Qwen 32B (Q4_K_M)"
     },
     "deepseek-r1:8b": {
         "repo": "unsloth/DeepSeek-R1-Distill-Llama-8B-GGUF",
