@@ -68,7 +68,7 @@ ZALLAMA_HOST = os.environ.get("ZALLAMA_HOST", "http://localhost:11435")
 VERSION = "1.0.0"
 
 # Project / developer metadata (shown by `zallama version`).
-DESCRIPTION = "Ollama-compatible local LLM server powered by llama.cpp"
+DESCRIPTION = "OpenAI-compatible local LLM server powered by llama.cpp"
 AUTHOR = "Makix team — Infodev"
 AUTHOR_EMAIL = "wservice@infodev.ovh"
 AUTHOR_URL = "https://infodev.ovh"

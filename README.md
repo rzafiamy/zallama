@@ -2,7 +2,7 @@
 
 # 🦙 Zallama
 
-**An Ollama-like, memory-aware, multimodal-ready local LLM server powered by `llama.cpp`.**
+**A simple, memory-aware, multimodal-ready local LLM server powered by `llama.cpp`.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -14,7 +14,7 @@
 
 </div>
 
-> An Ollama-like local LLM ecosystem powered by `llama-server` (llama.cpp).
+> A self-contained local LLM ecosystem powered by `llama-server` (llama.cpp).
 
 ## 📚 Table of Contents
 
@@ -43,7 +43,7 @@ Zallama is built around a **pluggable backend abstraction**: each model declares
 
 ## ✨ Features
 
-- **🚀 Ollama-like CLI:** Run commands like `zallama serve`, `zallama run <model>`, `zallama add`, `zallama set`, and `zallama ps`.
+- **🚀 Simple CLI:** Run commands like `zallama serve`, `zallama run <model>`, `zallama add`, `zallama set`, and `zallama ps`.
 - **⚡ High-Performance Downloads:** Accelerated download engine utilizing `aria2c` (with 8 concurrent connections), falling back to Python-based parallel HTTP range requests and standard stream decoders.
 - **🧠 Reasoning Model Support:** Full support for thinking models (e.g., DeepSeek-R1, Qwen 3.5), rendering thinking/reasoning blocks in real-time with dim/gray coloring inside the interactive chat.
 - **🔌 Full OpenAI /v1 API:** Full drop-in replacement for OpenAI endpoints (Chat, Completions, and Embeddings) with streaming supported via SSE.

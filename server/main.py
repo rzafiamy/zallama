@@ -108,7 +108,7 @@ async def lifespan(app: FastAPI):
 def create_app(cfg: dict) -> FastAPI:
     app = FastAPI(
         title="Zallama",
-        description="Ollama-compatible local LLM server powered by llama.cpp",
+        description="OpenAI-compatible local LLM server powered by llama.cpp",
         version="1.0.0",
         lifespan=lifespan,
         docs_url="/docs",

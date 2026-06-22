@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial release.
 
 ### Added
-- **Ollama-like CLI**: `serve`, `list`/`ls`, `add`, `set`, `pull`, `search`, `remove`/`rm`,
+- **Simple CLI**: `serve`, `list`/`ls`, `add`, `set`, `pull`, `search`, `remove`/`rm`,
   `run`, `ps`, `load`, `unload`/`stop`, `logs`, `health`, `version`.
 - **OpenAI-compatible `/v1` API**: `chat/completions`, `completions`, `embeddings`,
   and `models`, with SSE streaming.
