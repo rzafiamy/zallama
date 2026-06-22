@@ -64,9 +64,18 @@ fi
 chmod +x "$ZALLAMA_DIR/zallama"
 echo -e "${GREEN}✓${RESET} zallama CLI is executable"
 
-# ── 5. Create ~/.zallama dirs ────────────────────────────────────────────────
+# ── 5. Create ~/.zallama dirs + seed config ──────────────────────────────────
 mkdir -p ~/.zallama/{models,logs,bin}
 echo -e "${GREEN}✓${RESET} ~/.zallama directory structure created"
+
+# Seed a live config from the committed template, but never clobber an existing
+# one (re-install stays non-destructive). The registry lives beside the models
+# at ~/.zallama/models/registry.yaml and is auto-created on first pull/add, so it
+# needs no seeding here.
+if [ ! -f ~/.zallama/config.yaml ] && [ -f "$ZALLAMA_DIR/config/config.example.yaml" ]; then
+  cp "$ZALLAMA_DIR/config/config.example.yaml" ~/.zallama/config.yaml
+  echo -e "${GREEN}✓${RESET} Seeded ~/.zallama/config.yaml from template"
+fi
 
 # ── 6. Symlink to /usr/local/bin (optional) ──────────────────────────────────
 SYMLINK_TARGET="/usr/local/bin/zallama"

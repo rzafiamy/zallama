@@ -129,9 +129,15 @@ class DownloadTask:
         # Optional multimodal projector (vision). When set, it lives in the same
         # repo and is downloaded alongside the main gguf, then registered as the
         # `mmproj` artifact so the model is vision-capable with no extra steps.
+        #
+        # `mmproj_filename` is the *remote* name (used to build the download URL);
+        # it is often a generic name like "mmproj-F16.gguf" shared across repos.
+        # The *local* file is namespaced by the model name so two vision models
+        # never overwrite each other's projector in models_dir.
         self.mmproj_filename = mmproj_filename
         self.mmproj_path: Path | None = (
-            local_path.parent / mmproj_filename if mmproj_filename else None
+            local_path.parent / self._local_mmproj_name(model_name, mmproj_filename)
+            if mmproj_filename else None
         )
         self.total_bytes = 0
         self.completed_bytes = 0
@@ -139,6 +145,17 @@ class DownloadTask:
         self.error: str | None = None
         self.speed = 0.0  # bytes/second
         self.eta = 0.0  # seconds remaining
+
+    @staticmethod
+    def _local_mmproj_name(model_name: str, remote_filename: str) -> str:
+        """Namespace the projector by model so generic names don't collide.
+
+        e.g. model "qwen3-vl-7b" + remote "mmproj-F16.gguf"
+             -> "qwen3-vl-7b.mmproj-F16.gguf"
+        The model_name is the unique registry key, so this is collision-free.
+        """
+        safe = model_name.replace("/", "_").replace(":", "_")
+        return f"{safe}.{remote_filename}"
 
 
 class DownloadManager:

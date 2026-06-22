@@ -67,6 +67,12 @@ except ImportError:
 ZALLAMA_HOST = os.environ.get("ZALLAMA_HOST", "http://localhost:11435")
 VERSION = "1.0.0"
 
+# Project / developer metadata (shown by `zallama version`).
+DESCRIPTION = "Ollama-compatible local LLM server powered by llama.cpp"
+AUTHOR = "Makix team — Infodev"
+AUTHOR_EMAIL = "wservice@infodev.ovh"
+AUTHOR_URL = "https://infodev.ovh"
+
 BOLD   = "\033[1m"
 GREEN  = "\033[92m"
 YELLOW = "\033[93m"
@@ -513,23 +519,58 @@ def cmd_unload(args: list[str]):
         _err(f"Failed: {r.json().get('detail', r.text)}")
 
 
+def _resolved_paths() -> dict:
+    """Resolve every zallama path via the daemon's own config loader.
+
+    Using load_config() (not a hand-rolled YAML read) means this is the single
+    source of truth: `zallama paths` can never disagree with where the daemon
+    actually reads/writes. Returns a dict of label -> Path/str, with the active
+    config file (or None) under 'config'.
+    """
+    root = Path(__file__).resolve().parent
+    sys.path.insert(0, str(root))
+    from server.config import load_config, _find_config_file, resolve_binary
+
+    cfg = load_config()
+    models_dir = Path(cfg["zallama"]["models_dir"])
+    try:
+        binary = resolve_binary(cfg)
+    except Exception:
+        binary = "(not found — build with bash build-ggml-llama.cpp.sh)"
+    return {
+        "config.yaml": _find_config_file() or "(none — using built-in defaults)",
+        "models_dir": models_dir,
+        "registry.yaml": models_dir / "registry.yaml",
+        "logs_dir": Path(cfg["zallama"]["logs_dir"]),
+        "llama-server": binary,
+    }
+
+
+def cmd_paths(args: list[str]):
+    """Show where zallama stores its files: zallama paths"""
+    try:
+        paths = _resolved_paths()
+    except Exception as e:
+        _err(f"Could not resolve paths: {e}")
+        sys.exit(1)
+    print(f"\n{BOLD}Zallama file locations:{RESET}")
+    for label, value in paths.items():
+        exists = isinstance(value, Path) and value.exists()
+        mark = f"{GREEN}✓{RESET}" if exists else (f"{DIM}—{RESET}" if isinstance(value, Path) else " ")
+        print(f"  {mark} {_color(label, CYAN):<28}{value}")
+    print()
+
+
 def cmd_logs(args: list[str]):
     """Tail model logs: zallama logs <name>"""
     if not args:
         _err("Usage: zallama logs <model>"); sys.exit(1)
     name = args[0].replace(":", "_")
-    # Find logs dir from config
-    cfg_path = Path(__file__).parent / "config" / "config.yaml"
-    logs_dir = Path.home() / ".zallama" / "logs"  # default
-    if cfg_path.exists():
-        try:
-            import yaml
-            with open(cfg_path) as f:
-                cfg = yaml.safe_load(f) or {}
-            d = cfg.get("zallama", {}).get("logs_dir", "~/.zallama/logs")
-            logs_dir = Path(d).expanduser()
-        except Exception:
-            pass
+    # Resolve logs_dir via the daemon's config loader (single source of truth).
+    try:
+        logs_dir = Path(_resolved_paths()["logs_dir"])
+    except Exception:
+        logs_dir = Path.home() / ".zallama" / "logs"  # safe fallback
     log_file = logs_dir / f"{name}.log"
     if not log_file.exists():
         _err(f"No log file found: {log_file}")
@@ -688,7 +729,17 @@ def cmd_health(args: list[str]):
 
 
 def cmd_version(args: list[str]):
-    print(f"zallama {VERSION}")
+    print(f"\n  {_color('🦙 Zallama', CYAN)} {_color('v' + VERSION, BOLD)}")
+    print(f"  {_color(DESCRIPTION, DIM)}\n")
+    rows = [
+        ("Developed by", AUTHOR),
+        ("Contact", AUTHOR_EMAIL),
+        ("Website", AUTHOR_URL),
+        ("License", "see LICENSE"),
+    ]
+    for label, value in rows:
+        print(f"  {_color(f'{label:<13}', CYAN)}{value}")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +770,7 @@ COMMANDS = {
     "unload": cmd_unload,
     "stop": cmd_unload,
     "logs": cmd_logs,
+    "paths": cmd_paths,
     "health": cmd_health,
     "version": cmd_version,
     "--version": cmd_version,
@@ -754,6 +806,7 @@ def main():
             ("load <name>", "Pre-load a model into memory"),
             ("unload <name>", "Stop a running model"),
             ("logs <name>", "Tail llama-server logs for a model"),
+            ("paths", "Show where zallama stores its files"),
             ("health", "Show daemon health status"),
             ("version", "Show version"),
         ]

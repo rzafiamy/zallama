@@ -61,8 +61,12 @@ async def lifespan(app: FastAPI):
     except FileNotFoundError as e:
         logger.warning(f"⚠ {e}")
 
-    registry_path = Path(__file__).parent.parent / "models" / "registry.yaml"
-    registry = ModelRegistry(registry_path, cfg["zallama"]["models_dir"])
+    # The registry lives *beside* the models it references, inside models_dir, so
+    # registry + model files are one self-contained unit: they survive a repo
+    # re-clone and always stay consistent with the configured models_dir.
+    models_dir = Path(cfg["zallama"]["models_dir"])
+    registry_path = models_dir / "registry.yaml"
+    registry = ModelRegistry(registry_path, str(models_dir))
 
     pm = ProcessManager(
         cfg=cfg,

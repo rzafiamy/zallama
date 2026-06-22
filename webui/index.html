@@ -30,7 +30,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .tab-btn.active{color:var(--blue);border-bottom-color:var(--blue);background:rgba(88,166,255,.05)}
 .tab-btn:hover:not(.active){color:var(--text);background:var(--bg3)}
 
-#models-panel,#chat-list-panel{flex:1;overflow-y:auto;padding:8px}
+#models-panel,#chats-panel{flex:1;overflow-y:auto;padding:8px}
 .panel{display:none}.panel.active{display:block}
 
 .model-card{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;transition:all .2s;position:relative}
@@ -141,7 +141,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
       </button>
     </div>
   </div>
-  <div id="chat-list-panel" class="panel">
+  <div id="chats-panel" class="panel">
     <div id="chat-sessions" style="padding:20px;text-align:center;color:var(--text3);font-size:13px">
       Chat sessions are per-model.<br>Select a model to start chatting.
     </div>
@@ -268,10 +268,17 @@ function toast(msg, type = 'ok') {
 }
 
 function switchTab(tab) {
+  const btn = document.getElementById('tab-' + tab);
+  const panel = document.getElementById(tab + 's-panel');
+  if (!btn || !panel) {
+    console.warn(`switchTab: missing element for tab "${tab}" `
+      + `(btn=${!!btn}, panel=${!!panel}) — check the tab/panel id naming`);
+    return;
+  }
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('tab-' + tab).classList.add('active');
-  document.getElementById(tab + 's-panel').classList.add('active');
+  btn.classList.add('active');
+  panel.classList.add('active');
 }
 
 // ── Models ───────────────────────────────────────────────────────────────────

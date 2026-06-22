@@ -1,0 +1,36 @@
+# Zallama configuration — copy to ~/.zallama/config.yaml and edit.
+#
+# Search order (first match wins): <repo>/config/config.yaml,
+# ~/.zallama/config.yaml, /etc/zallama/config.yaml. Anything omitted falls back
+# to the built-in defaults, so you only need to set what you want to change.
+
+zallama:
+  host: "127.0.0.1"   # localhost only; set "0.0.0.0" to expose on the network
+  port: 11435
+  models_dir: "~/.zallama/models"   # model files AND registry.yaml live here
+  logs_dir: "~/.zallama/logs"
+  webui: true
+  log_level: "info"
+  api_key: ""         # if set, required as Bearer token on /v1 and /api
+  request_timeout: 600 # Seconds for non-streaming upstream proxy calls
+
+llama_server:
+  binary: ""          # Auto-detect: checks ./bin/llama-server, then PATH
+  port_start: 8100    # backend instances use ports 8100, 8101, ...
+  startup_timeout: 60 # Seconds to wait for a backend's /health
+  idle_timeout: 300   # Unload model after N seconds of inactivity (0 = never)
+  max_loaded_models: 0 # Max concurrently loaded models; evicts LRU (0 = unlimited)
+  mem_budget_gb: 0     # Memory budget (GB); evicts LRU to fit a model's mem_gb (0 = unlimited)
+  mem_init_gb: 2       # Fallback per-model cost when mem_gb is undeclared & file size unknown
+
+  # Default parameters passed to every llama-server instance.
+  # Can be overridden per-model in registry.yaml.
+  default_params:
+    ctx_size: 8192
+    n_gpu_layers: 99
+    threads: 8
+    flash_attn: true
+    cont_batching: true
+    parallel: 1
+    mlock: false
+    no_mmap: false
