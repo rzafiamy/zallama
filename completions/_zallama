@@ -1,0 +1,26 @@
+#compdef zallama
+#
+# zsh completion for zallama
+#
+# The zallama CLI is the single source of truth: this asks it for candidates via
+# the hidden `__complete` subcommand, so new commands/models need no edits here.
+#
+# Install: place this file (named `_zallama`) in a directory on your $fpath,
+# e.g. ~/.zsh/completions, and ensure `autoload -U compinit && compinit` runs.
+
+_zallama() {
+    local -a candidates
+    # CURRENT is 1-based and points at the word being completed; subtract 1 to
+    # match the 0-based index the CLI's __complete expects (1 == subcommand).
+    local cur="${words[CURRENT]}"
+    local prev="${words[CURRENT-1]}"
+    candidates=( ${(f)"$(zallama __complete "$cur" "$prev" $((CURRENT-1)) 2>/dev/null)"} )
+
+    if (( ${#candidates} )); then
+        compadd -- $candidates
+    else
+        _files
+    fi
+}
+
+_zallama "$@"

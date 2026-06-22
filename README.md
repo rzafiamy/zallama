@@ -138,6 +138,27 @@ health                 Show daemon health status
 version                Show version info
 ```
 
+### Tab Completion
+
+`./install.sh` installs **bash** and **zsh** completion automatically when it can
+write to the system completion directories. Once enabled, `<TAB>` completes both
+subcommands and **registered model names**:
+
+```bash
+zallama r<TAB>          # → reload  remove  rm  run
+zallama run <TAB>       # → completes from your registered models
+```
+
+Completion reads the model list straight from `registry.yaml`, so it works even
+when the daemon isn't running. To install manually:
+
+```bash
+# bash
+sudo cp completions/zallama.bash /usr/share/bash-completion/completions/zallama
+# zsh — copy into a dir on your $fpath, then run compinit
+cp completions/_zallama ~/.zsh/completions/_zallama
+```
+
 ---
 
 ## ⚙️ Configuration Files

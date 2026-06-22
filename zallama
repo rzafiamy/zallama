@@ -767,6 +767,77 @@ def _fmt_duration(secs: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shell completion
+# ---------------------------------------------------------------------------
+# Commands whose first positional argument is a registered model name. Used by
+# the completer to offer model names at the right position.
+_MODEL_ARG_COMMANDS = {
+    "set", "remove", "rm", "run", "load", "unload", "stop",
+    "reload", "logs", "pull",
+}
+
+
+def _registry_model_names() -> list[str]:
+    """Read registered model names straight from registry.yaml.
+
+    Completion must work (fast, silently) even when the daemon is down, so we
+    read the registry file directly via the same config resolution the daemon
+    uses rather than hitting the HTTP API. Any failure yields no completions.
+    """
+    try:
+        root = Path(__file__).resolve().parent
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from server.config import load_config
+        import yaml
+
+        models_dir = Path(load_config()["zallama"]["models_dir"])
+        registry = models_dir / "registry.yaml"
+        if not registry.is_file():
+            return []
+        data = yaml.safe_load(registry.read_text()) or {}
+        models = data.get("models", data) if isinstance(data, dict) else data
+        names: list[str] = []
+        if isinstance(models, dict):
+            names = list(models.keys())
+        elif isinstance(models, list):
+            names = [m.get("name") for m in models if isinstance(m, dict) and m.get("name")]
+        return [n for n in names if n]
+    except Exception:
+        return []
+
+
+def cmd___complete(args: list[str]):
+    """Hidden: emit completion candidates, one per line, for the shell.
+
+    Invoked by the bash/zsh completion script as:
+        zallama __complete <current-word> <previous-word> <word-index>
+    where word-index is the 0-based index of the word being completed
+    (1 == the subcommand position). Stays silent on any error so a broken
+    completion never spews errors into the user's prompt.
+    """
+    cur = args[0] if len(args) > 0 else ""
+    prev = args[1] if len(args) > 1 else ""
+    try:
+        index = int(args[2]) if len(args) > 2 else 1
+    except ValueError:
+        index = 1
+
+    candidates: list[str] = []
+    if index <= 1:
+        # Completing the subcommand itself. Hide internal/alias-noise entries.
+        candidates = [c for c in COMMANDS if not c.startswith("-") and not c.startswith("__")]
+    elif prev in _MODEL_ARG_COMMANDS:
+        candidates = _registry_model_names()
+    # (Other positions — file paths for `add`, key=value for `set` — are left to
+    # the shell's default filename completion.)
+
+    for c in sorted(set(candidates)):
+        if c.startswith(cur):
+            print(c)
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 COMMANDS = {
@@ -791,6 +862,7 @@ COMMANDS = {
     "version": cmd_version,
     "--version": cmd_version,
     "-v": cmd_version,
+    "__complete": cmd___complete,
 }
 
 BANNER = f"""{CYAN}{BOLD}

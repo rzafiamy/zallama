@@ -88,6 +88,29 @@ else
   echo -e "   ${DIM}export PATH=\"$ZALLAMA_DIR:\$PATH\"${RESET}"
 fi
 
+# ── 6b. Shell completion (optional) ──────────────────────────────────────────
+# Best-effort: drop the completion scripts where bash/zsh look for them. The
+# scripts call `zallama __complete`, so they keep working as commands/models
+# change. Failures are non-fatal — completion is a convenience, not required.
+if [ -f "$ZALLAMA_DIR/completions/zallama.bash" ]; then
+  for dir in /usr/share/bash-completion/completions /etc/bash_completion.d; do
+    if [ -d "$dir" ] && { [ -w "$dir" ] || sudo -n true 2>/dev/null; }; then
+      sudo cp "$ZALLAMA_DIR/completions/zallama.bash" "$dir/zallama" 2>/dev/null \
+        && echo -e "${GREEN}✓${RESET} bash completion installed to $dir/zallama" \
+        && break
+    fi
+  done
+fi
+if [ -f "$ZALLAMA_DIR/completions/_zallama" ]; then
+  for dir in /usr/share/zsh/site-functions /usr/local/share/zsh/site-functions; do
+    if [ -d "$dir" ] && { [ -w "$dir" ] || sudo -n true 2>/dev/null; }; then
+      sudo cp "$ZALLAMA_DIR/completions/_zallama" "$dir/_zallama" 2>/dev/null \
+        && echo -e "${GREEN}✓${RESET} zsh completion installed to $dir/_zallama" \
+        && break
+    fi
+  done
+fi
+
 # ── 7. Systemd service (optional) ────────────────────────────────────────────
 SERVICE_FILE="/etc/systemd/system/zallama.service"
 if command -v systemctl &>/dev/null && [ "$EUID" -eq 0 ]; then
