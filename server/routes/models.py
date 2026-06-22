@@ -26,6 +26,10 @@ router = APIRouter(prefix="/api")
 
 class PullModelRequest(BaseModel):
     model: str
+    # Optional modality override (text | asr | tts | image). When omitted the
+    # downloader infers it from the shorthand or repo name; pass this to be
+    # explicit for raw HF paths whose repo gives no hint.
+    type: str | None = None
 
 
 
@@ -195,7 +199,7 @@ async def reload_model(name: str, pm=Depends(get_pm), registry=Depends(get_regis
 @router.post("/models/pull")
 async def pull_model(req: PullModelRequest, dm=Depends(get_dm)):
     try:
-        resolved_name, msg = await dm.start_pull(req.model)
+        resolved_name, msg = await dm.start_pull(req.model, modality_override=req.type)
         return {"status": "started", "message": msg, "model": resolved_name}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

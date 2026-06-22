@@ -729,14 +729,39 @@ def cmd_logs(args: list[str]):
 
 
 def cmd_pull(args: list[str]):
-    """Pull model from Hugging Face or Unsloth: zallama pull <name>"""
-    if not args:
-        _err("Usage: zallama pull <model-name-or-hf-path>")
+    """Pull a model: zallama pull <name-or-hf-path> [--type text|asr]
+
+    --type sets the model's modality (default: text). Use it for raw HF paths
+    whose repo name gives no hint, e.g.
+        zallama pull owner/asr-repo/model.gguf --type asr
+    Shorthands and parakeet.cpp repos are detected automatically.
+    """
+    model = None
+    mtype = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--type", "-t"):
+            if i + 1 >= len(args):
+                _err("--type requires a value (text|asr)")
+                sys.exit(1)
+            mtype = args[i + 1]
+            i += 2
+        elif model is None:
+            model = a
+            i += 1
+        else:
+            i += 1
+
+    if not model:
+        _err("Usage: zallama pull <model-name-or-hf-path> [--type text|asr]")
         _print_remote_presets()
         sys.exit(1)
-    
-    model = args[0]
-    r = _api("POST", "/api/models/pull", {"model": model})
+
+    payload = {"model": model}
+    if mtype:
+        payload["type"] = mtype
+    r = _api("POST", "/api/models/pull", payload)
     if r.status_code != 200:
         _err(f"Failed to start download: {r.json().get('detail', r.text)}")
         sys.exit(1)

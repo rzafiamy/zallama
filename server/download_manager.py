@@ -242,6 +242,44 @@ class DownloadManager:
         """A multimodal projector (vision) gguf, by HF naming convention."""
         return "mmproj" in filename.lower()
 
+    # Which backend serves each non-text modality. Text uses the llama-server
+    # default (None here means "let the registry default apply").
+    _MODALITY_BACKEND = {
+        "asr": "parakeet-server",
+    }
+
+    @classmethod
+    def _backend_for_modality(cls, modality: str) -> tuple[str | None, str | None]:
+        """Map an explicit modality to (modality, backend).
+
+        Text is the default: it returns (None, None) so the registry entry stays
+        clean and runs on llama-server. A known non-text modality selects its
+        backend; an unknown value is rejected with a clear error.
+        """
+        m = (modality or "").strip().lower()
+        if m in ("", "text"):
+            return None, None
+        backend = cls._MODALITY_BACKEND.get(m)
+        if backend is None:
+            raise ValueError(
+                f"Unsupported --type '{modality}'. "
+                f"Supported: text, {', '.join(sorted(cls._MODALITY_BACKEND))}."
+            )
+        return m, backend
+
+    @classmethod
+    def _infer_modality_backend(cls, repo: str) -> tuple[str | None, str | None]:
+        """Guess (modality, backend) from a raw HF repo id.
+
+        Shorthands declare these explicitly, but a raw `owner/repo/file.gguf`
+        pull has no hint, so we'd otherwise default everything to llama-server
+        text. parakeet.cpp ships its ASR GGUFs in `*parakeet*` repos, so route
+        those to the ASR backend. Returns (None, None) for plain text.
+        """
+        if "parakeet" in repo.lower():
+            return cls._backend_for_modality("asr")
+        return None, None
+
     async def _detect_mmproj(self, repo: str) -> str | None:
         """Find a vision projector in the repo, if any.
 
@@ -263,8 +301,16 @@ class DownloadManager:
                     return f
         return projectors[0]
 
-    async def start_pull(self, model_name_or_url: str) -> tuple[str, str]:
-        """Parse HF repo, create tasks, and spin off background downloader."""
+    async def start_pull(
+        self, model_name_or_url: str, modality_override: str | None = None
+    ) -> tuple[str, str]:
+        """Parse HF repo, create tasks, and spin off background downloader.
+
+        `modality` is an optional explicit override (text | asr | tts | image),
+        e.g. from `zallama pull <repo>/<file> --type asr`. When given it wins
+        over the shorthand's declared modality and the repo-name heuristic, and
+        selects the matching backend. When omitted, modality is inferred.
+        """
         async with self._lock:
             # 1. Resolve repo and file from shorthand or raw format
             repo = ""
@@ -302,6 +348,14 @@ class DownloadManager:
                     )
                 # Register under a clean model name based on filename
                 model_name = filename.replace(".gguf", "").lower()
+                # Raw HF paths carry no modality hint the way shorthands do, so
+                # infer it from the repo name (parakeet.cpp repos are ASR).
+                modality, backend = self._infer_modality_backend(repo)
+
+            # An explicit --type override wins over both the shorthand and the
+            # repo heuristic, and selects the backend that serves that modality.
+            if modality_override:
+                modality, backend = self._backend_for_modality(modality_override)
 
             if model_name in self._tasks and self._tasks[model_name].status in ("queued", "downloading"):
                 return model_name, f"Model '{model_name}' download is already in progress."

@@ -11,7 +11,9 @@ Implements:
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -86,6 +88,45 @@ async def _stream_proxy(upstream_url: str, body: dict) -> AsyncIterator[bytes]:
             async for chunk in resp.aiter_bytes():
                 if chunk:
                     yield chunk
+
+
+def _is_wav(data: bytes) -> bool:
+    """True if the bytes look like a RIFF/WAVE container."""
+    return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE"
+
+
+async def _to_wav(data: bytes) -> bytes:
+    """Transcode arbitrary audio to 16 kHz mono PCM WAV via ffmpeg.
+
+    parakeet-server's example server decodes WAV only, but clients (and the
+    OpenAI API) routinely send mp3/m4a/webm/flac. We normalize on the proxy so
+    any format works, matching OpenAI's behaviour. Already-WAV input is passed
+    through untouched. ffmpeg reads stdin and writes stdout (pipe:0 / pipe:1).
+    """
+    if _is_wav(data):
+        return data
+    if shutil.which("ffmpeg") is None:
+        raise HTTPException(
+            status_code=415,
+            detail="Audio is not WAV and ffmpeg is not installed to convert it. "
+                   "Upload a WAV file or install ffmpeg.",
+        )
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-i", "pipe:0",
+        "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate(input=data)
+    if proc.returncode != 0 or not out:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not decode/convert audio to WAV: "
+                   f"{err.decode('utf-8', 'ignore').strip()[:300]}",
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +276,11 @@ async def audio_transcriptions(
     from the form to pick the instance, then forward the raw multipart body and
     its Content-Type upstream untouched so the file boundary is preserved.
     """
+    # Parse the multipart form ONCE — this consumes the request stream, so we
+    # cannot also read request.body() afterwards. We rebuild the upstream
+    # multipart from the parsed parts instead, letting httpx generate a fresh
+    # boundary (forwarding the original Content-Type with the old boundary would
+    # not match a re-encoded body).
     form = await request.form()
     model_name = (form.get("model") or "").strip()
     if not model_name:
@@ -245,17 +291,28 @@ async def audio_transcriptions(
     )
     inst.touch()
 
-    # Forward the original request body verbatim; only Content-Type (which
-    # carries the multipart boundary) and Content-Length need to be relayed.
-    body = await request.body()
-    headers = {}
-    if "content-type" in request.headers:
-        headers["content-type"] = request.headers["content-type"]
+    # Split the form into file parts (uploads) and plain data fields. UploadFile
+    # is detected by its .read()/.filename attributes. parakeet only decodes
+    # WAV, so transcode the audio upload to 16 kHz mono WAV first (no-op if it
+    # already is WAV) and rename it accordingly.
+    files = []
+    data = {}
+    for key, value in form.multi_items():
+        if hasattr(value, "read") and hasattr(value, "filename"):
+            content = await value.read()
+            if key == "file":
+                content = await _to_wav(content)
+                name = (value.filename or "audio").rsplit(".", 1)[0] + ".wav"
+                files.append((key, (name, content, "audio/wav")))
+            else:
+                files.append((key, (value.filename, content, value.content_type)))
+        else:
+            data[key] = value
 
     upstream_url = f"{inst.base_url}/v1/audio/transcriptions"
     async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
         try:
-            resp = await client.post(upstream_url, content=body, headers=headers)
+            resp = await client.post(upstream_url, data=data, files=files)
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"parakeet-server error: {e}")
     # parakeet-server honours response_format (json / text / verbose_json), so
