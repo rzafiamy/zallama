@@ -34,3 +34,19 @@ llama_server:
     parallel: 1
     mlock: false
     no_mmap: false
+
+# --- Other backends (ASR / TTS / image) -------------------------------------
+# Additional modalities run on their own backend binary but reuse the lifecycle
+# settings above (port_start, startup_timeout, idle_timeout, the memory budget).
+# There is nothing to configure here:
+#
+#   * The binary is auto-detected at ./bin/<name>, ~/.zallama/bin/<name>, or PATH.
+#       - ASR  → parakeet-server   (build with build-ggml-parakeet.cpp.sh)
+#   * Per-model options (e.g. threads) go in the model's `params` in
+#     registry.yaml, not here — see models/registry.example.yaml.
+#
+# Get an ASR model and a ready-made registry entry in one step:
+#     zallama pull parakeet:0.6b
+# then transcribe via the OpenAI-compatible endpoint:
+#     curl http://127.0.0.1:11435/v1/audio/transcriptions \
+#       -F model=parakeet:0.6b -F file=@audio.wav -F response_format=text

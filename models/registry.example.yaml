@@ -35,3 +35,17 @@ models:
     params:
       ctx_size: 8192
       n_gpu_layers: 99
+
+  # --- ASR / speech-to-text: parakeet.cpp -------------------------------------
+  # Served by parakeet-server (build with build-ggml-parakeet.cpp.sh, which
+  # installs the binary into ./bin/). Exposed at POST /v1/audio/transcriptions,
+  # OpenAI-compatible, multipart upload, WAV input.
+  # Easiest path: `zallama pull parakeet:0.6b` downloads the gguf and writes this
+  # entry for you. The file below matches mudler/parakeet-cpp-gguf.
+  - name: parakeet:0.6b
+    file: tdt-0.6b-v2-q8_0.gguf
+    modality: asr
+    backend: parakeet-server
+    description: "NVIDIA Parakeet TDT 0.6B v2 (speech-to-text)"
+    params:
+      threads: 4

@@ -115,17 +115,40 @@ SHORTHANDS = {
         "repo": "unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF",
         "file": "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
         "description": "DeepSeek R1 Distilled Qwen 1.5B (Q4_K_M)"
-    }
+    },
+    # --- ASR / speech-to-text (parakeet.cpp) --------------------------------
+    # These run on parakeet-server, not llama-server, so they carry an explicit
+    # modality/backend that the downloader propagates into the registry entry.
+    "parakeet:0.6b": {
+        "repo": "mudler/parakeet-cpp-gguf",
+        "file": "tdt-0.6b-v2-q8_0.gguf",
+        "description": "NVIDIA Parakeet TDT 0.6B v2 (ASR, Q8_0)",
+        "modality": "asr",
+        "backend": "parakeet-server",
+    },
+    "parakeet:1.1b": {
+        "repo": "mudler/parakeet-cpp-gguf",
+        "file": "tdt-1.1b-q8_0.gguf",
+        "description": "NVIDIA Parakeet TDT 1.1B (ASR, Q8_0)",
+        "modality": "asr",
+        "backend": "parakeet-server",
+    },
 }
 
 
 class DownloadTask:
     def __init__(self, model_name: str, repo: str, filename: str, local_path: Path,
-                 mmproj_filename: str | None = None):
+                 mmproj_filename: str | None = None,
+                 modality: str | None = None, backend: str | None = None):
         self.model_name = model_name
         self.repo = repo
         self.filename = filename
         self.local_path = local_path
+        # Non-text models (e.g. ASR/parakeet) carry an explicit modality+backend
+        # so registration wires them to the right engine instead of the default
+        # llama-server text path.
+        self.modality = modality
+        self.backend = backend
         # Optional multimodal projector (vision). When set, it lives in the same
         # repo and is downloaded alongside the main gguf, then registered as the
         # `mmproj` artifact so the model is vision-capable with no extra steps.
@@ -246,6 +269,8 @@ class DownloadManager:
             # 1. Resolve repo and file from shorthand or raw format
             repo = ""
             filename = ""
+            modality: str | None = None
+            backend: str | None = None
             model_name = model_name_or_url.strip()
 
             # Format check: hf://repo/path/to/file.gguf or repo/path/to/file.gguf
@@ -258,6 +283,8 @@ class DownloadManager:
                 sh = SHORTHANDS[cleaned.lower()]
                 repo = sh["repo"]
                 filename = sh["file"]
+                modality = sh.get("modality")
+                backend = sh.get("backend")
                 model_name = cleaned.lower()
             else:
                 # Expecting format: username/repo/filename.gguf or username/repo
@@ -279,12 +306,19 @@ class DownloadManager:
             if model_name in self._tasks and self._tasks[model_name].status in ("queued", "downloading"):
                 return model_name, f"Model '{model_name}' download is already in progress."
 
-            # Vision models ship a projector in the same repo; grab it too so the
-            # pulled model is vision-capable with no manual registry editing.
-            mmproj_filename = await self._detect_mmproj(repo)
+            # Vision (text) models ship a projector in the same repo; grab it too
+            # so the pulled model is vision-capable with no manual registry edit.
+            # Non-text modalities (ASR/TTS/…) never carry an mmproj, so skip the
+            # probe for them.
+            mmproj_filename = None
+            if modality in (None, "text"):
+                mmproj_filename = await self._detect_mmproj(repo)
 
             local_path = self.models_dir / filename
-            task = DownloadTask(model_name, repo, filename, local_path, mmproj_filename)
+            task = DownloadTask(
+                model_name, repo, filename, local_path, mmproj_filename,
+                modality=modality, backend=backend
+            )
             self._tasks[model_name] = task
 
             # Trigger background task
@@ -333,11 +367,21 @@ class DownloadManager:
             if task.model_name in SHORTHANDS:
                 description = SHORTHANDS[task.model_name]["description"]
 
+            # Params are backend-specific: llama-server text models want
+            # ctx_size/n_gpu_layers, while parakeet-server (ASR) does not accept
+            # those flags. Pick defaults from the model's modality.
+            if task.modality and task.modality != "text":
+                params = {"threads": 4}
+            else:
+                params = {"ctx_size": 4096, "n_gpu_layers": 99}
+
             self.registry.add_model(
                 name=task.model_name,
                 file_path=str(task.local_path),
                 description=description,
-                params={"ctx_size": 4096, "n_gpu_layers": 99},
+                modality=task.modality,
+                backend=task.backend,
+                params=params,
                 artifacts=artifacts,
             )
             logger.info(f"Completed and registered model: {task.model_name}")

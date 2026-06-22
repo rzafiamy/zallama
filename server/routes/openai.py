@@ -7,6 +7,7 @@ Implements:
   POST /v1/chat/completions   (streaming + non-streaming)
   POST /v1/completions        (streaming + non-streaming)
   POST /v1/embeddings
+  POST /v1/audio/transcriptions   (ASR — multipart upload, parakeet-server)
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
 from ..backends import ENDPOINT_MODALITY
@@ -216,3 +217,51 @@ async def embeddings(
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
     return JSONResponse(content=resp.json(), status_code=resp.status_code)
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/audio/transcriptions  (ASR)
+# ---------------------------------------------------------------------------
+@router.post("/audio/transcriptions")
+async def audio_transcriptions(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Proxy an OpenAI-style transcription to an ASR backend (parakeet-server).
+
+    Unlike the JSON endpoints, this is multipart/form-data: the client uploads
+    an audio file plus fields (model, response_format, ...). We read `model`
+    from the form to pick the instance, then forward the raw multipart body and
+    its Content-Type upstream untouched so the file boundary is preserved.
+    """
+    form = await request.form()
+    model_name = (form.get("model") or "").strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="'model' field is required")
+
+    inst = await _resolve_instance(
+        model_name, pm, registry, endpoint="audio/transcriptions"
+    )
+    inst.touch()
+
+    # Forward the original request body verbatim; only Content-Type (which
+    # carries the multipart boundary) and Content-Length need to be relayed.
+    body = await request.body()
+    headers = {}
+    if "content-type" in request.headers:
+        headers["content-type"] = request.headers["content-type"]
+
+    upstream_url = f"{inst.base_url}/v1/audio/transcriptions"
+    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+        try:
+            resp = await client.post(upstream_url, content=body, headers=headers)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"parakeet-server error: {e}")
+    # parakeet-server honours response_format (json / text / verbose_json), so
+    # pass the upstream body and content type straight back to the client.
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type"),
+    )

@@ -10,8 +10,8 @@ particular inference engine lives here.
 This is the seam that lets new modalities (TTS, ASR, image generation) be added
 as *new Backend subclasses* rather than as cross-cutting changes:
 
-  - LlamaServerBackend  → text / chat / embeddings / vision   (llama-server)
-  - (future) WhisperBackend   → ASR        (whisper-server)
+  - LlamaServerBackend    → text / chat / embeddings / vision (llama-server)
+  - ParakeetServerBackend → ASR        (parakeet-server)
   - (future) TtsBackend       → TTS        (llama-tts / a tts server)
   - (future) DiffusionBackend → image gen  (sd-server / llama-diffusion)
 
@@ -162,10 +162,59 @@ class LlamaServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# parakeet-server backend (ASR / speech-to-text)
+# ---------------------------------------------------------------------------
+class ParakeetServerBackend:
+    """parakeet.cpp's example server — OpenAI-compatible transcription.
+
+    Exposes POST /v1/audio/transcriptions (multipart, WAV input) and GET
+    /health. It is single-model and serves one request at a time; zallama's
+    per-model lifecycle (one process per model) maps onto that cleanly, and the
+    routes layer simply proxies each request through.
+
+    Build it with build-ggml-parakeet.cpp.sh, which installs `parakeet-server`
+    into ./bin/.
+    """
+    name = "parakeet-server"
+    binary_name = "parakeet-server"
+    modalities = {ASR}
+
+    # Params that take a value: registry/config key -> CLI flag.
+    _PARAM_MAP = {
+        "threads": "--threads",
+        "cache_dir": "--cache-dir",
+    }
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [
+            binary,
+            "--model", str(model_path),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+        for key, flag in self._PARAM_MAP.items():
+            if key in merged_params:
+                args += [flag, str(merged_params[key])]
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # Registry of backends
 # ---------------------------------------------------------------------------
 _BACKENDS: dict[str, Backend] = {
     LlamaServerBackend.name: LlamaServerBackend(),
+    ParakeetServerBackend.name: ParakeetServerBackend(),
 }
 
 DEFAULT_BACKEND = LlamaServerBackend.name

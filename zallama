@@ -231,10 +231,12 @@ def cmd_list(args: list[str]):
         return
 
     print(f"\n{BOLD}{F_BLUE} Registered Models{RESET}")
-    headers = ["MODEL", "STATUS", "SIZE", "DESCRIPTION"]
+    headers = ["MODEL", "MODALITY", "ENGINE", "STATUS", "SIZE", "DESCRIPTION"]
     rows = []
     for m in models:
         name = m["name"]
+        modality = m.get("modality", "text")
+        backend = m.get("backend", "llama-server")
         status = _color("● RUNNING", F_TEAL) if m["running"] else _color("○ stopped", F_DIM)
         size = m.get("file_size", 0)
         size_str = f"{size / 1e9:.1f} GB" if size > 0 else "?"
@@ -242,24 +244,62 @@ def cmd_list(args: list[str]):
         if not file_ok:
             size_str = _color("FILE MISSING", F_RED)
         desc = m.get("description", "")
-        if len(desc) > 40:
-            desc = desc[:37] + "..."
-        rows.append([_color(name, F_BLUE + BOLD), status, size_str, desc])
+        if len(desc) > 30:
+            desc = desc[:27] + "..."
+        rows.append([
+            _color(name, F_BLUE + BOLD),
+            _color(modality, F_GRAY),
+            _color(backend, F_DIM),
+            status,
+            size_str,
+            desc
+        ])
     _print_table(headers, rows)
     print()
 
 
 def cmd_add(args: list[str]):
-    """Register a model: zallama add <name> <file>"""
-    if len(args) < 2:
-        _err("Usage: zallama add <name> <path-to-model.gguf> [description]")
+    """Register a model: zallama add <name> <file> [--modality <val>] [--backend <val>]"""
+    modality = "text"
+    backend = "llama-server"
+    
+    filtered_args = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--modality" and i + 1 < len(args):
+            modality = args[i+1]
+            i += 2
+        elif args[i] == "--backend" and i + 1 < len(args):
+            backend = args[i+1]
+            i += 2
+        else:
+            filtered_args.append(args[i])
+            i += 1
+            
+    if len(filtered_args) < 2:
+        _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--modality <modality>] [--backend <backend>]")
+        _info("Supported modalities: text, asr, tts, image")
+        _info("Supported backends: llama-server, parakeet-server")
         sys.exit(1)
-    name, file_path = args[0], args[1]
-    desc = " ".join(args[2:]) if len(args) > 2 else ""
+        
+    name, file_path = filtered_args[0], filtered_args[1]
+    desc = " ".join(filtered_args[2:]) if len(filtered_args) > 2 else ""
+    
+    if modality == "text" and backend == "llama-server":
+        if "parakeet" in file_path.lower() or "parakeet" in name.lower():
+            modality = "asr"
+            backend = "parakeet-server"
+            
     abs_path = str(Path(file_path).expanduser().resolve())
-    r = _api("POST", "/api/models/add", {"name": name, "file": abs_path, "description": desc})
+    r = _api("POST", "/api/models/add", {
+        "name": name, 
+        "file": abs_path, 
+        "description": desc,
+        "modality": modality,
+        "backend": backend
+    })
     if r.status_code == 200:
-        _ok(f"Model '{name}' registered → {abs_path}")
+        _ok(f"Model '{name}' registered ({modality} / {backend}) → {abs_path}")
 
 
 def cmd_set(args: list[str]):
@@ -395,6 +435,17 @@ def cmd_run(args: list[str]):
         _err("Usage: zallama run <model-name>")
         sys.exit(1)
     model = args[0]
+
+    # Fetch model details to check modality
+    r_models = _api("GET", "/api/models")
+    if r_models.status_code == 200:
+        models_info = r_models.json().get("models", [])
+        model_entry = next((m for m in models_info if m["name"] == model), None)
+        if model_entry and model_entry.get("modality") == "asr":
+            _err(f"Model '{model}' is an ASR (Speech-to-Text) model and cannot be used in interactive chat.")
+            _info("To transcribe audio with this model, use:")
+            _info(f"  zallama transcribe {model} <audio-file.wav>")
+            sys.exit(1)
 
     # Print a beautiful Fluent 2 style banner header
     print(_color("\n╭──────────────────────────────────────────────────────────╮", F_BLUE))
