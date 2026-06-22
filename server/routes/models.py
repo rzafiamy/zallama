@@ -151,8 +151,8 @@ async def unload_model(name: str, pm=Depends(get_pm)):
 @router.post("/models/pull")
 async def pull_model(req: PullModelRequest, dm=Depends(get_dm)):
     try:
-        msg = await dm.start_pull(req.model)
-        return {"status": "started", "message": msg}
+        resolved_name, msg = await dm.start_pull(req.model)
+        return {"status": "started", "message": msg, "model": resolved_name}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

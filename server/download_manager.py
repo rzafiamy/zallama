@@ -115,7 +115,27 @@ class DownloadManager:
             })
         return result
 
-    async def start_pull(self, model_name_or_url: str) -> str:
+    async def _auto_detect_gguf(self, repo: str) -> str:
+        url = f"https://huggingface.co/api/models/{repo}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                raise RuntimeError(f"HuggingFace repository '{repo}' not found or inaccessible (HTTP {resp.status_code}).")
+            data = resp.json()
+            siblings = data.get("siblings", [])
+            files = [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(".gguf")]
+            if not files:
+                raise RuntimeError(f"No GGUF files found in repository '{repo}'.")
+            
+            # Prefer standard medium quantizations first
+            pref_keywords = ["q4_k_m", "q4_0", "q4_k_s", "q4_1", "q5_k_m", "q5_0", "q8_0", "q3_k_m", "q3_k_s"]
+            for keyword in pref_keywords:
+                for f in files:
+                    if keyword in f.lower():
+                        return f
+            return files[0]
+
+    async def start_pull(self, model_name_or_url: str) -> tuple[str, str]:
         """Parse HF repo, create tasks, and spin off background downloader."""
         async with self._lock:
             # 1. Resolve repo and file from shorthand or raw format
@@ -135,20 +155,24 @@ class DownloadManager:
                 filename = sh["file"]
                 model_name = cleaned.lower()
             else:
-                # Expecting format: username/repo/filename.gguf
-                # Let's split by "/"
+                # Expecting format: username/repo/filename.gguf or username/repo
                 parts = cleaned.split("/")
                 if len(parts) >= 3:
                     repo = f"{parts[0]}/{parts[1]}"
                     filename = parts[-1]
+                elif len(parts) == 2:
+                    repo = f"{parts[0]}/{parts[1]}"
+                    filename = await self._auto_detect_gguf(repo)
                 else:
                     raise ValueError(
                         f"Invalid model name. Specify a shorthand (e.g. 'llama3.2:3b') "
                         f"or full HuggingFace path (e.g. 'unsloth/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf')"
                     )
+                # Register under a clean model name based on filename
+                model_name = filename.replace(".gguf", "").lower()
 
             if model_name in self._tasks and self._tasks[model_name].status in ("queued", "downloading"):
-                return f"Model '{model_name}' download is already in progress."
+                return model_name, f"Model '{model_name}' download is already in progress."
 
             local_path = self.models_dir / filename
             task = DownloadTask(model_name, repo, filename, local_path)
@@ -156,7 +180,7 @@ class DownloadManager:
 
             # Trigger background task
             asyncio.create_task(self._download_loop(task))
-            return f"Started downloading '{model_name}' in the background."
+            return model_name, f"Started downloading '{model_name}' in the background."
 
     async def _download_loop(self, task: DownloadTask):
         """Asynchronously stream the file download in chunks."""
@@ -180,7 +204,7 @@ class DownloadManager:
                     last_bytes = 0
 
                     with open(temp_path, "wb") as f:
-                        async for chunk in resp.iter_bytes(chunk_size=1024 * 128):
+                        async for chunk in resp.aiter_bytes(chunk_size=1024 * 128):
                             f.write(chunk)
                             task.completed_bytes += len(chunk)
 

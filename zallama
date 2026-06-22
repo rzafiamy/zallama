@@ -358,6 +358,8 @@ def cmd_pull(args: list[str]):
         _err(f"Failed to start download: {r.json().get('detail', r.text)}")
         sys.exit(1)
     
+    resp_data = r.json()
+    model = resp_data.get("model", model)
     print(_color(f"⏳ Initiated pull for '{model}'...", CYAN))
     
     last_status = None
