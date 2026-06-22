@@ -188,6 +188,16 @@ class ProcessManager:
             elif isinstance(val, str) and val in ("on", "off", "auto"):
                 args += ["--flash-attn", val]
 
+        # Handle reasoning (takes an option value in newer llama.cpp)
+        if "reasoning" in merged:
+            val = merged["reasoning"]
+            if val is True:
+                args += ["--reasoning", "on"]
+            elif val is False:
+                args += ["--reasoning", "off"]
+            elif isinstance(val, str) and val in ("on", "off", "auto"):
+                args += ["--reasoning", val]
+
         for key, flag in flag_map.items():
             if merged.get(key):
                 args.append(flag)
