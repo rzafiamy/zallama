@@ -21,7 +21,7 @@ import yaml
 DEFAULTS: dict[str, Any] = {
     "zallama": {
         "host": "0.0.0.0",
-        "port": 11434,
+        "port": 11435,
         "models_dir": "~/.zallama/models",
         "logs_dir": "~/.zallama/logs",
         "webui": True,

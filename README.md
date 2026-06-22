@@ -10,7 +10,7 @@ Zallama acts as a dynamic router and process manager for your local GGUF models.
 
 - **🚀 Ollama-like CLI:** Run commands like `zallama serve`, `zallama run <model>`, `zallama add`, and `zallama ps`.
 - **🔌 Full OpenAI /v1 API:** Full drop-in replacement for OpenAI endpoints (Chat, Completions, and Embeddings) with streaming supported via SSE.
-- **🌐 Sleek Embedded Web UI:** Access model management, registration, loading/unloading, and streaming chat at `http://localhost:11434`.
+- **🌐 Sleek Embedded Web UI:** Access model management, registration, loading/unloading, and streaming chat at `http://localhost:11435`.
 - **⚙️ Config-Driven Architecture:** Define global defaults and customize per-model parameters (context size, GPU layers offload, batching options) in simple YAML configurations.
 - **🔄 Dynamic Process Management:** Automatic port assignment, server health checking, and automatic LRU model eviction/unloading when idle.
 
@@ -38,7 +38,7 @@ export PATH="/home/cook/Documents/Dev/Dev-ai/zallama:$PATH"
 ```bash
 zallama serve
 ```
-*Starts the FastAPI controller and Web UI on `http://localhost:11434`.*
+*Starts the FastAPI controller and Web UI on `http://localhost:11435`.*
 
 ### 2. Register a Local Model
 ```bash
@@ -76,7 +76,7 @@ version         Show version info
 ```yaml
 zallama:
   host: "0.0.0.0"
-  port: 11434
+  port: 11435
   models_dir: "~/.zallama/models"
   logs_dir: "~/.zallama/logs"
 
@@ -109,7 +109,7 @@ models:
 Zallama acts as a standard OpenAI-compatible API gateway. Specify the model you want to target in the request body, and Zallama will handle model loading and routing automatically:
 
 ```bash
-curl http://localhost:11434/v1/chat/completions \
+curl http://localhost:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "qwen3:4b",
