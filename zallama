@@ -178,9 +178,83 @@ def cmd_add(args: list[str]):
     r = _api("POST", "/api/models/add", {"name": name, "file": abs_path, "description": desc})
     if r.status_code == 200:
         _ok(f"Model '{name}' registered → {abs_path}")
-    else:
-        _err(f"Failed: {r.json().get('detail', r.text)}")
+
+
+def cmd_set(args: list[str]):
+    """Set model parameters: zallama set <name> <key>=<value> [<key>=<value> ...]"""
+    if len(args) < 2:
+        _err("Usage: zallama set <model-name> <key>=<value> [<key>=<value> ...]")
+        _info("Examples:")
+        _info("  zallama set qwen3.5-4b-q4_k_m reasoning=false ctx_size=8192")
+        _info("  zallama set llama3.2:1b n_gpu_layers=99")
         sys.exit(1)
+
+    model_name = args[0]
+    kv_args = args[1:]
+
+    r = _api("GET", "/api/models")
+    if r.status_code != 200:
+        _err(f"Failed to fetch models list: {r.text}")
+        sys.exit(1)
+
+    models = r.json().get("models", [])
+    model_entry = None
+    for m in models:
+        if m["name"] == model_name or model_name in m.get("aliases", []):
+            model_entry = m
+            break
+
+    if not model_entry:
+        _err(f"Model '{model_name}' not found in registry. Add it first using: zallama add")
+        sys.exit(1)
+
+    params = model_entry.get("params", {}).copy()
+    for kv in kv_args:
+        if "=" not in kv:
+            _err(f"Invalid argument format: '{kv}'. Expected format: key=value")
+            sys.exit(1)
+        key, val = kv.split("=", 1)
+        key = key.strip()
+        val = val.strip()
+
+        # Convert val to appropriate type
+        if val.lower() == "true":
+            parsed_val = True
+        elif val.lower() == "false":
+            parsed_val = False
+        elif val.lower() in ("none", "null"):
+            parsed_val = None
+        else:
+            try:
+                parsed_val = int(val)
+            except ValueError:
+                try:
+                    parsed_val = float(val)
+                except ValueError:
+                    parsed_val = val
+
+        if parsed_val is None:
+            params.pop(key, None)
+        else:
+            params[key] = parsed_val
+
+    # Unload model first if it's running so the parameters apply immediately on next run
+    if model_entry.get("running"):
+        _api("POST", f"/api/models/{model_entry['name']}/unload")
+
+    payload = {
+        "name": model_entry["name"],
+        "file": model_entry["file"],
+        "description": model_entry["description"],
+        "aliases": model_entry["aliases"],
+        "params": params
+    }
+
+    r = _api("POST", "/api/models/add", payload)
+    if r.status_code == 200:
+        _ok(f"Updated parameters for '{model_entry['name']}' to: {params}")
+    else:
+        _err(f"Failed to update model parameters: {r.json().get('detail', r.text)}")
 
 
 def cmd_remove(args: list[str]):
@@ -585,6 +659,7 @@ COMMANDS = {
     "list": cmd_list,
     "ls": cmd_list,
     "add": cmd_add,
+    "set": cmd_set,
     "remove": cmd_remove,
     "rm": cmd_remove,
     "run": cmd_run,
@@ -621,6 +696,7 @@ def main():
             ("serve", "Start the Zallama daemon"),
             ("list [--remote]", "List registered or remote preset models"),
             ("add <name> <file>", "Register a local .gguf model"),
+            ("set <name> <k>=<v> ...", "Configure parameters for a registered model"),
             ("search <query>", "Search HuggingFace GGUF models"),
             ("pull <name>", "Pull a model from HF/unsloth"),
             ("remove <name>", "Remove a model from registry"),
