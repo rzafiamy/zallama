@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -170,4 +171,64 @@ async def pull_status(dm=Depends(get_dm)):
 @router.get("/models/shorthands")
 async def get_shorthands(dm=Depends(get_dm)):
     return {"shorthands": dm.get_shorthands()}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/models/search
+# ---------------------------------------------------------------------------
+@router.get("/models/search")
+async def search_huggingface(q: str):
+    q = q.strip()
+    if not q:
+        return {"results": [], "type": "repo_list"}
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # If the query contains a slash, we assume it's a specific repository lookup
+        if "/" in q:
+            url = f"https://huggingface.co/api/models/{q}"
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail=f"HuggingFace API error: {resp.reason_phrase}")
+            
+            data = resp.json()
+            siblings = data.get("siblings", [])
+            # Filter files ending in .gguf
+            files = [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(".gguf")]
+            
+            return {
+                "type": "file_list",
+                "repo": q,
+                "files": files,
+                "downloads": data.get("downloads", 0),
+                "likes": data.get("likes", 0)
+            }
+        else:
+            # Query for repositories
+            url = "https://huggingface.co/api/models"
+            params = {
+                "search": q,
+                "filter": "gguf",
+                "limit": 15,
+                "sort": "downloads",
+                "direction": "-1"
+            }
+            resp = await client.get(url, params=params)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail=f"HuggingFace API error: {resp.reason_phrase}")
+            
+            data = resp.json()
+            results = []
+            for item in data:
+                results.append({
+                    "id": item.get("id"),
+                    "downloads": item.get("downloads", 0),
+                    "likes": item.get("likes", 0),
+                    "tags": item.get("tags", []),
+                })
+            
+            return {
+                "type": "repo_list",
+                "query": q,
+                "results": results
+            }
 

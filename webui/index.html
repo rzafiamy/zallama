@@ -48,6 +48,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .btn.primary{background:var(--blue-dim);color:var(--blue);border-color:rgba(88,166,255,.3)}
 .btn.primary:hover{background:rgba(88,166,255,.2)}
 .btn.danger:hover{background:rgba(248,81,73,.15);color:var(--red);border-color:rgba(248,81,73,.3)}
+.search-item:hover{background:rgba(88,166,255,.08)}
 
 #add-model-btn, #pull-model-btn{display:flex;align-items:center;gap:6px;padding:10px 12px;margin:8px 0;background:none;border:1px dashed var(--border);border-radius:10px;color:var(--text3);cursor:pointer;font-size:12px;justify-content:center;transition:all .2s}
 #add-model-btn:hover, #pull-model-btn:hover{border-color:var(--blue);color:var(--blue);background:rgba(88,166,255,.04)}
@@ -226,7 +227,17 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
       <input type="text" id="p-name" placeholder="e.g. unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"/>
       <div style="font-size:11px;color:var(--text3);margin-top:4px">Format: username/repo/filename.gguf</div>
     </div>
-    <div class="modal-actions">
+    
+    <div style="border-top:1px solid var(--border);margin-top:15px;padding-top:15px">
+      <label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">🔍 Search HuggingFace</label>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input type="text" id="hf-search-input" placeholder="e.g. deepseek r1" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;outline:none" onkeydown="if(event.key==='Enter') searchHF()"/>
+        <button class="btn" onclick="searchHF()" style="padding:0 12px;font-size:12px;height:auto">Search</button>
+      </div>
+      <div id="hf-search-results" style="display:none;flex-direction:column;gap:4px;max-height:150px;overflow-y:auto;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:6px"></div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:15px">
       <button class="btn large" onclick="closePullModal()">Cancel</button>
       <button class="btn large primary" onclick="pullModel()">Pull Model</button>
     </div>
@@ -465,10 +476,89 @@ function openPullModal() {
   document.getElementById('p-presets').value = '';
   document.getElementById('p-name').value = '';
   document.getElementById('p-custom-group').style.display = 'none';
+  document.getElementById('hf-search-input').value = '';
+  document.getElementById('hf-search-results').style.display = 'none';
+  document.getElementById('hf-search-results').innerHTML = '';
 }
 
 function closePullModal() {
   document.getElementById('pull-modal').classList.remove('open');
+}
+
+let lastRepoSearchQuery = '';
+
+async function searchHF() {
+  const query = document.getElementById('hf-search-input').value.trim();
+  if (!query) return;
+  const resEl = document.getElementById('hf-search-results');
+  resEl.style.display = 'flex';
+  resEl.innerHTML = '<div style="font-size:11px;color:var(--text3);text-align:center;padding:10px">Searching HuggingFace...</div>';
+  
+  try {
+    const r = await apiFetch(`/api/models/search?q=${encodeURIComponent(query)}`);
+    if (!r.ok) {
+      resEl.innerHTML = `<div style="color:var(--red);font-size:11px">Failed to search: ${r.statusText}</div>`;
+      return;
+    }
+    const data = await r.json();
+    if (data.type === 'repo_list') {
+      const results = data.results || [];
+      if (!results.length) {
+        resEl.innerHTML = '<div style="font-size:11px;color:var(--text3);text-align:center;padding:10px">No GGUF models found.</div>';
+        return;
+      }
+      resEl.innerHTML = results.map(item => {
+        let dls = item.downloads;
+        let dls_str = dls > 1000000 ? (dls/1000000).toFixed(1)+'M' : (dls > 1000 ? (dls/1000).toFixed(0)+'k' : dls);
+        return `
+          <div class="search-item" onclick="selectHFRepo('${item.id}')" style="cursor:pointer;padding:6px 8px;border-radius:6px;transition:background .2s;display:flex;justify-content:space-between;align-items:center;font-size:11px">
+            <span style="font-weight:600;color:var(--blue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px">${item.id}</span>
+            <span style="color:var(--text3);flex-shrink:0">${dls_str} dls</span>
+          </div>
+        `;
+      }).join('');
+    } else if (data.type === 'file_list') {
+      const files = data.files || [];
+      const repo = data.repo;
+      if (!files.length) {
+        resEl.innerHTML = `<div style="font-size:11px;color:var(--text3);padding:10px">No .gguf files in this repo. <a href="#" onclick="goBackToRepoSearch()" style="color:var(--blue)">Back</a></div>`;
+        return;
+      }
+      resEl.innerHTML = `
+        <div style="font-size:11px;font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;padding:0 4px">
+          <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px">Files in ${repo}:</span>
+          <a href="#" onclick="goBackToRepoSearch()" style="color:var(--blue);text-decoration:none;font-weight:500;flex-shrink:0">← Back</a>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${files.map(f => `
+            <div class="search-item" onclick="selectHFFile('${repo}', '${f}')" style="cursor:pointer;padding:6px 8px;border-radius:6px;font-size:11px;word-break:break-all;color:var(--text2)">
+              📄 ${f}
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+  } catch (e) {
+    resEl.innerHTML = `<div style="color:var(--red);font-size:11px;padding:10px">Error: ${e}</div>`;
+  }
+}
+
+function goBackToRepoSearch() {
+  document.getElementById('hf-search-input').value = lastRepoSearchQuery;
+  searchHF();
+}
+
+async function selectHFRepo(repoId) {
+  lastRepoSearchQuery = document.getElementById('hf-search-input').value.trim();
+  document.getElementById('hf-search-input').value = repoId;
+  searchHF();
+}
+
+function selectHFFile(repo, file) {
+  document.getElementById('p-presets').value = 'custom';
+  document.getElementById('p-custom-group').style.display = 'block';
+  document.getElementById('p-name').value = `${repo}/${file}`;
+  toast(`Selected ${file}`);
 }
 
 function applyPreset() {

@@ -408,6 +408,74 @@ def cmd_pull(args: list[str]):
             break
 
 
+def cmd_search(args: list[str]):
+    """Search HuggingFace GGUF models: zallama search <query>"""
+    if not args:
+        _err("Usage: zallama search <query-or-repo-id>")
+        _info("Example: zallama search deepseek")
+        _info("Example: zallama search unsloth/DeepSeek-R1-Distill-Llama-8B-GGUF")
+        sys.exit(1)
+        
+    query = args[0]
+    from urllib.parse import quote
+    encoded = quote(query)
+    
+    r = _api("GET", f"/api/models/search?q={encoded}")
+    if r.status_code != 200:
+        _err(f"Search failed: {r.json().get('detail', r.text)}")
+        sys.exit(1)
+        
+    data = r.json()
+    resp_type = data.get("type")
+    
+    if resp_type == "repo_list":
+        results = data.get("results", [])
+        if not results:
+            print(_color("No GGUF models found matching query.", DIM))
+            return
+            
+        print(f"\n{BOLD}{CYAN}HuggingFace GGUF Repositories matching '{query}':{RESET}")
+        print(f"{'REPOSITORY ID':<50} {'DOWNLOADS':<12} {'LIKES':<8}")
+        print("─" * 75)
+        for repo in results:
+            rep_id = repo["id"]
+            dls = repo["downloads"]
+            likes = repo["likes"]
+            
+            dls_str = f"{dls:,}" if dls < 1000 else (f"{dls/1000:.1f}k" if dls < 1e6 else f"{dls/1e6:.1f}M")
+            likes_str = f"{likes:,}"
+            
+            colored_id = _color(rep_id, GREEN)
+            padding = 50 - len(rep_id)
+            if padding < 0: padding = 0
+            print(f"{colored_id}{' ' * padding} {dls_str:<12} {likes_str:<8}")
+        print(f"\n{DIM}To view files in a repo: zallama search <repository_id>{RESET}")
+        print(f"{DIM}To pull a model:         zallama pull <repository_id>/<filename.gguf>{RESET}\n")
+        
+    elif resp_type == "file_list":
+        repo_id = data.get("repo")
+        files = data.get("files", [])
+        dls = data.get("downloads", 0)
+        likes = data.get("likes", 0)
+        
+        if not files:
+            print(_color(f"No GGUF files found in repository '{repo_id}'.", DIM))
+            return
+            
+        print(f"\n{BOLD}{CYAN}GGUF Files in '{repo_id}' (Downloads: {dls:,}, Likes: {likes:,}):{RESET}")
+        print("─" * 75)
+        for f in files:
+            print(f"  • {f}")
+        
+        suggested_file = files[0]
+        # suggest a reasonable Q4_K_M or Q4_0 file if possible
+        for f in files:
+            if "q4_k_m" in f.lower() or "q4_0" in f.lower() or "q4_1" in f.lower():
+                suggested_file = f
+                break
+        print(f"\n{DIM}To pull one of these: zallama pull {repo_id}/{suggested_file}{RESET}\n")
+
+
 def cmd_health(args: list[str]):
     r = _api("GET", "/api/health")
     d = r.json()
@@ -445,6 +513,7 @@ COMMANDS = {
     "rm": cmd_remove,
     "run": cmd_run,
     "pull": cmd_pull,
+    "search": cmd_search,
     "ps": cmd_ps,
     "load": cmd_load,
     "unload": cmd_unload,
@@ -476,6 +545,7 @@ def main():
             ("serve", "Start the Zallama daemon"),
             ("list [--remote]", "List registered or remote preset models"),
             ("add <name> <file>", "Register a local .gguf model"),
+            ("search <query>", "Search HuggingFace GGUF models"),
             ("pull <name>", "Pull a model from HF/unsloth"),
             ("remove <name>", "Remove a model from registry"),
             ("run <name>", "Interactive chat with a model"),
