@@ -11,13 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pluggable backend abstraction** (`server/backends.py`): a `Backend` protocol isolates
   engine-specific logic (binary, argument building, health path) from the generic process
   lifecycle, so new modalities can be added as new backends rather than cross-cutting changes.
-- **Modality-aware registry**: model entries may declare `modality` (`text`, and — by design —
-  `asr` / `tts` / `image`), `backend`, and `artifacts`. All fields are optional and default to
+- **Modality-aware registry**: model entries may declare `modality` (`text`, `asr`, and — by design —
+  `tts` / `image`), `backend`, and `artifacts`. All fields are optional and default to
   the classic single-GGUF `llama-server` text model, so existing registries keep working.
 - **Vision (multimodal) support**: attach an `mmproj` projector via `artifacts`; Zallama passes
   `--mmproj` to `llama-server` automatically and image input flows through `/v1/chat/completions`.
+- **Speech-to-text (ASR)**: `ParakeetServerBackend` runs [parakeet.cpp](https://github.com/mudler/parakeet.cpp)
+  models at the OpenAI-compatible `POST /v1/audio/transcriptions` endpoint. Non-WAV uploads are
+  auto-transcoded to 16 kHz mono WAV via `ffmpeg`. `zallama pull` detects parakeet repos (and
+  accepts `--type asr`) and registers them with the right modality/backend. Build the binary with
+  `build-ggml-parakeet.cpp.sh` (copies `libggml*.so` and sets `RPATH=$ORIGIN`).
 - **Modality guard**: requests to an endpoint a model cannot serve return a clear `400` instead
-  of a confusing upstream failure. The audio/image endpoints are pre-mapped, awaiting backends.
+  of a confusing upstream failure. The remaining audio/image endpoints are pre-mapped, awaiting backends.
 - **Memory-aware eviction**: optional `mem_budget_gb` evicts least-recently-used models to keep
   total declared/estimated cost within budget. Per-model cost comes from a declared `mem_gb`,
   else an estimate from GGUF file size, else `mem_init_gb`. Exposed via `GET /api/ps` and

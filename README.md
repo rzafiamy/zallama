@@ -25,6 +25,7 @@
 - [Configuration Files](#-configuration-files)
 - [Memory-Aware Eviction](#-memory-aware-eviction)
 - [Vision (Multimodal) Models](#-vision-multimodal-models)
+- [Speech-to-Text (ASR)](#-speech-to-text-asr)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
 - [OpenAI API Integration](#-openai-api-integration)
 - [Deployment (systemd)](#-deployment-systemd)
@@ -37,7 +38,7 @@
 
 Zallama acts as a dynamic router and process manager for your local GGUF models. It exposes a single, unified endpoint that is fully OpenAI-compatible. When you request a model, Zallama starts the underlying backend (e.g. `llama-server`) in the background, routes your request, and automatically unloads the model after a period of inactivity to free up RAM/VRAM.
 
-Zallama is built around a **pluggable backend abstraction**: each model declares a `modality` (`text`, and — by design — `asr`, `tts`, `image`) and a `backend`. Text/chat/embeddings and **vision** (via an `mmproj` projector) ship today on `llama-server`; the architecture is structured so additional modalities are added as new backends rather than as cross-cutting changes.
+Zallama is built around a **pluggable backend abstraction**: each model declares a `modality` (`text`, `asr`, and — by design — `tts`, `image`) and a `backend`. Text/chat/embeddings and **vision** (via an `mmproj` projector) ship on `llama-server`, and **speech-to-text (ASR)** ships on `parakeet-server` ([parakeet.cpp](https://github.com/mudler/parakeet.cpp)); the architecture is structured so additional modalities are added as new backends rather than as cross-cutting changes.
 
 ---
 
@@ -48,7 +49,8 @@ Zallama is built around a **pluggable backend abstraction**: each model declares
 - **🧠 Reasoning Model Support:** Full support for thinking models (e.g., DeepSeek-R1, Qwen 3.5), rendering thinking/reasoning blocks in real-time with dim/gray coloring inside the interactive chat.
 - **🔌 Full OpenAI /v1 API:** Full drop-in replacement for OpenAI endpoints (Chat, Completions, and Embeddings) with streaming supported via SSE.
 - **👁️ Vision (Multimodal):** Run vision models by attaching an `mmproj` projector artifact — image input flows through `/v1/chat/completions`.
-- **🧩 Pluggable Backends & Modalities:** Each model declares a `modality` and `backend`. A `Backend` abstraction isolates engine-specific logic, so new modalities (TTS, ASR, image generation) slot in as new backends. A modality guard returns a clear error if a model is used on an incompatible endpoint.
+- **🎙️ Speech-to-Text (ASR):** Transcribe audio via `/v1/audio/transcriptions` (OpenAI-compatible) on the `parakeet-server` backend. Any input format (mp3/m4a/webm/flac/…) is auto-transcoded to WAV with `ffmpeg`. Multilingual models (e.g. Parakeet TDT v3, 25 European languages incl. French) supported.
+- **🧩 Pluggable Backends & Modalities:** Each model declares a `modality` and `backend`. A `Backend` abstraction isolates engine-specific logic, so new modalities (TTS, image generation) slot in as new backends. A modality guard returns a clear error if a model is used on an incompatible endpoint.
 - **🌐 Sleek Embedded Web UI:** Access model management, registration, loading/unloading, and streaming chat at `http://localhost:11435`.
 - **⚙️ Config-Driven Architecture:** Define global defaults and customize per-model parameters (context size, GPU layers offload, batching options) in simple YAML configurations.
 - **🔄 Dynamic Process Management:** Per-model startup locking, OS-checked port assignment, server health checking, an optional concurrency cap (`max_loaded_models`), and automatic LRU model eviction/unloading when idle.
@@ -59,7 +61,21 @@ Zallama is built around a **pluggable backend abstraction**: each model declares
 
 ## 🛠️ Installation
 
-**Requirements:** Python 3.10+, and a `llama-server` binary (built from [llama.cpp](https://github.com/ggml-org/llama.cpp) or placed in `./bin/llama-server`). `aria2c` is optional but recommended for fast downloads.
+**Requirements:** Python 3.10+, and a `llama-server` binary (built from [llama.cpp](https://github.com/ggml-org/llama.cpp) or placed in `./bin/llama-server`). `aria2c` is optional but recommended for fast downloads. For **ASR** (speech-to-text), also build `parakeet-server` and have `ffmpeg` installed (for transcoding non-WAV uploads).
+
+### Building the inference binaries
+
+Helper scripts build each engine and install the binaries into `./bin/` (the clone and build happen in a throwaway temp dir, so nothing pollutes the repo):
+
+```bash
+# llama.cpp (text / chat / embeddings / vision) → bin/llama-cli, bin/llama-server
+./build-ggml-llama.cpp.sh
+
+# parakeet.cpp (ASR / speech-to-text) → bin/parakeet-cli, bin/parakeet-server
+./build-ggml-parakeet.cpp.sh
+```
+
+> Both default to a **CUDA** build. The parakeet script also copies the shared `libggml*.so` next to the binaries and sets their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime — required because parakeet links ggml as shared libraries.
 
 Run the one-shot installer:
 
@@ -100,7 +116,14 @@ zallama pull llama3.2:3b
 
 # Or pull any GGUF file directly from HuggingFace
 zallama pull unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf
+
+# Pull an ASR (speech-to-text) model — auto-registered as modality=asr
+zallama pull parakeet:0.6b
+# Multilingual (25 European languages incl. French):
+zallama pull mudler/parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf
 ```
+
+> Parakeet GGUF repos are detected automatically and registered with the ASR backend. For a raw HF path whose repo name gives no hint, force it with `zallama pull <repo>/<file>.gguf --type asr`.
 
 ### 3. Configure Model Parameters
 Dynamically set context size, GPU offloading, or turn reasoning (thinking blocks) on or off:
@@ -126,7 +149,8 @@ serve                  Start the Zallama daemon
 list                   List registered models (alias: ls)
 add <name> <file>      Register a local .gguf model
 set <name> <k>=<v>...  Configure parameters for a registered model
-pull <name>            Pull model from HF / Unsloth presets (uses aria2c)
+pull <name> [--type T] Pull model from HF / Unsloth presets (uses aria2c).
+                       --type sets modality (text|asr) for raw HF paths.
 remove <name>          Remove a model from registry (alias: rm)
 run <name>             Interactive chat with a model (streams reasoning)
 ps                     Show running model processes
@@ -213,12 +237,21 @@ models:
     params:
       ctx_size: 8192
       n_gpu_layers: 99
+
+  # ASR (speech-to-text) model — runs on parakeet-server
+  - name: "tdt-0.6b-v3-q8_0"
+    file: "tdt-0.6b-v3-q8_0.gguf"
+    modality: "asr"
+    backend: "parakeet-server"
+    description: "Parakeet TDT 0.6B v3 (multilingual ASR)"
+    params:
+      threads: 4
 ```
 
 > **Applying changes:** The registry reloads from disk automatically, so adding, editing, or removing an entry takes effect on the next request — no daemon restart. The one exception is a model that's **already running**: its `llama-server` keeps the params it launched with, so run `zallama reload <name>` to restart it with the new params. (Changes to `config.yaml` are read only at startup and do require `systemctl restart zallama`.)
 
 Each entry may declare:
-- **`modality`** — `text` (default), or the planned `asr` / `tts` / `image`. Determines which endpoints the model may serve. Requests to a mismatched endpoint return a clear `400`.
+- **`modality`** — `text` (default), `asr`, or the planned `tts` / `image`. Determines which endpoints the model may serve. Requests to a mismatched endpoint return a clear `400`.
 - **`backend`** — which engine runs the model (default `llama-server`). New backends resolve their own binary from `./bin/<name>`, `~/.zallama/bin/<name>`, or `PATH`.
 - **`artifacts`** — extra files beyond the primary GGUF (e.g. `mmproj` for vision, and — for future backends — vocoders, etc.). Paths are absolute or relative to `models_dir`.
 - **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size.
@@ -262,11 +295,42 @@ Zallama passes `--mmproj <file>` to the backend automatically, and image input f
 
 ---
 
+## 🎙️ Speech-to-Text (ASR)
+
+Audio transcription runs on the **`parakeet-server`** backend ([parakeet.cpp](https://github.com/mudler/parakeet.cpp)) and is exposed at the OpenAI-compatible `POST /v1/audio/transcriptions` endpoint.
+
+**1. Build the binary** (installs `parakeet-server` into `./bin/`):
+```bash
+./build-ggml-parakeet.cpp.sh
+```
+
+**2. Pull a model** (auto-registered as `modality: asr`, `backend: parakeet-server`):
+```bash
+zallama pull parakeet:0.6b                                   # English (TDT 0.6B v2)
+zallama pull mudler/parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf  # Multilingual v3 (incl. French)
+```
+
+**3. Transcribe** — upload any audio format; Zallama transcodes it to WAV via `ffmpeg` before forwarding:
+```bash
+curl http://localhost:11435/v1/audio/transcriptions \
+  -F model=tdt-0.6b-v3-q8_0 \
+  -F file=@speech.mp3 \
+  -F response_format=text
+```
+
+`response_format` accepts `text`, `json`, or `verbose_json` (with `-F 'timestamp_granularities[]=word'` for per-word timing).
+
+> **Language support is a property of the model, not Zallama.** `ctc-0.6b` / `tdt-0.6b-v2` are **English-only**; for French and other languages use the multilingual **[Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)** (25 European languages, automatic language detection).
+>
+> **`ffmpeg`** is only needed for non-WAV uploads. Without it, WAV uploads still work and other formats return a clear `415`.
+
+---
+
 ## 🧩 Backends & Modalities (Architecture)
 
 Zallama separates the **generic process lifecycle** (spawn, health-check, port assignment, LRU eviction, kill) from **engine-specific logic** (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a `Backend` abstraction in [`server/backends.py`](server/backends.py).
 
-This is the seam for new modalities. Today `LlamaServerBackend` covers text, chat, embeddings, and vision. Adding TTS, ASR, or image generation means adding a new `Backend` subclass and the matching endpoint proxy — no changes to the process manager or registry schema. The OpenAI endpoints for these modalities (`/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/images/generations`) are already mapped in the modality guard, awaiting their backends.
+This is the seam for new modalities. `LlamaServerBackend` covers text, chat, embeddings, and vision; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`). Adding TTS or image generation means adding a new `Backend` subclass and the matching endpoint proxy — no changes to the process manager or registry schema. The remaining OpenAI endpoints (`/v1/audio/speech`, `/v1/images/generations`) are already mapped in the modality guard, awaiting their backends.
 
 ---
 
@@ -338,6 +402,10 @@ Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authenticatio
 |---|---|
 | `Cannot connect to Zallama at ...` | Daemon isn't running — start it with `zallama serve` (or `systemctl start zallama`). |
 | `llama-server binary not found` | Build/place it at `./bin/llama-server`, or set `llama_server.binary` in `config/config.yaml`. |
+| `parakeet-server binary not found` | Build it: `./build-ggml-parakeet.cpp.sh` (installs into `./bin/`). |
+| `libggml*.so: cannot open shared object file` | The parakeet binary can't find its shared libs. Re-run `./build-ggml-parakeet.cpp.sh` (it copies the `.so` files and sets `RPATH=$ORIGIN`), or `apt install patchelf` and `patchelf --set-rpath '$ORIGIN' bin/parakeet-server bin/libggml*.so.*.*`. |
+| ASR returns "accepts WAV uploads only" | Non-WAV upload and `ffmpeg` is missing — `apt install ffmpeg` (Zallama auto-transcodes once present). |
+| ASR transcribes gibberish for non-English | The model is English-only (`ctc-0.6b` / `tdt-0.6b-v2`). Use multilingual `tdt-0.6b-v3` instead. |
 | Model fails to start / startup timeout | Check `zallama logs <model>`. Often a bad GGUF path, too-high `n_gpu_layers`, or `ctx_size` exceeding VRAM. |
 | Models keep getting unloaded | Increase `idle_timeout`, `max_loaded_models`, or `mem_budget_gb`. |
 | `400` "modality ... cannot serve" | You called an endpoint the model's `modality` doesn't support (e.g. a vision-only flow on the wrong route). |
