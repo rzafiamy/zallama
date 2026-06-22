@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits)",
+      "Bash(echo \"free GPU: $\\(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits\\) MiB \\(test servers all down\\)\")",
+      "Bash(echo \"free GPU before: $\\(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits\\) MiB\")"
+    ]
+  }
+}

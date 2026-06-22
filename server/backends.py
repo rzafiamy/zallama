@@ -93,6 +93,11 @@ class LlamaServerBackend:
         "n_gpu_layers": "--n-gpu-layers",
         "threads": "--threads",
         "parallel": "--parallel",
+        # MTP / speculative decoding. Requires an MTP GGUF variant whose draft
+        # head is baked in (e.g. unsloth *-MTP-GGUF). spec_type "draft-mtp"
+        # activates it; spec_draft_n_max tunes lookahead (2 is a good start).
+        "spec_type": "--spec-type",
+        "spec_draft_n_max": "--spec-draft-n-max",
     }
     # Boolean flags: present-if-truthy.
     _FLAG_MAP = {
