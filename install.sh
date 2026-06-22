@@ -23,10 +23,31 @@ fi
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 echo -e "${GREEN}✓${RESET} Python $PYTHON_VERSION found"
 
-# ── 2. Install Python dependencies ──────────────────────────────────────────
+# ── 2. Install Python dependencies (into a project-local venv) ────────────────
+# Modern Debian/Ubuntu (PEP 668) refuse system-wide `pip install`. A venv is the
+# supported path and keeps the install self-contained. The `zallama` launcher
+# re-execs into this venv automatically, so no activation is ever needed.
+VENV_DIR="$ZALLAMA_DIR/.venv"
+echo "📦 Setting up virtual environment at .venv ..."
+
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+  if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
+    echo "❌ Failed to create venv. Install the venv module:"
+    echo "   sudo apt install python3-venv python3-full"
+    exit 1
+  fi
+fi
+
 echo "📦 Installing Python dependencies..."
-pip3 install -q -r "$ZALLAMA_DIR/requirements.txt"
-echo -e "${GREEN}✓${RESET} Dependencies installed"
+"$VENV_DIR/bin/python" -m pip install -q --upgrade pip
+"$VENV_DIR/bin/python" -m pip install -q -r "$ZALLAMA_DIR/requirements.txt"
+echo -e "${GREEN}✓${RESET} Dependencies installed into .venv"
+
+# If the installer is run via sudo, the venv ends up owned by root; hand it back
+# to the invoking user so `zallama serve` (run as that user) can use it.
+if [ -n "${SUDO_USER:-}" ]; then
+  chown -R "$SUDO_USER" "$VENV_DIR" 2>/dev/null || true
+fi
 
 # ── 3. Check llama-server binary ────────────────────────────────────────────
 if [ -f "$ZALLAMA_DIR/bin/llama-server" ]; then

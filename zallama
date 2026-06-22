@@ -18,13 +18,38 @@ Commands:
 """
 from __future__ import annotations
 
-import json
 import os
-import re
 import sys
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Virtualenv bootstrap
+# ---------------------------------------------------------------------------
+# install.sh creates a project-local .venv (PEP 668 makes system-wide pip
+# installs fail on modern Debian/Ubuntu). Re-exec into that interpreter so the
+# CLI transparently sees its dependencies — the user never has to activate it.
+def _reexec_into_venv() -> None:
+    # ZALLAMA_VENV_ACTIVE is set right before re-exec, so we run at most once and
+    # never loop. We must launch the venv's python *by its own path* (not the
+    # symlink target) — that path, alongside pyvenv.cfg, is what activates the
+    # venv; resolving the symlink to the base interpreter would defeat it.
+    if os.environ.get("ZALLAMA_VENV_ACTIVE") or os.environ.get("ZALLAMA_NO_VENV"):
+        return
+    script = Path(__file__).resolve()
+    for venv in (script.parent / ".venv", script.parent / "venv"):
+        py = venv / "bin" / "python"
+        if py.is_file():
+            os.environ["ZALLAMA_VENV_ACTIVE"] = "1"
+            os.execv(str(py), [str(py), str(script), *sys.argv[1:]])
+    # No venv found: fall through and run with the current interpreter.
+
+
+_reexec_into_venv()
+
+import json
+import re
 import time
 import readline
-from pathlib import Path
 from typing import Optional
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,39 @@
+<div align="center">
+
 # 🦙 Zallama
 
+**An Ollama-like, memory-aware, multimodal-ready local LLM server powered by `llama.cpp`.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![llama.cpp](https://img.shields.io/badge/powered%20by-llama.cpp-black.svg)](https://github.com/ggml-org/llama.cpp)
+[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20compatible-412991.svg?logo=openai&logoColor=white)](#-openai-api-integration)
+[![Changelog](https://img.shields.io/badge/changelog-keep%20a%20changelog-orange.svg)](CHANGELOG.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-contributing)
+
+</div>
+
 > An Ollama-like local LLM ecosystem powered by `llama-server` (llama.cpp).
+
+## 📚 Table of Contents
+
+- [Features](#-features)
+- [Installation](#-installation)
+- [Quick Start](#-quick-start)
+- [CLI Reference](#-cli-reference)
+- [Configuration Files](#-configuration-files)
+- [Memory-Aware Eviction](#-memory-aware-eviction)
+- [Vision (Multimodal) Models](#-vision-multimodal-models)
+- [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
+- [OpenAI API Integration](#-openai-api-integration)
+- [Deployment (systemd)](#-deployment-systemd)
+- [Security](#-security)
+- [Troubleshooting](#-troubleshooting)
+- [Contributing](#-contributing)
+- [License](#-license)
+
+---
 
 Zallama acts as a dynamic router and process manager for your local GGUF models. It exposes a single, unified endpoint that is fully OpenAI-compatible. When you request a model, Zallama starts the underlying backend (e.g. `llama-server`) in the background, routes your request, and automatically unloads the model after a period of inactivity to free up RAM/VRAM.
 
@@ -19,22 +52,34 @@ Zallama is built around a **pluggable backend abstraction**: each model declares
 - **🌐 Sleek Embedded Web UI:** Access model management, registration, loading/unloading, and streaming chat at `http://localhost:11435`.
 - **⚙️ Config-Driven Architecture:** Define global defaults and customize per-model parameters (context size, GPU layers offload, batching options) in simple YAML configurations.
 - **🔄 Dynamic Process Management:** Per-model startup locking, OS-checked port assignment, server health checking, an optional concurrency cap (`max_loaded_models`), and automatic LRU model eviction/unloading when idle.
+- **🧠 Memory-Aware Eviction:** Set a `mem_budget_gb` and Zallama evicts least-recently-used models to keep total declared/estimated memory within budget.
 - **🔒 Production-Ready Defaults:** Binds to `127.0.0.1` by default, optional Bearer-token API key, and configurable request timeouts.
 
 ---
 
 ## 🛠️ Installation
 
-Simply run the one-shot installer:
+**Requirements:** Python 3.10+, and a `llama-server` binary (built from [llama.cpp](https://github.com/ggml-org/llama.cpp) or placed in `./bin/llama-server`). `aria2c` is optional but recommended for fast downloads.
+
+Run the one-shot installer:
 
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-To run the `zallama` command from anywhere, add it to your PATH:
+The installer:
+1. Verifies Python 3 and installs `requirements.txt` into a project-local **`.venv`** (required on modern Debian/Ubuntu, which block system-wide `pip` under [PEP 668](https://peps.python.org/pep-0668/)).
+2. Checks for a `llama-server` binary (`./bin`, or on `PATH`).
+3. Makes the `zallama` CLI executable and creates `~/.zallama/{models,logs,bin}`.
+4. Symlinks `zallama` into `/usr/local/bin` (or `~/.local/bin`) when possible.
+5. **Installs a systemd service — only when run as root** (`sudo ./install.sh`). See [Deployment](#-deployment-systemd).
+
+> **No activation needed:** the `zallama` launcher automatically re-execs into `.venv`, so `zallama serve` and every other command just work. (Set `ZALLAMA_NO_VENV=1` to bypass and use the current interpreter.)
+
+To run `zallama` from anywhere without the symlink, add the repo to your `PATH`:
 ```bash
-export PATH="/home/cook/Documents/Dev/Dev-ai/zallama:$PATH"
+export PATH="$PWD:$PATH"   # from the zallama checkout
 ```
 
 ---
@@ -219,5 +264,78 @@ curl http://localhost:11435/v1/chat/completions \
 
 ---
 
+## 🚀 Deployment (systemd)
+
+For an always-on daemon, install Zallama as a systemd service. Running the installer **as root** writes the unit automatically; otherwise install it manually:
+
+```bash
+sudo tee /etc/systemd/system/zallama.service >/dev/null <<EOF
+[Unit]
+Description=Zallama — Local LLM Server
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$PWD
+ExecStart=$PWD/zallama serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now zallama
+systemctl status zallama
+```
+
+> **Note:** `./install.sh` only installs the unit when run as root (`sudo ./install.sh`), and it does **not** enable/start it for you — run `sudo systemctl enable --now zallama` afterwards. Tail logs with `journalctl -u zallama -f`.
+
+---
+
+## 🔐 Security
+
+Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authentication, which is safe for single-user local use. If you expose it:
+
+- Set `host: "0.0.0.0"` **only together with** an `api_key`. With a key set, all `/v1` and `/api` calls require an `Authorization: Bearer <key>` header (the Web UI and health checks stay public).
+  ```bash
+  curl http://localhost:11435/v1/models -H "Authorization: Bearer $YOUR_KEY"
+  ```
+- Prefer running behind a reverse proxy (TLS termination, rate limiting) for any network-facing deployment.
+- CORS allows all origins for the bundled Web UI but does **not** send credentials.
+
+---
+
+## 🔧 Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `Cannot connect to Zallama at ...` | Daemon isn't running — start it with `zallama serve` (or `systemctl start zallama`). |
+| `llama-server binary not found` | Build/place it at `./bin/llama-server`, or set `llama_server.binary` in `config/config.yaml`. |
+| Model fails to start / startup timeout | Check `zallama logs <model>`. Often a bad GGUF path, too-high `n_gpu_layers`, or `ctx_size` exceeding VRAM. |
+| Models keep getting unloaded | Increase `idle_timeout`, `max_loaded_models`, or `mem_budget_gb`. |
+| `400` "modality ... cannot serve" | You called an endpoint the model's `modality` doesn't support (e.g. a vision-only flow on the wrong route). |
+| `401 Invalid or missing API key` | `api_key` is set — pass `Authorization: Bearer <key>`. |
+| systemd service missing after install | `install.sh` only installs it as root — run `sudo ./install.sh` then `sudo systemctl enable --now zallama`. |
+| `error: externally-managed-environment` from pip | PEP 668 — don't `pip install` system-wide. Re-run `./install.sh` (it uses `.venv`). If venv creation fails: `sudo apt install python3-venv python3-full`. |
+| `Import error: No module named 'fastapi'` on `serve` | The `.venv` is missing or incomplete — re-run `./install.sh`. |
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! A good shape for a PR:
+
+1. Fork and branch from `main`.
+2. Keep changes focused; match the surrounding code style.
+3. For a new **backend/modality**, add a `Backend` subclass in [`server/backends.py`](server/backends.py) and the matching endpoint proxy — the process manager and registry schema should not need changes.
+4. Update [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
+5. Open a PR describing the change and how you tested it.
+
+---
+
 ## ⚖️ License
-MIT
+
+Released under the [MIT License](LICENSE). © 2026 Rija Z.
