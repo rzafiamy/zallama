@@ -20,8 +20,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
+from ..backends import ENDPOINT_MODALITY
+from ..model_registry import ModelRegistry
 
 router = APIRouter(prefix="/v1")
+
+
+def _request_timeout(request: Request) -> float:
+    """Non-streaming upstream timeout, from config (default 600s)."""
+    try:
+        return float(request.app.state.cfg["zallama"].get("request_timeout", 600))
+    except Exception:
+        return 600.0
 
 
 # ---------------------------------------------------------------------------
@@ -35,12 +45,24 @@ def _model_id_from_body(body: dict) -> str:
     return model
 
 
-async def _resolve_instance(model_name: str, pm, registry):
-    """Look up model in registry and ensure llama-server is running."""
+async def _resolve_instance(model_name: str, pm, registry, endpoint: str | None = None):
+    """Look up model in registry, enforce modality, and ensure it is running."""
     try:
         entry = registry.get(model_name)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+    # Modality guard: reject e.g. a tts model on /chat/completions with a clear
+    # error instead of a confusing upstream failure.
+    if endpoint is not None:
+        required = ENDPOINT_MODALITY.get(endpoint)
+        actual = ModelRegistry.modality_of(entry)
+        if required is not None and actual != required:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{model_name}' has modality '{actual}', "
+                       f"which cannot serve /v1/{endpoint} (requires '{required}').",
+            )
     try:
         model_path = registry.resolve_path(entry)
     except FileNotFoundError as e:
@@ -117,7 +139,7 @@ async def chat_completions(
 ):
     body = await request.json()
     model_name = _model_id_from_body(body)
-    inst = await _resolve_instance(model_name, pm, registry)
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="chat/completions")
     inst.touch()
 
     upstream_url = f"{inst.base_url}/v1/chat/completions"
@@ -133,7 +155,7 @@ async def chat_completions(
             },
         )
     else:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, json=body)
             except httpx.RequestError as e:
@@ -152,7 +174,7 @@ async def completions(
 ):
     body = await request.json()
     model_name = _model_id_from_body(body)
-    inst = await _resolve_instance(model_name, pm, registry)
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="completions")
     inst.touch()
 
     upstream_url = f"{inst.base_url}/v1/completions"
@@ -165,7 +187,7 @@ async def completions(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     else:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, json=body)
             except httpx.RequestError as e:
@@ -184,11 +206,11 @@ async def embeddings(
 ):
     body = await request.json()
     model_name = _model_id_from_body(body)
-    inst = await _resolve_instance(model_name, pm, registry)
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="embeddings")
     inst.touch()
 
     upstream_url = f"{inst.base_url}/v1/embeddings"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
         try:
             resp = await client.post(upstream_url, json=body)
         except httpx.RequestError as e:

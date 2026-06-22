@@ -247,7 +247,13 @@ def cmd_set(args: list[str]):
         "file": model_entry["file"],
         "description": model_entry["description"],
         "aliases": model_entry["aliases"],
-        "params": params
+        "params": params,
+        # Preserve non-text modality / backend / extra artifacts (e.g. vision
+        # mmproj) so a `set` doesn't silently reset them to defaults.
+        "modality": model_entry.get("modality", "text"),
+        "backend": model_entry.get("backend", "llama-server"),
+        "artifacts": model_entry.get("artifacts", {}),
+        "mem_gb": model_entry.get("mem_gb", 0),
     }
 
     r = _api("POST", "/api/models/add", payload)
@@ -423,22 +429,40 @@ def cmd_run(args: list[str]):
 def cmd_ps(args: list[str]):
     """Show running model processes."""
     r = _api("GET", "/api/ps")
-    procs = r.json().get("processes", [])
+    data = r.json()
+    procs = data.get("processes", [])
+    mem = data.get("memory", {})
     if not procs:
         print(_color("No models currently running.", DIM))
+        _print_mem_status(mem)
         return
 
-    print(f"\n{'NAME':<25} {'PORT':<8} {'UPTIME':<12} {'LAST USED'}")
-    print("─" * 65)
+    print(f"\n{'NAME':<25} {'PORT':<8} {'MEM':<8} {'UPTIME':<12} {'LAST USED'}")
+    print("─" * 73)
     now = time.time()
     for p in procs:
         name = p["name"]
         port = p["port"]
+        mem_gb = p.get("mem_gb", 0)
+        mem_str = f"{mem_gb:.1f}GB" if mem_gb else "?"
         uptime = int(now - p.get("started_at", now))
         last = int(now - p.get("last_used", now))
-        status = _color("● ALIVE", GREEN) if p.get("alive") else _color("✗ DEAD", RED)
-        print(f"{name:<25} {port:<8} {_fmt_duration(uptime):<12} {_fmt_duration(last)} ago")
+        print(f"{name:<25} {port:<8} {mem_str:<8} {_fmt_duration(uptime):<12} {_fmt_duration(last)} ago")
+    _print_mem_status(mem)
     print()
+
+
+def _print_mem_status(mem: dict):
+    if not mem:
+        return
+    budget = mem.get("budget_gb") or 0
+    loaded = mem.get("loaded_gb", 0)
+    count = mem.get("loaded_count", 0)
+    if budget > 0:
+        head = mem.get("headroom_gb", 0)
+        print(_color(f"\nMemory: {loaded:.1f}GB / {budget:.1f}GB used  •  {head:.1f}GB free  •  {count} loaded", DIM))
+    elif count:
+        print(_color(f"\nMemory: {loaded:.1f}GB across {count} model(s)  •  budget: unlimited", DIM))
 
 
 def cmd_load(args: list[str]):

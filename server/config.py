@@ -20,18 +20,23 @@ import yaml
 # ---------------------------------------------------------------------------
 DEFAULTS: dict[str, Any] = {
     "zallama": {
-        "host": "0.0.0.0",
+        "host": "127.0.0.1",   # localhost by default; set 0.0.0.0 to expose
         "port": 11435,
         "models_dir": "~/.zallama/models",
         "logs_dir": "~/.zallama/logs",
         "webui": True,
         "log_level": "info",
+        "api_key": "",          # if set, required as Bearer token on /v1 and /api
+        "request_timeout": 600, # seconds for non-streaming upstream proxy calls
     },
     "llama_server": {
         "binary": "",
         "port_start": 8100,
         "startup_timeout": 60,
         "idle_timeout": 300,
+        "max_loaded_models": 0,  # 0 = unlimited; cap concurrent loaded models
+        "mem_budget_gb": 0,      # 0 = unlimited; evict LRU to fit declared mem_gb
+        "mem_init_gb": 2,        # fallback per-model cost when mem_gb is undeclared
         "default_params": {
             "ctx_size": 4096,
             "n_gpu_layers": 99,
@@ -117,29 +122,34 @@ def load_config() -> dict[str, Any]:
     return cfg
 
 
-def resolve_binary(cfg: dict) -> str:
-    """Find llama-server binary path."""
-    explicit = cfg["llama_server"].get("binary", "").strip()
-    if explicit and Path(explicit).is_file():
-        return explicit
+def resolve_binary(cfg: dict, binary_name: str = "llama-server") -> str:
+    """Find an inference backend binary path.
 
-    # Search relative to zallama root
+    Lookup order: explicit config override (llama-server only) → ./bin/<name> →
+    ~/.zallama/bin/<name> → PATH. The name is per-backend so TTS/ASR/image
+    backends resolve their own executables (e.g. whisper-server, sd-server).
+    """
+    # The `binary` config key historically pins llama-server specifically.
+    if binary_name == "llama-server":
+        explicit = cfg["llama_server"].get("binary", "").strip()
+        if explicit and Path(explicit).is_file():
+            return explicit
+
     root = Path(__file__).parent.parent
     candidates = [
-        root / "bin" / "llama-server",
-        Path.home() / ".zallama" / "bin" / "llama-server",
+        root / "bin" / binary_name,
+        Path.home() / ".zallama" / "bin" / binary_name,
     ]
     for c in candidates:
         if c.is_file():
             return str(c)
 
-    # Fall back to PATH
     import shutil
-    found = shutil.which("llama-server")
+    found = shutil.which(binary_name)
     if found:
         return found
 
     raise FileNotFoundError(
-        "llama-server binary not found. Set 'llama_server.binary' in config.yaml "
-        "or place it in ./bin/llama-server"
+        f"'{binary_name}' binary not found. Place it in ./bin/{binary_name}, "
+        f"~/.zallama/bin/{binary_name}, or on your PATH."
     )

@@ -34,6 +34,10 @@ class AddModelRequest(BaseModel):
     description: str = ""
     aliases: list[str] = []
     params: dict = {}
+    modality: str = "text"      # text | asr | tts | image
+    backend: str = "llama-server"
+    artifacts: dict = {}        # e.g. {"mmproj": "/path/to/clip.gguf"} for vision
+    mem_gb: float = 0           # declared memory cost; 0 = infer/fallback
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +69,10 @@ async def list_models(registry=Depends(get_registry), pm=Depends(get_pm)):
             "file_size": file_size,
             "file_ok": file_ok,
             "params": m.get("params", {}),
+            "modality": m.get("modality", "text"),
+            "backend": m.get("backend", "llama-server"),
+            "artifacts": m.get("artifacts", {}),
+            "mem_gb": m.get("mem_gb", 0),
             "running": name in running_map,
             "port": running_map.get(name, {}).get("port"),
         })
@@ -87,6 +95,11 @@ async def add_model(req: AddModelRequest, registry=Depends(get_registry)):
         file_path=str(file_path),
         params=req.params or None,
         description=req.description,
+        modality=req.modality,
+        backend=req.backend,
+        artifacts=req.artifacts or None,
+        aliases=req.aliases or None,
+        mem_gb=req.mem_gb or None,
     )
     return {"status": "added", "model": entry}
 
@@ -109,7 +122,7 @@ async def remove_model(name: str, registry=Depends(get_registry), pm=Depends(get
 # ---------------------------------------------------------------------------
 @router.get("/ps")
 async def list_running(pm=Depends(get_pm)):
-    return {"processes": pm.list_running()}
+    return {"processes": pm.list_running(), "memory": pm.memory_status()}
 
 
 # ---------------------------------------------------------------------------

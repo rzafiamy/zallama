@@ -55,15 +55,17 @@ async def lifespan(app: FastAPI):
     log_level = cfg["zallama"].get("log_level", "info").upper()
     logging.getLogger().setLevel(getattr(logging, log_level, logging.INFO))
 
-    binary = resolve_binary(cfg)
-    logger.info(f"🦙 llama-server binary: {binary}")
+    try:
+        binary = resolve_binary(cfg)
+        logger.info(f"🦙 llama-server binary: {binary}")
+    except FileNotFoundError as e:
+        logger.warning(f"⚠ {e}")
 
     registry_path = Path(__file__).parent.parent / "models" / "registry.yaml"
     registry = ModelRegistry(registry_path, cfg["zallama"]["models_dir"])
 
     pm = ProcessManager(
         cfg=cfg,
-        binary=binary,
         logs_dir=cfg["zallama"]["logs_dir"],
     )
 
@@ -110,14 +112,36 @@ def create_app(cfg: dict) -> FastAPI:
     )
     app.state.cfg = cfg
 
-    # CORS — allow all origins for local use
+    # CORS — allow all origins for local UI use. Note: credentials cannot be
+    # combined with wildcard origins per the CORS spec, so we leave them off.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Optional API-key auth. When zallama.api_key is set, require it as a Bearer
+    # token on the proxy/management surfaces. Public/local paths stay open so the
+    # bundled Web UI and health checks keep working.
+    api_key = (cfg["zallama"].get("api_key") or "").strip()
+    if api_key:
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+
+        public_prefixes = ("/health", "/ui", "/docs", "/redoc", "/openapi.json")
+
+        @app.middleware("http")
+        async def require_api_key(request: Request, call_next):
+            path = request.url.path
+            if path == "/" or path.startswith(public_prefixes):
+                return await call_next(request)
+            auth = request.headers.get("authorization", "")
+            token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+            if token != api_key:
+                return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+            return await call_next(request)
 
     # Routes
     app.include_router(health_routes.router)
