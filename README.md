@@ -40,14 +40,24 @@ zallama serve
 ```
 *Starts the FastAPI controller and Web UI on `http://localhost:11435`.*
 
-### 2. Register a Local Model
+### 2. Pull a Model from HuggingFace
+You can pull pre-quantized models instantly using Unsloth presets, or download any GGUF directly from HuggingFace:
+```bash
+# Pull using a simple shorthand (from Unsloth's repo)
+zallama pull llama3.2:3b
+
+# Or pull any GGUF file directly from HuggingFace
+zallama pull unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf
+```
+
+### 3. Register a Local Model
 ```bash
 zallama add qwen3:4b /path/to/qwen3-4b-instruct-q4_k_m.gguf "Qwen3 4B Instruct"
 ```
 
-### 3. Run Interactive Chat
+### 4. Run Interactive Chat
 ```bash
-zallama run qwen3:4b
+zallama run llama3.2:3b
 ```
 
 ---
@@ -58,6 +68,7 @@ zallama run qwen3:4b
 serve           Start the Zallama daemon
 list            List registered models (alias: ls)
 add <name> <file>  Register a local .gguf model
+pull <name>     Pull model from HF / Unsloth presets
 remove <name>   Remove a model from registry (alias: rm)
 run <name>      Interactive chat with a model
 ps              Show running model processes

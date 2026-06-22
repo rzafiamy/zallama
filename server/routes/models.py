@@ -17,9 +17,14 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..dependencies import get_pm, get_registry
+from ..dependencies import get_pm, get_registry, get_dm
 
 router = APIRouter(prefix="/api")
+
+
+class PullModelRequest(BaseModel):
+    model: str
+
 
 
 class AddModelRequest(BaseModel):
@@ -137,3 +142,32 @@ async def unload_model(name: str, pm=Depends(get_pm)):
     if not stopped:
         raise HTTPException(status_code=404, detail=f"Model '{name}' is not running")
     return {"status": "stopped", "name": name}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/models/pull
+# ---------------------------------------------------------------------------
+@router.post("/models/pull")
+async def pull_model(req: PullModelRequest, dm=Depends(get_dm)):
+    try:
+        msg = await dm.start_pull(req.model)
+        return {"status": "started", "message": msg}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# GET /api/models/pull/status
+# ---------------------------------------------------------------------------
+@router.get("/models/pull/status")
+async def pull_status(dm=Depends(get_dm)):
+    return {"downloads": dm.list_tasks()}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/models/shorthands
+# ---------------------------------------------------------------------------
+@router.get("/models/shorthands")
+async def get_shorthands(dm=Depends(get_dm)):
+    return {"shorthands": dm.get_shorthands()}
+

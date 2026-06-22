@@ -67,8 +67,12 @@ async def lifespan(app: FastAPI):
         logs_dir=cfg["zallama"]["logs_dir"],
     )
 
+    from server.download_manager import DownloadManager
+    dm = DownloadManager(registry, cfg["zallama"]["models_dir"])
+
     dependencies.set_pm(pm)
     dependencies.set_registry(registry)
+    dependencies.set_dm(dm)
 
     logger.info(f"✅ Zallama ready — {len(registry.list_models())} model(s) registered")
 

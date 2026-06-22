@@ -49,8 +49,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .btn.primary:hover{background:rgba(88,166,255,.2)}
 .btn.danger:hover{background:rgba(248,81,73,.15);color:var(--red);border-color:rgba(248,81,73,.3)}
 
-#add-model-btn{display:flex;align-items:center;gap:8px;padding:10px 12px;margin:8px;background:none;border:1px dashed var(--border);border-radius:10px;color:var(--text3);cursor:pointer;font-size:12px;width:calc(100% - 16px);justify-content:center;transition:all .2s}
-#add-model-btn:hover{border-color:var(--blue);color:var(--blue);background:rgba(88,166,255,.04)}
+#add-model-btn, #pull-model-btn{display:flex;align-items:center;gap:6px;padding:10px 12px;margin:8px 0;background:none;border:1px dashed var(--border);border-radius:10px;color:var(--text3);cursor:pointer;font-size:12px;justify-content:center;transition:all .2s}
+#add-model-btn:hover, #pull-model-btn:hover{border-color:var(--blue);color:var(--blue);background:rgba(88,166,255,.04)}
 
 /* Main area */
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
@@ -128,10 +128,17 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
   </div>
   <div id="models-panel" class="panel active">
     <div id="model-list"></div>
-    <button id="add-model-btn" onclick="openAddModal()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      Add Model
-    </button>
+    <div id="download-list" style="padding:8px;display:flex;flex-direction:column;gap:6px"></div>
+    <div style="display:flex;padding:0 8px;gap:8px">
+      <button id="add-model-btn" onclick="openAddModal()" style="flex:1;width:auto">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Local
+      </button>
+      <button id="pull-model-btn" onclick="openPullModal()" style="flex:1;width:auto">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Pull HF
+      </button>
+    </div>
   </div>
   <div id="chat-list-panel" class="panel">
     <div id="chat-sessions" style="padding:20px;text-align:center;color:var(--text3);font-size:13px">
@@ -189,6 +196,37 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
     <div class="modal-actions">
       <button class="btn large" onclick="closeAddModal()">Cancel</button>
       <button class="btn large primary" onclick="addModel()">Add Model</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pull Model Modal -->
+<div class="modal-overlay" id="pull-modal">
+  <div class="modal">
+    <h3>⬇️ Pull Model from HuggingFace</h3>
+    <div class="form-group">
+      <label>Choose a Preset (Unsloth GGUF)</label>
+      <select id="p-presets" onchange="applyPreset()" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;margin-bottom:10px">
+        <option value="">-- Select a Preset Model --</option>
+        <option value="llama3.2:3b">Llama 3.2 3B Instruct (Q4_K_M) ~ 2.0GB</option>
+        <option value="llama3.2:1b">Llama 3.2 1B Instruct (Q4_K_M) ~ 1.2GB</option>
+        <option value="qwen2.5:7b">Qwen 2.5 7B Instruct (Q4_K_M) ~ 4.7GB</option>
+        <option value="qwen2.5:1.5b">Qwen 2.5 1.5B Instruct (Q4_K_M) ~ 1.2GB</option>
+        <option value="qwen2.5-coder:7b">Qwen 2.5 Coder 7B Instruct (Q4_K_M) ~ 4.7GB</option>
+        <option value="qwen2.5-coder:1.5b">Qwen 2.5 Coder 1.5B Instruct (Q4_K_M) ~ 1.2GB</option>
+        <option value="deepseek-r1:8b">DeepSeek R1 Distill Llama 8B (Q4_K_M) ~ 4.9GB</option>
+        <option value="deepseek-r1:1.5b">DeepSeek R1 Distill Qwen 1.5B (Q4_K_M) ~ 1.2GB</option>
+        <option value="custom">Custom HF path...</option>
+      </select>
+    </div>
+    <div class="form-group" id="p-custom-group" style="display:none">
+      <label>Model Name / HuggingFace Path</label>
+      <input type="text" id="p-name" placeholder="e.g. unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"/>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">Format: username/repo/filename.gguf</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn large" onclick="closePullModal()">Cancel</button>
+      <button class="btn large primary" onclick="pullModel()">Pull Model</button>
     </div>
   </div>
 </div>
@@ -419,6 +457,106 @@ async function addModel() {
   else { toast(`✗ ${d.detail}`, 'err'); }
 }
 
+// ── Pull Modal ───────────────────────────────────────────────────────────────
+function openPullModal() {
+  document.getElementById('pull-modal').classList.add('open');
+  document.getElementById('p-presets').value = '';
+  document.getElementById('p-name').value = '';
+  document.getElementById('p-custom-group').style.display = 'none';
+}
+
+function closePullModal() {
+  document.getElementById('pull-modal').classList.remove('open');
+}
+
+function applyPreset() {
+  const sel = document.getElementById('p-presets');
+  const val = sel.value;
+  const customGroup = document.getElementById('p-custom-group');
+  if (val === 'custom') {
+    customGroup.style.display = 'block';
+    document.getElementById('p-name').value = '';
+  } else if (val) {
+    customGroup.style.display = 'none';
+    document.getElementById('p-name').value = val;
+  } else {
+    customGroup.style.display = 'none';
+    document.getElementById('p-name').value = '';
+  }
+}
+
+async function pullModel() {
+  const model = document.getElementById('p-name').value.trim();
+  if (!model) { toast('Please select or specify a model', 'err'); return; }
+  toast(`⏳ Initiating pull for ${model}…`);
+  const r = await apiFetch('/api/models/pull', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model })
+  });
+  const d = await r.json();
+  if (r.ok) {
+    toast(`✓ Pull started for ${model}`, 'ok');
+    closePullModal();
+    refreshDownloads();
+  } else {
+    toast(`✗ ${d.detail}`, 'err');
+  }
+}
+
+let activeDownloadsCount = 0;
+
+async function refreshDownloads() {
+  try {
+    const r = await apiFetch('/api/models/pull/status');
+    if (!r.ok) return;
+    const data = await r.json();
+    const list = data.downloads || [];
+    
+    const active = list.filter(t => t.status === 'queued' || t.status === 'downloading');
+    activeDownloadsCount = active.length;
+    
+    const el = document.getElementById('download-list');
+    if (!list.length) {
+      el.innerHTML = '';
+      return;
+    }
+    
+    el.innerHTML = list.map(t => {
+      let speedStr = t.speed > 1024*1024 
+        ? (t.speed / 1024 / 1024).toFixed(1) + ' MB/s' 
+        : (t.speed / 1024).toFixed(0) + ' KB/s';
+      let progressText = t.status === 'downloading'
+        ? `${t.percent.toFixed(1)}% (${speedStr})`
+        : t.status;
+      
+      let color = 'var(--blue)';
+      if (t.status === 'completed') color = 'var(--green)';
+      if (t.status === 'failed') color = 'var(--red)';
+      if (t.status === 'queued') color = 'var(--yellow)';
+      
+      return `
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px;font-size:11px;margin-bottom:6px">
+          <div style="font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:8px">⬇️ ${t.model}</span>
+            <span style="color:${color};flex-shrink:0">${progressText}</span>
+          </div>
+          <div style="width:100%;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden">
+            <div style="width:${t.percent}%;height:100%;background:${color};transition:width .2s"></div>
+          </div>
+          ${t.error ? `<div style="color:var(--red);font-size:10px;margin-top:4px">${t.error}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+    
+    if (list.some(t => t.status === 'completed')) {
+      refreshModels();
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 // ── Input auto-resize ────────────────────────────────────────────────────────
 document.getElementById('msg-input').addEventListener('input', function() {
   this.style.height = 'auto';
@@ -435,7 +573,9 @@ function formatBytes(b) {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 refreshModels();
+refreshDownloads();
 setInterval(refreshModels, 10000);
+setInterval(refreshDownloads, 2000);
 </script>
 </body>
 </html>
