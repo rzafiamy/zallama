@@ -168,7 +168,6 @@ class ProcessManager:
             "parallel": "--parallel",
         }
         flag_map = {
-            "flash_attn": "--flash-attn",
             "cont_batching": "--cont-batching",
             "mlock": "--mlock",
             "no_mmap": "--no-mmap",
@@ -178,6 +177,16 @@ class ProcessManager:
         for key, flag in param_map.items():
             if key in merged:
                 args += [flag, str(merged[key])]
+
+        # Handle flash_attn (takes an option value in newer llama.cpp)
+        if "flash_attn" in merged:
+            val = merged["flash_attn"]
+            if val is True:
+                args += ["--flash-attn", "on"]
+            elif val is False:
+                args += ["--flash-attn", "off"]
+            elif isinstance(val, str) and val in ("on", "off", "auto"):
+                args += ["--flash-attn", val]
 
         for key, flag in flag_map.items():
             if merged.get(key):

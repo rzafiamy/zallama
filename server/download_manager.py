@@ -9,12 +9,59 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from .model_registry import ModelRegistry
+
+ARIA_PROGRESS_RE = re.compile(
+    r"\[#(?P<hex>[0-9a-f]+)\s+"
+    r"(?P<completed>[0-9.]+)(?P<c_unit>[a-zA-Z]+)/"
+    r"(?P<total>[0-9.]+)(?P<t_unit>[a-zA-Z]+)\("
+    r"(?P<percent>[0-9]+)%\)"
+    r"(?:\s+CN:(?P<cn>\d+))?"
+    r"(?:\s+DL:(?P<speed>[0-9.]+)(?P<s_unit>[a-zA-Z]+))?"
+    r"(?:\s+ETA:(?P<eta>[0-9a-zA-Z]+))?"
+    r"\]"
+)
+
+def parse_size_to_bytes(value: str, unit: str) -> int:
+    multipliers = {
+        'b': 1, 'B': 1,
+        'k': 1024, 'K': 1024, 'kb': 1024, 'KB': 1024, 'kib': 1024, 'KiB': 1024,
+        'm': 1024**2, 'M': 1024**2, 'mb': 1024**2, 'MB': 1024**2, 'mib': 1024**2, 'MiB': 1024**2,
+        'g': 1024**3, 'G': 1024**3, 'gb': 1024**3, 'GB': 1024**3, 'gib': 1024**3, 'GiB': 1024**3,
+        't': 1024**4, 'T': 1024**4, 'tb': 1024**4, 'TB': 1024**4, 'tib': 1024**4, 'TiB': 1024**4,
+    }
+    unit_clean = unit.strip().lower()
+    mult = multipliers.get(unit_clean, 1)
+    try:
+        return int(float(value) * mult)
+    except ValueError:
+        return 0
+
+def parse_eta(eta_str: str) -> float:
+    if not eta_str:
+        return 0.0
+    total_seconds = 0.0
+    current = ""
+    for char in eta_str:
+        if char.isdigit():
+            current += char
+        elif char == 'h':
+            total_seconds += int(current or 0) * 3600
+            current = ""
+        elif char == 'm':
+            total_seconds += int(current or 0) * 60
+            current = ""
+        elif char == 's':
+            total_seconds += int(current or 0)
+            current = ""
+    return total_seconds
 
 logger = logging.getLogger("zallama.download_manager")
 
@@ -183,7 +230,7 @@ class DownloadManager:
             return model_name, f"Started downloading '{model_name}' in the background."
 
     async def _download_loop(self, task: DownloadTask):
-        """Asynchronously stream the file download in chunks."""
+        """Asynchronously download the model file using aria2c or concurrent Python requests."""
         url = f"https://huggingface.co/{task.repo}/resolve/main/{task.filename}"
         logger.info(f"Downloading model '{task.model_name}' from {url}")
 
@@ -191,36 +238,16 @@ class DownloadManager:
         temp_path = task.local_path.with_suffix(".download")
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-                async with client.stream("GET", url) as resp:
-                    if resp.status_code != 200:
-                        raise RuntimeError(f"HTTP Error {resp.status_code}: {resp.reason_phrase}")
-
-                    task.total_bytes = int(resp.headers.get("content-length", 0))
-                    task.completed_bytes = 0
-
-                    start_time = asyncio.get_event_loop().time()
-                    last_time = start_time
-                    last_bytes = 0
-
-                    with open(temp_path, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=1024 * 128):
-                            f.write(chunk)
-                            task.completed_bytes += len(chunk)
-
-                            # Calculate speed & ETA every second
-                            now = asyncio.get_event_loop().time()
-                            duration = now - last_time
-                            if duration >= 1.0:
-                                bytes_diff = task.completed_bytes - last_bytes
-                                task.speed = bytes_diff / duration
-                                remaining_bytes = task.total_bytes - task.completed_bytes
-                                task.eta = (remaining_bytes / task.speed) if task.speed > 0 else 0
-                                last_time = now
-                                last_bytes = task.completed_bytes
-
-                            # Let event loop breathe
-                            await asyncio.sleep(0.001)
+            # Step 1: Try aria2c first
+            success = await self._download_with_aria2c(task, url, temp_path)
+            if not success:
+                logger.warning("aria2c failed or was not found. Falling back to python downloader.")
+                # Step 2: Fallback to range or single download
+                total_bytes, range_ok = await self._check_range_support(url)
+                if range_ok and total_bytes > 10 * 1024 * 1024:
+                    await self._download_parallel(task, url, temp_path, total_bytes, num_connections=4)
+                else:
+                    await self._download_single(task, url, temp_path)
 
             # Move temp file to final location
             if temp_path.exists():
@@ -232,7 +259,6 @@ class DownloadManager:
 
             # Register model in registry.yaml
             description = f"Downloaded from {task.repo}"
-            # Match shorthand description if present
             if task.model_name in SHORTHANDS:
                 description = SHORTHANDS[task.model_name]["description"]
 
@@ -248,8 +274,188 @@ class DownloadManager:
             task.status = "failed"
             task.error = str(e)
             logger.error(f"Download failed for '{task.model_name}': {e}")
-            if temp_path.exists():
+            # Cleanup temp files
+            for path in (temp_path, temp_path.with_suffix(".download.aria2"), temp_path.parent / (temp_path.name + ".aria2")):
+                if path.exists():
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+
+    async def _check_range_support(self, url: str) -> tuple[int, bool]:
+        """Check if target server supports HTTP Range requests and get content length."""
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+                async with client.stream("GET", url, headers={"Range": "bytes=0-0"}) as resp:
+                    if resp.status_code == 206:
+                        content_range = resp.headers.get("content-range")
+                        if content_range and "/" in content_range:
+                            total_bytes = int(content_range.split("/")[-1])
+                            return total_bytes, True
+                    total_bytes = int(resp.headers.get("content-length", 0))
+                    return total_bytes, False
+        except Exception as e:
+            logger.warning(f"Error checking Range support for {url}: {e}")
+            return 0, False
+
+    async def _download_with_aria2c(self, task: DownloadTask, url: str, temp_path: Path) -> bool:
+        """Download using aria2c if available."""
+        aria2c_path = shutil.which("aria2c")
+        if not aria2c_path:
+            return False
+
+        logger.info("Starting download with aria2c...")
+        args = [
+            "aria2c",
+            "--console-log-level=warn",
+            "--summary-interval=1",
+            "-x", "8",
+            "-s", "8",
+            "-k", "1M",
+            "--allow-overwrite=true",
+            "-d", str(temp_path.parent),
+            "-o", temp_path.name,
+            url
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        try:
+            while True:
+                line_bytes = await proc.stdout.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="ignore").strip()
+                if not line:
+                    continue
+
+                match = ARIA_PROGRESS_RE.search(line)
+                if match:
+                    gd = match.groupdict()
+                    completed = gd.get("completed")
+                    c_unit = gd.get("c_unit")
+                    total = gd.get("total")
+                    t_unit = gd.get("t_unit")
+                    speed = gd.get("speed")
+                    s_unit = gd.get("s_unit")
+                    eta = gd.get("eta")
+
+                    if completed and c_unit:
+                        task.completed_bytes = parse_size_to_bytes(completed, c_unit)
+                    if total and t_unit:
+                        task.total_bytes = parse_size_to_bytes(total, t_unit)
+                    if speed and s_unit:
+                        task.speed = parse_size_to_bytes(speed, s_unit)
+                    if eta:
+                        task.eta = parse_eta(eta)
+
+            await proc.wait()
+            return proc.returncode == 0
+        except Exception as e:
+            logger.error(f"aria2c download exception: {e}")
+            if proc.returncode is None:
                 try:
-                    os.remove(temp_path)
+                    proc.kill()
+                    await proc.wait()
                 except Exception:
                     pass
+            return False
+
+    async def _download_parallel(self, task: DownloadTask, url: str, temp_path: Path, total_bytes: int, num_connections: int = 4):
+        """Download concurrently using HTTP range requests."""
+        logger.info(f"Starting concurrent range download with {num_connections} connections...")
+        part_size = total_bytes // num_connections
+        parts = []
+        for i in range(num_connections):
+            start = i * part_size
+            end = (start + part_size - 1) if i < num_connections - 1 else total_bytes - 1
+            parts.append((start, end))
+
+        task.total_bytes = total_bytes
+        task.completed_bytes = 0
+
+        # Pre-allocate
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(temp_path, "wb") as f:
+            f.truncate(total_bytes)
+
+        last_time = asyncio.get_event_loop().time()
+        last_bytes = 0
+
+        async def download_part(part_idx: int, start: int, end: int):
+            current_offset = start
+            headers = {"Range": f"bytes={start}-{end}"}
+            timeout = httpx.Timeout(30.0, connect=10.0)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+                async with client.stream("GET", url, headers=headers) as resp:
+                    if resp.status_code not in (200, 206):
+                        raise RuntimeError(f"Part {part_idx} download failed: HTTP {resp.status_code}")
+                    
+                    with open(temp_path, "r+b") as f:
+                        f.seek(current_offset)
+                        async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
+                            f.write(chunk)
+                            chunk_len = len(chunk)
+                            current_offset += chunk_len
+                            task.completed_bytes += chunk_len
+
+        monitor_running = True
+        async def monitor_progress():
+            nonlocal last_time, last_bytes
+            while monitor_running:
+                await asyncio.sleep(1.0)
+                now = asyncio.get_event_loop().time()
+                duration = now - last_time
+                if duration >= 0.5:
+                    bytes_diff = task.completed_bytes - last_bytes
+                    task.speed = bytes_diff / duration
+                    remaining_bytes = task.total_bytes - task.completed_bytes
+                    task.eta = (remaining_bytes / task.speed) if task.speed > 0 else 0
+                    last_time = now
+                    last_bytes = task.completed_bytes
+
+        monitor_task = asyncio.create_task(monitor_progress())
+        pending_tasks = [asyncio.create_task(download_part(i, start, end)) for i, (start, end) in enumerate(parts)]
+        try:
+            await asyncio.gather(*pending_tasks)
+        except Exception as e:
+            for t in pending_tasks:
+                if not t.done():
+                    t.cancel()
+            raise e
+        finally:
+            monitor_running = False
+            monitor_task.cancel()
+
+    async def _download_single(self, task: DownloadTask, url: str, temp_path: Path):
+        """Single-connection streaming fallback downloader."""
+        logger.info("Starting single-connection streaming download...")
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP Error {resp.status_code}: {resp.reason_phrase}")
+
+                task.total_bytes = int(resp.headers.get("content-length", 0))
+                task.completed_bytes = 0
+
+                last_time = asyncio.get_event_loop().time()
+                last_bytes = 0
+
+                with open(temp_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
+                        f.write(chunk)
+                        task.completed_bytes += len(chunk)
+
+                        now = asyncio.get_event_loop().time()
+                        duration = now - last_time
+                        if duration >= 1.0:
+                            bytes_diff = task.completed_bytes - last_bytes
+                            task.speed = bytes_diff / duration
+                            remaining_bytes = task.total_bytes - task.completed_bytes
+                            task.eta = (remaining_bytes / task.speed) if task.speed > 0 else 0
+                            last_time = now
+                            last_bytes = task.completed_bytes
