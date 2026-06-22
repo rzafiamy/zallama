@@ -114,8 +114,33 @@ def cmd_serve(args: list[str]):
         sys.exit(1)
 
 
+def _print_remote_presets():
+    try:
+        r = _api("GET", "/api/models/shorthands")
+        shorthands = r.json().get("shorthands", {})
+        print(f"\n{BOLD}{CYAN}Available Remote Preset Models (HuggingFace / Unsloth):{RESET}")
+        print(f"{'NAME':<22} {'HF REPOSITORY & FILENAME':<55} {'DESCRIPTION'}")
+        print("─" * 110)
+        for name, info in shorthands.items():
+            repo_file = f"{info['repo']}/{info['file']}"
+            if len(repo_file) > 52:
+                repo_file = repo_file[:49] + "..."
+            desc = info.get("description", "")
+            colored_name = _color(name, GREEN)
+            padding = 22 - len(name)
+            if padding < 0: padding = 0
+            print(f"{colored_name}{' ' * padding} {repo_file:<55} {desc}")
+        print(f"\n{DIM}To pull a model: zallama pull <name_or_custom_hf_path>{RESET}\n")
+    except Exception as e:
+        _err(f"Could not retrieve remote presets: {e}")
+
+
 def cmd_list(args: list[str]):
     """List all registered models."""
+    if args and args[0] in ("--remote", "-r", "remote"):
+        _print_remote_presets()
+        return
+
     r = _api("GET", "/api/models")
     data = r.json()
     models = data.get("models", [])
@@ -123,6 +148,7 @@ def cmd_list(args: list[str]):
     if not models:
         print(_color("No models registered yet.", DIM))
         _info("Add a model with: zallama add <name> <path-to.gguf>")
+        _info("Or pull a remote model: zallama pull <name>")
         return
 
     # Header
@@ -323,8 +349,7 @@ def cmd_pull(args: list[str]):
     """Pull model from Hugging Face or Unsloth: zallama pull <name>"""
     if not args:
         _err("Usage: zallama pull <model-name-or-hf-path>")
-        _info("Example: zallama pull llama3.2:3b")
-        _info("Example: zallama pull unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf")
+        _print_remote_presets()
         sys.exit(1)
     
     model = args[0]
@@ -449,7 +474,7 @@ def main():
         print(f"{BOLD}Commands:{RESET}")
         cmds = [
             ("serve", "Start the Zallama daemon"),
-            ("list", "List all registered models"),
+            ("list [--remote]", "List registered or remote preset models"),
             ("add <name> <file>", "Register a local .gguf model"),
             ("pull <name>", "Pull a model from HF/unsloth"),
             ("remove <name>", "Remove a model from registry"),
