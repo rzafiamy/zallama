@@ -1,0 +1,122 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@import "tailwindcss";
+
+:root {
+  /* Default: Dark Theme (matching chatbot-ai dark variables) */
+  --bg: #111111;
+  --panel: #1f1f1f;
+  --panel-border: #292929;
+  --text-main: #f5f5f5;
+  --text-muted: #adadad;
+  --brand: #479ef5;
+  --brand-hover: #62aef7;
+  --brand-light: rgba(71, 158, 245, 0.15);
+  
+  /* Compatibility aliases for Tailwind colors */
+  --color-brand-dark: var(--bg);
+  --color-brand-card-dark: var(--panel);
+}
+
+:root[data-theme='light'] {
+  /* Light Theme (matching chatbot-ai light variables) */
+  --bg: #faf9f8;
+  --panel: #ffffff;
+  --panel-border: #edebe9;
+  --text-main: #242424;
+  --text-muted: #605e5c;
+  --brand: #0f6cbd;
+  --brand-hover: #115ea3;
+  --brand-light: #ebf3fc;
+}
+
+@theme {
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-light: var(--brand-light);
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-border: var(--panel-border);
+  --color-text-main: var(--text-main);
+  --color-text-muted: var(--text-muted);
+}
+
+/* Custom Base Styles */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg);
+  color: var(--text-main);
+  overflow-x: hidden;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Custom Scrollbar (Fluent style) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--panel-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-light);
+}
+
+/* Glow Effect */
+.glow-blur {
+  filter: blur(120px);
+  opacity: 0.15;
+  pointer-events: none;
+}
+
+/* Animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Panel & Border styling mimicking chatbot-ai */
+.glass-panel {
+  background: rgba(31, 31, 31, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--panel-border);
+}
+
+:root[data-theme='light'] .glass-panel {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid var(--panel-border);
+}
+
+/* Code Highlights */
+.code-container pre {
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+/* Command copy feedback */
+.copy-btn.copied {
+  color: #108447;
+}
+
+/* Custom Tab states */
+.tab-btn-light.active {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-light);
+}

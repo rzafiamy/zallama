@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <!-- SEO Meta Tags -->
+    <title>Zallama — Memory-Aware, Local LLM & Voice Gateway</title>
+    <meta name="description" content="A self-contained local AI ecosystem powered by llama.cpp, parakeet.cpp, and kokoro.cpp. OpenAI-compatible API gateway with automatic memory-aware LRU model eviction." />
+    <meta name="keywords" content="LLM, llama.cpp, parakeet.cpp, kokoro.cpp, local AI, speech-to-text, TTS, text-to-speech, vision models, OpenAI API, process manager" />
+    <meta name="author" content="Rija Z." />
+    
+    <!-- OpenGraph Cards -->
+    <meta property="og:title" content="Zallama — Local AI Server & Orchestrator" />
+    <meta property="og:description" content="Deploy and orchestrate local text, vision, ASR, and TTS models. Expose a unified OpenAI-compatible endpoint with automatic unloading and memory budgeting." />
+    <meta property="og:type" content="website" />
+  </head>
+  <body class="bg-bg text-text-main antialiased min-h-screen selection:bg-brand selection:text-white">
+    
+    <!-- Background Glows -->
+    <div class="absolute top-0 left-1/4 w-[500px] h-[500px] bg-brand/10 rounded-full glow-blur -z-10 animate-float"></div>
+    <div class="absolute top-1/3 right-1/4 w-[600px] h-[600px] bg-brand-hover/10 rounded-full glow-blur -z-10" style="animation: float 8s ease-in-out infinite;"></div>
+    
+    <!-- Navigation Bar -->
+    <header class="sticky top-0 z-50 glass-panel">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <span class="text-2xl" aria-hidden="true">🦙</span>
+          <span class="text-xl font-bold tracking-tight bg-gradient-to-r from-text-main via-text-main to-brand bg-clip-text text-transparent">Zallama</span>
+          <span class="text-xs px-2 py-0.5 rounded-full bg-brand-light border border-brand/20 text-brand font-mono font-semibold">v1.0.0</span>
+        </div>
+        
+        <nav class="hidden md:flex space-x-8 text-sm font-medium text-text-muted">
+          <a href="#features" class="hover:text-text-main transition-colors">Features</a>
+          <a href="#setup" class="hover:text-text-main transition-colors">Setup</a>
+          <a href="#download" class="hover:text-text-main transition-colors">Download Models</a>
+          <a href="#visualizer" class="hover:text-text-main transition-colors">Eviction Visualizer</a>
+          <a href="#usage" class="hover:text-text-main transition-colors">API Integration</a>
+        </nav>
+        
+        <div class="flex items-center space-x-4">
+          <!-- Theme Toggle (Switches Light/Dark variables on root element) -->
+          <button id="theme-toggle-btn" class="p-2 rounded-lg border border-panel-border text-text-muted hover:text-text-main hover:bg-panel/50 transition" title="Toggle Theme Styling">
+            <!-- Sun Icon -->
+            <svg id="theme-sun" class="w-5 h-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m12.728 0l-.707-.707M6.343 6.343l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
+            </svg>
+            <!-- Moon Icon -->
+            <svg id="theme-moon" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+          </button>
+          
+          <a href="https://github.com/rzafiamy/zallama" target="_blank" rel="noopener noreferrer" class="flex items-center space-x-2 bg-text-main hover:bg-brand-hover text-bg px-4 py-2 rounded-lg text-sm font-semibold transition shadow-lg">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.197 22 16.44 22 12.017 22 6.484 17.522 2 12 2z" />
+            </svg>
+            <span class="hidden sm:inline">GitHub</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main>
+      
+      <!-- Hero Section -->
+      <section id="hero" class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 pb-24 md:py-32">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+          
+          <!-- Hero Text -->
+          <div class="lg:col-span-6 space-y-8">
+            <div class="inline-flex items-center space-x-2 bg-brand-light border border-brand/20 px-3 py-1 rounded-full text-xs font-semibold text-brand tracking-wide uppercase">
+              <span>Local AI Gateway &amp; Process Manager</span>
+            </div>
+            
+            <h1 class="text-4xl sm:text-6xl font-extrabold tracking-tight leading-none text-text-main">
+              The local AI gateway you've been waiting for.
+            </h1>
+            
+            <p class="text-lg text-text-muted max-w-lg leading-relaxed">
+              Zallama is a memory-aware, multimodal local AI gateway powered by <code class="text-text-main">llama.cpp</code>, <code class="text-text-main">parakeet.cpp</code>, and <code class="text-text-main">kokoro.cpp</code>. Spin up servers dynamically, query OpenAI-compatible text/voice endpoints, and let Zallama automatically unload models to fit your memory budget.
+            </p>
+            
+            <div class="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center">
+              <a href="#setup" class="flex items-center justify-center bg-brand hover:bg-brand-hover text-white px-8 py-3.5 rounded-lg font-semibold transition shadow-lg shadow-brand/10">
+                Quick Setup
+              </a>
+              <a href="#visualizer" class="flex items-center justify-center bg-panel hover:bg-panel-border border border-panel-border text-text-main px-8 py-3.5 rounded-lg font-semibold transition">
+                Interactive Visualizer
+              </a>
+            </div>
+            
+            <!-- Quick Installation Copy Box -->
+            <div class="pt-4">
+              <p class="text-xs text-text-muted font-semibold mb-2 uppercase tracking-wider">One-line installation</p>
+              <div class="flex items-center justify-between bg-bg border border-panel-border rounded-lg p-3 font-mono text-sm text-brand max-w-xl shadow-inner">
+                <span id="quick-install-code" class="overflow-x-auto whitespace-nowrap">git clone https://github.com/rzafiamy/zallama.git && cd zallama && sudo bash install.sh</span>
+                <button onclick="copyToClipboard('quick-install-code', 'quick-install-btn')" id="quick-install-btn" class="ml-3 p-1 text-text-muted hover:text-text-main transition copy-btn" title="Copy to clipboard">
+                  <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Hero Interactive Terminal -->
+          <div class="lg:col-span-6">
+            <div class="glass-panel rounded-xl overflow-hidden shadow-2xl">
+              <!-- Terminal Header -->
+              <div class="bg-bg px-4 py-3 flex items-center justify-between border-b border-panel-border">
+                <div class="flex items-center space-x-2">
+                  <span class="w-3 h-3 rounded-full bg-red-500/80"></span>
+                  <span class="w-3 h-3 rounded-full bg-yellow-500/80"></span>
+                  <span class="w-3 h-3 rounded-full bg-green-500/80"></span>
+                  <span class="text-xs font-mono text-text-muted ml-2">zallama CLI — interactive</span>
+                </div>
+                <span class="text-xs font-mono text-brand font-semibold">bash</span>
+              </div>
+              
+              <!-- Terminal Sidebar & Shell Body -->
+              <div class="grid grid-cols-12 h-96">
+                <!-- Commands Sidebar -->
+                <div class="col-span-4 bg-panel/60 border-r border-panel-border p-2 flex flex-col space-y-1">
+                  <span class="text-[10px] text-text-muted font-bold px-2 py-1 uppercase tracking-wider">Commands</span>
+                  <button id="term-cmd-serve" class="w-full text-left px-2 py-1.5 rounded font-mono text-xs text-brand bg-brand-light hover:bg-panel border border-brand/10 transition">zallama serve</button>
+                  <button id="term-cmd-pull" class="w-full text-left px-2 py-1.5 rounded font-mono text-xs text-text-muted hover:bg-panel transition">zallama pull</button>
+                  <button id="term-cmd-run" class="w-full text-left px-2 py-1.5 rounded font-mono text-xs text-text-muted hover:bg-panel transition">zallama run</button>
+                  <button id="term-cmd-ps" class="w-full text-left px-2 py-1.5 rounded font-mono text-xs text-text-muted hover:bg-panel transition">zallama ps</button>
+                  <button id="term-cmd-set" class="w-full text-left px-2 py-1.5 rounded font-mono text-xs text-text-muted hover:bg-panel transition">zallama set</button>
+                </div>
+                <!-- Shell Output -->
+                <div class="col-span-8 bg-bg p-4 font-mono text-xs text-text-main overflow-y-auto space-y-2 select-text" id="terminal-body">
+                  <!-- Generated by javascript main.js -->
+                </div>
+              </div>
+            </div>
+          </div>
+          
+        </div>
+      </section>
+
+      <!-- Bento Box Features Section -->
+      <section id="features" class="bg-panel py-24 border-t border-b border-panel-border">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="text-center max-w-3xl mx-auto mb-16 space-y-4">
+            <h2 class="text-xs font-bold text-brand uppercase tracking-widest">Ecosystem Engine</h2>
+            <p class="text-3xl sm:text-5xl font-extrabold tracking-tight text-text-main">
+              One Interface, Unlimited Local Modalities
+            </p>
+            <p class="text-lg text-text-muted">
+              Zallama wraps complex C++ machine learning runners into a unified, high-performance gateway matching OpenAI's API specs.
+            </p>
+          </div>
+          
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            
+            <!-- Bento Box 1: Text & Reasoning (llama.cpp) -->
+            <div class="md:col-span-2 rounded-2xl border border-panel-border bg-bg p-8 flex flex-col justify-between hover:shadow-xl transition duration-300">
+              <div class="space-y-4">
+                <div class="w-12 h-12 rounded-xl bg-brand-light flex items-center justify-center text-brand">
+                  <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                  </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-text-main">Text &amp; Reasoning Core</h3>
+                <p class="text-text-muted leading-relaxed max-w-lg">
+                  Powered by <code class="bg-brand-light text-brand px-1 py-0.5 rounded font-mono text-sm font-semibold">llama-server</code>, Zallama loads text generation and reasoning models. Watch thinking models like DeepSeek-R1 output reasoning blocks in real-time inside the interactive CLI or custom API clients.
+                </p>
+              </div>
+              
+              <!-- Code visual representation inside Bento -->
+              <div class="mt-8 bg-bg rounded-xl p-4 text-xs font-mono text-text-muted border border-panel-border shadow-inner">
+                <div class="flex items-center space-x-2 mb-2 text-text-muted">
+                  <span class="w-2.5 h-2.5 rounded-full bg-red-500/60"></span>
+                  <span class="text-[10px]">DeepSeek-R1-8B output</span>
+                </div>
+                <div class="space-y-1">
+                  <p class="text-text-muted font-semibold">&lt;think&gt;</p>
+                  <p class="text-brand pl-4">Analyzing prompt 'Explain quantum tunneling'...</p>
+                  <p class="text-brand pl-4">Let's breakdown: wave function, potential barriers, Schrödinger equation...</p>
+                  <p class="text-text-muted font-semibold">&lt;/think&gt;</p>
+                  <p class="text-text-main">Quantum tunneling is a phenomenon where a particle passes through a potential energy barrier...</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bento Box 2: Memory-Aware LRU Eviction -->
+            <div class="rounded-2xl border border-panel-border bg-bg p-8 flex flex-col justify-between hover:shadow-xl transition duration-300">
+              <div class="space-y-4">
+                <div class="w-12 h-12 rounded-xl bg-brand-light flex items-center justify-center text-brand">
+                  <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                  </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-text-main">Memory-Budget Eviction</h3>
+                <p class="text-text-muted leading-relaxed">
+                  Say goodbye to manually terminating model servers. Define a memory budget (e.g., <code class="bg-brand-light text-brand px-1 py-0.5 rounded font-mono text-sm font-semibold">12GB</code>) and Zallama will evict the Least-Recently-Used (LRU) model servers to fit incoming models.
+                </p>
+              </div>
+              <div class="mt-8 flex items-center justify-center h-28 bg-panel border border-panel-border rounded-xl relative overflow-hidden">
+                <div class="absolute inset-0 bg-gradient-to-br from-brand/5 to-brand-hover/5"></div>
+                <div class="flex flex-col items-center space-y-1 z-10">
+                  <span class="text-xs font-semibold text-text-muted">Active RAM Budget</span>
+                  <div class="w-36 bg-bg rounded-full h-3 overflow-hidden border border-panel-border">
+                    <div class="bg-gradient-to-r from-brand to-brand-hover h-full rounded-full w-[70%]"></div>
+                  </div>
+                  <span class="text-[10px] font-mono text-brand font-bold">8.4GB / 12GB (70%)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bento Box 3: Speech-to-Text ASR (parakeet.cpp) -->
+            <div class="rounded-2xl border border-panel-border bg-bg p-8 flex flex-col justify-between hover:shadow-xl transition duration-300">
+              <div class="space-y-4">
+                <div class="w-12 h-12 rounded-xl bg-brand-light flex items-center justify-center text-brand">
+                  <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-text-main">Multilingual ASR</h3>
+                <p class="text-text-muted leading-relaxed">
+                  Zallama abstracts <code class="bg-brand-light text-brand px-1 py-0.5 rounded font-mono text-sm font-semibold">parakeet-server</code> to support local audio transcription at `/v1/audio/transcriptions`. Upload any audio (MP3, WebM, M4A, FLAC) and Zallama uses <code class="text-text-main font-semibold">ffmpeg</code> to auto-transcode and transcribe it instantly.
+                </p>
+              </div>
+              <div class="mt-8 flex space-x-2 items-end justify-center h-20 bg-bg rounded-xl p-4 border border-panel-border">
+                <span class="w-1.5 bg-brand rounded-full h-8 animate-pulse" style="animation-delay: 0.1s;"></span>
+                <span class="w-1.5 bg-brand/80 rounded-full h-12 animate-pulse" style="animation-delay: 0.2s;"></span>
+                <span class="w-1.5 bg-brand-hover rounded-full h-16 animate-pulse" style="animation-delay: 0.3s;"></span>
+                <span class="w-1.5 bg-brand rounded-full h-10 animate-pulse" style="animation-delay: 0.4s;"></span>
+                <span class="w-1.5 bg-brand/80 rounded-full h-6 animate-pulse" style="animation-delay: 0.5s;"></span>
+                <span class="w-1.5 bg-brand-hover rounded-full h-14 animate-pulse" style="animation-delay: 0.6s;"></span>
+              </div>
+            </div>
+
+            <!-- Bento Box 4: Vision & Multimodal Ready -->
+            <div class="rounded-2xl border border-panel-border bg-bg p-8 flex flex-col justify-between hover:shadow-xl transition duration-300">
+              <div class="space-y-4">
+                <div class="w-12 h-12 rounded-xl bg-brand-light flex items-center justify-center text-brand">
+                  <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-text-main">Vision (Multimodal)</h3>
+                <p class="text-text-muted leading-relaxed">
+                  Attach an <code class="bg-brand-light text-brand px-1 py-0.5 rounded font-mono text-sm font-semibold">mmproj</code> projector artifact in your model registry. Zallama binds base models with visual projection matrices automatically, letting you analyze images natively.
+                </p>
+              </div>
+              <div class="mt-8 grid grid-cols-2 gap-4">
+                <div class="bg-panel border border-panel-border rounded-lg p-3 flex items-center space-x-3 shadow-sm">
+                  <div class="w-10 h-10 bg-rose-500/10 rounded flex items-center justify-center text-rose-500 font-bold">IMG</div>
+                  <div>
+                    <p class="text-xs font-bold text-text-main">chart.png</p>
+                    <p class="text-[10px] text-text-muted">2.4 MB</p>
+                  </div>
+                </div>
+                <div class="bg-bg border border-panel-border rounded-lg p-3 text-[10px] text-text-muted font-mono flex items-center">
+                  <span>"Analyze this chart" → Qwen-VL extracts data...</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bento Box 5: Speech Synthesis TTS (kokoro.cpp) -->
+            <div class="rounded-2xl border border-panel-border bg-bg p-8 flex flex-col justify-between hover:shadow-xl transition duration-300">
+              <div class="space-y-4">
+                <div class="w-12 h-12 rounded-xl bg-brand-light flex items-center justify-center text-brand">
+                  <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  </svg>
+                </div>
+                <h3 class="text-2xl font-bold text-text-main">Local Speech Synthesis</h3>
+                <p class="text-text-muted leading-relaxed">
+                  Generate lifelike voices locally using standalone `kokoro-server` based on `kokoro.cpp`. Standalone binary links ONNX Runtime statically for easy deployment. Query the OpenAI-compatible `/v1/audio/speech` endpoint.
+                </p>
+              </div>
+              <div class="mt-8 bg-bg rounded-xl p-4 text-xs font-mono text-text-muted border border-panel-border shadow-inner">
+                <div class="flex items-center space-x-2 mb-2 text-text-muted">
+                  <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/60"></span>
+                  <span class="text-[10px]">Kokoro TTS execution</span>
+                </div>
+                <p class="text-brand font-semibold">$ zallama pull kokoro:82m</p>
+                <p class="text-text-muted text-[10px]">Loaded model. Speech audio file output saved successfully.</p>
+              </div>
+            </div>
+            
+          </div>
+        </div>
+      </section>
+
+      <!-- Setup & Compilation Guide -->
+      <section id="setup" class="py-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center max-w-3xl mx-auto mb-16 space-y-4">
+          <h2 class="text-xs font-bold text-brand uppercase tracking-widest">Compiling &amp; Installation</h2>
+          <p class="text-3xl sm:text-5xl font-extrabold tracking-tight text-text-main">How to Setup Zallama</p>
+          <p class="text-lg text-text-muted">
+            Compile the C++ binaries for your platform, then run the unified Python-based daemon wrapper.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+          
+          <!-- Card 1: Compile llama.cpp -->
+          <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-brand tracking-wider uppercase font-semibold">Step 1</span>
+                <span class="px-2 py-0.5 rounded text-[10px] bg-brand-light text-brand border border-brand/20 font-mono font-semibold">build-ggml-llama.sh</span>
+              </div>
+              <h3 class="text-lg font-bold text-text-main">1. Compile Llama Engine</h3>
+              <p class="text-xs text-text-muted">
+                Compiles <code class="text-text-main bg-panel px-1 py-0.2 rounded font-mono">llama.cpp</code> with CUDA support. You <strong>MUST</strong> pass a tag or branch name parameter (e.g. <code class="text-brand">b4600</code>).
+              </p>
+            </div>
+            <div class="mt-6 bg-bg border border-panel-border rounded-lg p-3 font-mono text-xs relative flex items-center justify-between">
+              <span id="code-setup-llama" class="text-brand">./build-ggml-llama.cpp.sh b4600</span>
+              <button onclick="copyToClipboard('code-setup-llama', 'btn-setup-llama')" id="btn-setup-llama" class="p-1 text-text-muted hover:text-text-main transition copy-btn" title="Copy to clipboard">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Card 2: Compile parakeet.cpp -->
+          <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-brand tracking-wider uppercase font-semibold">Step 2</span>
+                <span class="px-2 py-0.5 rounded text-[10px] bg-brand-light text-brand border border-brand/20 font-mono font-semibold">build-ggml-parakeet.sh</span>
+              </div>
+              <h3 class="text-lg font-bold text-text-main">2. Compile Parakeet ASR</h3>
+              <p class="text-xs text-text-muted">
+                Compiles the speech-to-text <code class="text-text-main bg-panel px-1 py-0.2 rounded font-mono">parakeet-server</code>, copies shared libraries, and patches paths via <code class="text-text-main font-mono">patchelf</code>.
+              </p>
+            </div>
+            <div class="mt-6 bg-bg border border-panel-border rounded-lg p-3 font-mono text-xs relative flex items-center justify-between">
+              <span id="code-setup-parakeet" class="text-brand">./build-ggml-parakeet.cpp.sh master</span>
+              <button onclick="copyToClipboard('code-setup-parakeet', 'btn-setup-parakeet')" id="btn-setup-parakeet" class="p-1 text-text-muted hover:text-text-main transition copy-btn" title="Copy to clipboard">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Card 3: Compile kokoro.cpp -->
+          <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-brand tracking-wider uppercase font-semibold">Step 3</span>
+                <span class="px-2 py-0.5 rounded text-[10px] bg-brand-light text-brand border border-brand/20 font-mono font-semibold">build-ggml-kokoro.sh</span>
+              </div>
+              <h3 class="text-lg font-bold text-text-main">3. Compile Kokoro TTS</h3>
+              <p class="text-xs text-text-muted">
+                Compiles the speech synthesis <code class="text-text-main bg-panel px-1 py-0.2 rounded font-mono">kokoro-server</code> statically. ONNX Runtime is fetched and linked dynamically or statically.
+              </p>
+            </div>
+            <div class="mt-6 bg-bg border border-panel-border rounded-lg p-3 font-mono text-xs relative flex items-center justify-between">
+              <span id="code-setup-kokoro" class="text-brand">./build-ggml-kokoro.cpp.sh v0.1.0</span>
+              <button onclick="copyToClipboard('code-setup-kokoro', 'btn-setup-kokoro')" id="btn-setup-kokoro" class="p-1 text-text-muted hover:text-text-main transition copy-btn" title="Copy to clipboard">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Card 4: Execute Installer -->
+          <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-brand tracking-wider uppercase font-semibold">Step 4</span>
+                <span class="px-2 py-0.5 rounded text-[10px] bg-brand-light text-brand border border-brand/20 font-mono font-semibold">install.sh</span>
+              </div>
+              <h3 class="text-lg font-bold text-text-main">4. Setup Zallama System</h3>
+              <p class="text-xs text-text-muted">
+                Initializes local Python virtual environment, registers symlinks, autocompletes, and registers an always-on daemon service. Run with root access.
+              </p>
+            </div>
+            <div class="mt-6 bg-bg border border-panel-border rounded-lg p-3 font-mono text-xs relative flex items-center justify-between">
+              <span id="code-setup-install" class="text-brand font-semibold">sudo bash install.sh</span>
+              <button onclick="copyToClipboard('code-setup-install', 'btn-setup-install')" id="btn-setup-install" class="p-1 text-text-muted hover:text-text-main transition copy-btn" title="Copy to clipboard">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+        </div>
+      </section>
+
+      <!-- Download Section -->
+      <section id="download" class="bg-panel py-24 border-t border-b border-panel-border">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+            
+            <div class="lg:col-span-5 space-y-6">
+              <h2 class="text-xs font-bold text-brand uppercase tracking-widest">Hugging Face Downloader</h2>
+              <p class="text-3xl sm:text-5xl font-extrabold tracking-tight text-text-main">Accelerated Downloads</p>
+              <p class="text-text-muted leading-relaxed">
+                Zallama leverages <code class="bg-bg text-text-main px-1 py-0.5 rounded border border-panel-border font-mono text-xs">aria2c</code> to download files with up to 8 concurrent threads. When unavailable, it defaults to a parallel Python HTTP engine. Just query presets or use direct Hugging Face repository file routes.
+              </p>
+              <div class="bg-brand-light border border-brand/20 rounded-xl p-4 text-sm text-brand">
+                <p class="font-bold flex items-center">
+                  <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                  </svg>
+                  Pro Tip: Modality Detection
+                </p>
+                <p class="mt-1 text-text-muted text-xs">
+                  ASR and TTS GGUF models are auto-detected and registered based on filenames. You can use the <code class="bg-bg text-text-main border border-panel-border px-0.5 rounded font-mono text-xs">--type</code> flag to force configuration when downloading custom models (e.g. <code class="text-brand">--type tts</code>).
+                </p>
+              </div>
+            </div>
+
+            <!-- Interactive Download Cards -->
+            <div class="lg:col-span-7 space-y-4">
+              
+              <!-- Download Option 1: Unsloth Preset -->
+              <div class="border border-panel-border bg-bg hover:bg-panel transition rounded-xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h4 class="font-bold text-text-main text-base">Unsloth Llama 3.2 3B Preset</h4>
+                  <p class="text-xs text-text-muted mt-1 font-mono">Preset ID: llama3.2:3b</p>
+                </div>
+                <div class="flex items-center bg-panel border border-panel-border rounded-lg p-2.5 font-mono text-xs text-brand w-full sm:w-auto justify-between shadow-inner">
+                  <span id="cmd-dl-preset">zallama pull llama3.2:3b</span>
+                  <button onclick="copyToClipboard('cmd-dl-preset', 'btn-dl-preset')" id="btn-dl-preset" class="ml-3 p-1 text-text-muted hover:text-text-main transition copy-btn">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Download Option 2: Direct HF File -->
+              <div class="border border-panel-border bg-bg hover:bg-panel transition rounded-xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h4 class="font-bold text-text-main text-base">Custom Hugging Face Model File</h4>
+                  <p class="text-xs text-text-muted mt-1 font-mono">Qwen2.5 Coder Instruct GGUF</p>
+                </div>
+                <div class="flex items-center bg-panel border border-panel-border rounded-lg p-2.5 font-mono text-xs text-brand w-full sm:w-auto justify-between shadow-inner">
+                  <span id="cmd-dl-hf" class="overflow-x-auto whitespace-nowrap max-w-[200px] sm:max-w-none">zallama pull unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf</span>
+                  <button onclick="copyToClipboard('cmd-dl-hf', 'btn-dl-hf')" id="btn-dl-hf" class="ml-3 p-1 text-text-muted hover:text-text-main transition copy-btn">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Download Option 3: ASR Multilingual Model -->
+              <div class="border border-panel-border bg-bg hover:bg-panel transition rounded-xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h4 class="font-bold text-text-main text-base">Parakeet Multilingual v3 ASR</h4>
+                  <p class="text-xs text-text-muted mt-1 font-mono">Transcribe French, Spanish, German, etc.</p>
+                </div>
+                <div class="flex items-center bg-panel border border-panel-border rounded-lg p-2.5 font-mono text-xs text-brand w-full sm:w-auto justify-between shadow-inner">
+                  <span id="cmd-dl-asr">zallama pull mudler/parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf</span>
+                  <button onclick="copyToClipboard('cmd-dl-asr', 'btn-dl-asr')" id="btn-dl-asr" class="ml-3 p-1 text-text-muted hover:text-text-main transition copy-btn">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Download Option 4: Kokoro TTS Model -->
+              <div class="border border-panel-border bg-bg hover:bg-panel transition rounded-xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h4 class="font-bold text-text-main text-base">Kokoro v0.19 82M TTS Model</h4>
+                  <p class="text-xs text-text-muted mt-1 font-mono">Voice synthesis for English/French/etc.</p>
+                </div>
+                <div class="flex items-center bg-panel border border-panel-border rounded-lg p-2.5 font-mono text-xs text-brand w-full sm:w-auto justify-between shadow-inner">
+                  <span id="cmd-dl-tts">zallama pull kokoro:82m</span>
+                  <button onclick="copyToClipboard('cmd-dl-tts', 'btn-dl-tts')" id="btn-dl-tts" class="ml-3 p-1 text-text-muted hover:text-text-main transition copy-btn">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Interactive LRU Eviction Visualizer -->
+      <section id="visualizer" class="py-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center max-w-3xl mx-auto mb-16 space-y-4">
+          <h2 class="text-xs font-bold text-brand uppercase tracking-widest">Dynamic Process Scheduler</h2>
+          <p class="text-3xl sm:text-5xl font-extrabold tracking-tight text-text-main">Interactive Eviction Visualizer</p>
+          <p class="text-lg text-text-muted">
+            Experience how Zallama handles memory budgeting. Set a limit, load models, and watch the process manager automatically unload the Least-Recently-Used (LRU) models when the budget is reached.
+          </p>
+        </div>
+
+        <!-- The Interactive Widget Box -->
+        <div class="glass-panel rounded-2xl overflow-hidden shadow-2xl">
+          <!-- Control Panel -->
+          <div class="p-6 border-b border-panel-border flex flex-col md:flex-row md:items-center justify-between gap-6 bg-panel/40">
+            <!-- Budget Config -->
+            <div class="space-y-2">
+              <span class="text-xs font-bold text-text-muted uppercase tracking-wider">Memory Budget Config</span>
+              <div class="flex items-center space-x-4">
+                <span class="text-sm font-semibold text-text-main">RAM/VRAM Limit:</span>
+                <input type="range" id="mem-budget-slider" min="6" max="16" step="2" value="12" class="w-32 accent-brand cursor-pointer">
+                <span id="mem-budget-display" class="font-mono text-base font-bold text-brand">12.0 GB</span>
+              </div>
+            </div>
+            
+            <!-- Quick Actions -->
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="btn-load-qwen" class="px-3 py-1.5 rounded-lg bg-brand-light hover:bg-brand/20 text-brand border border-brand/20 font-mono text-xs transition">Load Qwen 4B (4.0GB)</button>
+              <button id="btn-load-llama" class="px-3 py-1.5 rounded-lg bg-brand-light hover:bg-brand/20 text-brand border border-brand/20 font-mono text-xs transition">Load Llama 3B (3.6GB)</button>
+              <button id="btn-load-deepseek" class="px-3 py-1.5 rounded-lg bg-brand-light hover:bg-brand/20 text-brand border border-brand/20 font-mono text-xs transition">Load DeepSeek 8B (5.5GB)</button>
+              <button id="btn-load-parakeet" class="px-3 py-1.5 rounded-lg bg-brand-light hover:bg-brand/20 text-brand border border-brand/20 font-mono text-xs transition">Load Parakeet ASR (0.8GB)</button>
+              <button id="btn-load-kokoro" class="px-3 py-1.5 rounded-lg bg-brand-light hover:bg-brand/20 text-brand border border-brand/20 font-mono text-xs transition">Load Kokoro TTS (0.1GB)</button>
+            </div>
+            
+            <button id="btn-reset-eviction" class="text-xs text-text-muted hover:text-text-main underline font-semibold transition">Reset App</button>
+          </div>
+
+          <!-- Main Layout -->
+          <div class="grid grid-cols-1 lg:grid-cols-12 min-h-[350px]">
+            
+            <!-- Active Model RAM Bar and Statistics (Left Column) -->
+            <div class="lg:col-span-5 p-8 border-r border-panel-border flex flex-col justify-between space-y-8 bg-bg">
+              <div class="space-y-4">
+                <h4 class="font-bold text-text-main text-lg">System Load Monitor</h4>
+                
+                <!-- Progress Bar -->
+                <div class="space-y-2">
+                  <div class="flex justify-between text-xs font-mono">
+                    <span class="text-text-muted">Memory Budget Allocation</span>
+                    <span id="stat-mem-usage" class="text-brand font-bold">0.0GB / 12.0GB (0%)</span>
+                  </div>
+                  <div class="w-full bg-panel border border-panel-border rounded-full h-4 overflow-hidden relative p-[2px]">
+                    <div id="visualizer-progress-bar" class="h-full rounded-full bg-gradient-to-r from-brand via-brand/90 to-brand-hover transition-all duration-500 ease-out" style="width: 0%;"></div>
+                  </div>
+                </div>
+
+                <!-- Usage Specs -->
+                <div class="grid grid-cols-2 gap-4 pt-4">
+                  <div class="bg-panel p-3 rounded-lg border border-panel-border">
+                    <p class="text-[10px] text-text-muted font-bold uppercase tracking-wider">Loaded Models</p>
+                    <p id="stat-loaded-count" class="text-xl font-extrabold text-text-main mt-1">0</p>
+                  </div>
+                  <div class="bg-panel p-3 rounded-lg border border-panel-border">
+                    <p class="text-[10px] text-text-muted font-bold uppercase tracking-wider">Estimated Headroom</p>
+                    <p id="stat-free-gb" class="text-xl font-extrabold text-brand mt-1">12.0 GB</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Live Log Output feed from the manager -->
+              <div class="bg-panel rounded-lg p-3 border border-panel-border font-mono text-[10px] text-text-muted h-28 overflow-y-auto" id="eviction-logs-body">
+                <span class="text-text-muted">[MANAGER] Idle. Waiting for models to start.</span>
+              </div>
+            </div>
+
+            <!-- Visual Cards Grid of memory (Right Column) -->
+            <div class="lg:col-span-7 p-8 bg-panel flex flex-col justify-start space-y-4">
+              <h4 class="font-bold text-text-main text-lg">Daemon Memory Map (<code class="text-xs text-text-muted">registry.yaml</code>)</h4>
+              
+              <!-- Map items containers -->
+              <div class="space-y-3 shadow-inner" id="visualizer-cards-container">
+                <!-- Injected via JavaScript -->
+              </div>
+            </div>
+            
+          </div>
+        </div>
+      </section>
+
+      <!-- OpenAI API & Code integration -->
+      <section id="usage" class="bg-panel py-24 border-t border-b border-panel-border">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div class="text-center max-w-3xl mx-auto mb-16 space-y-4">
+            <h2 class="text-xs font-bold text-brand uppercase tracking-widest">Developer Integration</h2>
+            <p class="text-3xl sm:text-5xl font-extrabold tracking-tight text-text-main">OpenAI Compatible API</p>
+            <p class="text-lg text-text-muted">
+              Integrate Zallama directly with your existing AI tools, frameworks, and agents by simply updating the API base url.
+            </p>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-12">
+            
+            <!-- Code Tab Swappers (Left column) -->
+            <div class="lg:col-span-4 flex flex-col space-y-3">
+              <span class="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Endpoint Modalities</span>
+              
+              <button id="btn-tab-chat" class="w-full text-left p-4 rounded-xl border border-panel-border hover:bg-bg transition flex items-center justify-between tab-btn-light active">
+                <div>
+                  <h4 class="font-bold text-text-main text-sm">Chat Completion</h4>
+                  <p class="text-xs text-text-muted mt-0.5">Stream reasoning blocks locally</p>
+                </div>
+                <span class="text-xs font-mono font-bold text-brand">/v1/chat/completions</span>
+              </button>
+
+              <button id="btn-tab-vision" class="w-full text-left p-4 rounded-xl border border-panel-border hover:bg-bg transition flex items-center justify-between tab-btn-light">
+                <div>
+                  <h4 class="font-bold text-text-main text-sm">Vision Analytics</h4>
+                  <p class="text-xs text-text-muted mt-0.5">Analyze images via visual projects</p>
+                </div>
+                <span class="text-xs font-mono font-bold text-brand">/v1/chat/completions</span>
+              </button>
+
+              <button id="btn-tab-asr" class="w-full text-left p-4 rounded-xl border border-panel-border hover:bg-bg transition flex items-center justify-between tab-btn-light">
+                <div>
+                  <h4 class="font-bold text-text-main text-sm">Speech-to-Text ASR</h4>
+                  <p class="text-xs text-text-muted mt-0.5">Transcode and transcribe voice</p>
+                </div>
+                <span class="text-xs font-mono font-bold text-brand">/v1/audio/transcriptions</span>
+              </button>
+
+              <button id="btn-tab-tts" class="w-full text-left p-4 rounded-xl border border-panel-border hover:bg-bg transition flex items-center justify-between tab-btn-light">
+                <div>
+                  <h4 class="font-bold text-text-main text-sm">Speech Synthesis (TTS)</h4>
+                  <p class="text-xs text-text-muted mt-0.5">Synthesize audio files locally</p>
+                </div>
+                <span class="text-xs font-mono font-bold text-brand">/v1/audio/speech</span>
+              </button>
+            </div>
+
+            <!-- Code viewer (Right column) -->
+            <div class="lg:col-span-8">
+              <div class="bg-bg rounded-2xl border border-panel-border overflow-hidden shadow-2xl">
+                <!-- Header tools -->
+                <div class="bg-panel px-6 py-3 flex items-center justify-between border-b border-panel-border">
+                  <!-- Language swappers -->
+                  <div class="flex space-x-3 text-xs font-mono">
+                    <button id="lang-btn-curl" class="text-text-main font-bold border-b-2 border-brand pb-1">cURL</button>
+                    <button id="lang-btn-python" class="text-text-muted hover:text-text-main transition pb-1">Python</button>
+                    <button id="lang-btn-js" class="text-text-muted hover:text-text-main transition pb-1">NodeJS</button>
+                  </div>
+                  <button id="btn-copy-code" class="flex items-center space-x-1.5 text-xs text-text-muted hover:text-text-main transition">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                    <span>Copy Snippet</span>
+                  </button>
+                </div>
+                <!-- Snippet editor container -->
+                <div class="p-6 text-xs font-mono text-text-main overflow-x-auto leading-relaxed" id="code-snippet-box">
+                  <!-- Javascript updates -->
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- Deployment section -->
+      <section class="py-24 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 border-b border-panel-border">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          
+          <div class="space-y-6">
+            <div class="inline-flex items-center space-x-2 bg-brand-light border border-brand/20 px-3 py-1 rounded-full text-xs font-semibold text-brand">
+              <span>Production Deploy</span>
+            </div>
+            <h3 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-text-main">Systemd Service Setup</h3>
+            <p class="text-text-muted leading-relaxed">
+              Run Zallama as an always-on backend service that boots up automatically with your server. If the installation was not executed with root access, you can register and launch the daemon manually with these standard systemctl commands.
+            </p>
+            
+            <div class="border-l-2 border-brand/50 pl-4 space-y-1">
+              <p class="text-sm font-bold text-text-main">Log Tracking</p>
+              <p class="text-xs text-text-muted">
+                You can easily view logs for the service using: <code class="bg-bg text-text-main border border-panel-border px-1 py-0.5 rounded font-mono text-xs">journalctl -u zallama -f</code>
+              </p>
+            </div>
+          </div>
+
+          <div class="bg-bg rounded-xl border border-panel-border overflow-hidden font-mono text-xs text-text-main shadow-lg">
+            <div class="bg-panel px-4 py-2 border-b border-panel-border flex items-center justify-between text-text-muted">
+              <span>zallama.service</span>
+              <button onclick="copyToClipboard('code-systemd', 'btn-copy-systemd')" id="btn-copy-systemd" class="p-1 text-text-muted hover:text-text-main transition copy-btn">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+              </button>
+            </div>
+            <pre id="code-systemd" class="p-4 overflow-x-auto text-brand/90 leading-relaxed bg-bg">
+[Unit]
+Description=Zallama — Local LLM Server
+After=network.target
+
+[Service]
+Type=simple
+User=cook
+WorkingDirectory=/home/cook/Documents/Dev/Dev-ai/zallama
+ExecStart=/home/cook/Documents/Dev/Dev-ai/zallama/zallama serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</pre>
+            <div class="bg-panel p-4 border-t border-panel-border space-y-2">
+              <span class="text-[10px] text-text-muted uppercase tracking-widest font-bold">Activate Commands</span>
+              <div class="flex items-center justify-between bg-bg p-2 rounded border border-panel-border text-text-main">
+                <span id="cmd-activate">sudo systemctl enable --now zallama</span>
+                <button onclick="copyToClipboard('cmd-activate', 'btn-activate')" id="btn-activate" class="p-1 text-text-muted hover:text-text-main transition copy-btn">
+                  <svg class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-panel py-12 border-t border-panel-border text-text-muted">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-6">
+        <div class="flex items-center space-x-3 text-text-main">
+          <span class="text-xl">🦙</span>
+          <span class="font-bold tracking-tight">Zallama</span>
+          <span class="text-xs text-text-muted">• Local Inference Gateway</span>
+        </div>
+        <p class="text-xs font-mono">
+          Released under the <a href="https://github.com/rzafiamy/zallama/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" class="hover:text-text-main underline">MIT License</a>. &copy; 2026 Rija Z.
+        </p>
+      </div>
+    </footer>
+
+    <!-- Interactive script loader -->
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
