@@ -92,12 +92,19 @@ async def lifespan(app: FastAPI):
 
     sweep_task = asyncio.create_task(idle_sweep_loop()) if idle_timeout > 0 else None
 
+    # Pre-warm pinned models in the background so their (slow, CPU-bound) cold
+    # load happens at boot rather than on the first user request. Done off the
+    # critical path: the server starts accepting connections immediately and the
+    # pinned models become ready shortly after.
+    prewarm_task = asyncio.create_task(pm.prewarm_pinned(registry))
+
     yield
 
     # Shutdown
     logger.info("Shutting down Zallama...")
     if sweep_task:
         sweep_task.cancel()
+    prewarm_task.cancel()
     await pm.shutdown_all()
     logger.info("Goodbye! 👋")
 

@@ -568,6 +568,10 @@ class DownloadManager:
             # kokoro takes no launch flags; `voice`/`speed` are per-request
             # synthesis knobs the /v1/audio/speech route injects from these
             # params when the client omits them. speed=1.0 is normal rate.
+            # Pin TTS by default: kokoro's ONNX load is a slow CPU operation, so
+            # keeping it warm turns a tens-of-seconds first request into a
+            # sub-second one. The user can unpin via the registry if they'd
+            # rather reclaim the memory.
             self.registry.add_model(
                 name=task.model_name,
                 file_path=str(dest_dir),
@@ -575,6 +579,7 @@ class DownloadManager:
                 modality=task.modality,
                 backend=task.backend,
                 params={"voice": "af_heart", "speed": 1.0},
+                pinned=(task.modality == "tts"),
             )
             logger.info(f"Completed and registered model: {task.model_name}")
 

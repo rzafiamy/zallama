@@ -97,6 +97,18 @@ class ProcessManager:
             self._model_locks[model_name] = lock
         return lock
 
+    @staticmethod
+    def _is_pinned(entry: dict) -> bool:
+        """A pinned model is pre-warmed at startup and never evicted.
+
+        Pinning exists for backends whose cold load is slow and not GPU-bound
+        (e.g. kokoro-server TTS loads ONNX models on CPU in tens of seconds). For
+        those, paying the load once at startup and keeping the instance resident
+        turns a 50s first-request into a sub-second one — at the cost of holding
+        the model's memory for the process lifetime, which is the intended trade.
+        """
+        return bool(entry.get("pinned"))
+
     async def get_or_start(self, model_name: str, entry: dict, model_path: Path) -> ModelInstance:
         """Return running instance for model, starting it if necessary.
 
@@ -134,6 +146,27 @@ class ProcessManager:
             async with self._global_lock:
                 self._instances[model_name] = inst
             return inst
+
+    async def prewarm_pinned(self, registry) -> None:
+        """Start every pinned model so its slow cold load happens at boot.
+
+        Pinned models (e.g. kokoro-server TTS, whose ONNX load is a slow CPU
+        operation) are loaded here once, off the request path, and then kept
+        resident by the eviction exemptions. A failure to warm one model is
+        logged and skipped — it must not block startup or the other models.
+        """
+        pinned = [e for e in registry.list_models() if self._is_pinned(e)]
+        if not pinned:
+            return
+        logger.info(f"Pre-warming {len(pinned)} pinned model(s)...")
+        for entry in pinned:
+            name = entry["name"]
+            try:
+                model_path = registry.resolve_path(entry)
+                await self.get_or_start(name, entry, model_path)
+                logger.info(f"Pinned model '{name}' is warm")
+            except Exception as e:
+                logger.warning(f"Failed to pre-warm pinned model '{name}': {e}")
 
     async def stop(self, model_name: str) -> bool:
         """Stop a running model instance."""
@@ -193,7 +226,8 @@ class ProcessManager:
             now = time.time()
             to_evict = [
                 name for name, inst in self._instances.items()
-                if (now - inst.last_used) > self._idle_timeout
+                if not self._is_pinned(inst.entry)
+                and (now - inst.last_used) > self._idle_timeout
             ]
             evicted = [self._instances.pop(name) for name in to_evict]
         for inst in evicted:
@@ -245,8 +279,24 @@ class ProcessManager:
                 and (self._loaded_mem_gb() + incoming_cost) > self._mem_budget_gb
             )
 
+        def next_victim() -> str | None:
+            # LRU is first; skip pinned models — they are never evicted, even
+            # under capacity pressure. If only pinned models remain, give up and
+            # let the incoming model exceed the budget rather than killing a
+            # warm-pinned instance.
+            for name, inst in self._instances.items():
+                if not self._is_pinned(inst.entry):
+                    return name
+            return None
+
         while self._instances and (over_count() or over_mem()):
-            victim_name = next(iter(self._instances))  # LRU is first
+            victim_name = next_victim()
+            if victim_name is None:
+                logger.warning(
+                    "Capacity reached but all loaded models are pinned — "
+                    f"admitting incoming {incoming_cost:.1f}GB over budget."
+                )
+                break
             victim = self._instances.pop(victim_name)
             reason = "count" if over_count() else "memory"
             logger.info(
