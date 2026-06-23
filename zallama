@@ -146,6 +146,178 @@ def _print_table(headers: list[str], rows: list[list[str]], col_aligns: list[str
 
 
 # ---------------------------------------------------------------------------
+# Markdown rendering for the interactive chat
+# ---------------------------------------------------------------------------
+_ANSI_RE = re.compile(r'\033\[[0-9;]*m')
+
+
+def _visible_len(s: str) -> int:
+    """Length of a string ignoring ANSI escape codes."""
+    return len(_ANSI_RE.sub('', s))
+
+
+def _term_width(default: int = 80) -> int:
+    """Terminal width in columns, with a sane fallback for non-ttys/pipes."""
+    import shutil
+    try:
+        cols = shutil.get_terminal_size((default, 24)).columns
+    except Exception:
+        cols = default
+    return max(40, cols)
+
+
+def _wrap_ansi(text: str, width: int) -> list[str]:
+    """Word-wrap a single line to `width` visible columns, ANSI-aware.
+
+    Splits on spaces, measuring with _visible_len so color codes don't count
+    toward the column budget. Words longer than `width` (e.g. URLs) are left
+    intact on their own line rather than hard-split mid-escape.
+    """
+    words = text.split(" ")
+    lines: list[str] = []
+    cur = ""
+    cur_len = 0
+    for word in words:
+        wlen = _visible_len(word)
+        if cur and cur_len + 1 + wlen > width:
+            lines.append(cur)
+            cur, cur_len = word, wlen
+        else:
+            if cur:
+                cur += " " + word
+                cur_len += 1 + wlen
+            else:
+                cur, cur_len = word, wlen
+    if cur or not lines:
+        lines.append(cur)
+    return lines
+
+
+def _render_inline_md(text: str) -> str:
+    """Apply inline markdown styling: **bold**, *italic*, `code`, links.
+
+    Order matters: code spans are protected first so their contents aren't
+    re-styled, then bold before italic so `**x**` isn't eaten by the italic rule.
+    """
+    # Inline code — teal, protect contents from further styling via placeholders.
+    code_spans: list[str] = []
+
+    def _stash_code(m: re.Match) -> str:
+        code_spans.append(m.group(1))
+        return f"\x00{len(code_spans) - 1}\x00"
+
+    text = re.sub(r'`([^`]+)`', _stash_code, text)
+    # Links [label](url) -> label (dim url)
+    text = re.sub(
+        r'\[([^\]]+)\]\(([^)]+)\)',
+        lambda m: f"{F_BLUE}{m.group(1)}{RESET} {F_DIM}({m.group(2)}){RESET}",
+        text,
+    )
+    # Bold then italic.
+    text = re.sub(r'\*\*([^*]+)\*\*', lambda m: f"{BOLD}{m.group(1)}{RESET}", text)
+    text = re.sub(r'__([^_]+)__', lambda m: f"{BOLD}{m.group(1)}{RESET}", text)
+    text = re.sub(r'(?<!\*)\*([^*\n]+)\*(?!\*)', lambda m: f"{F_GRAY}{m.group(1)}{RESET}", text)
+    # Restore code spans (styled, after everything else).
+    text = re.sub(
+        r'\x00(\d+)\x00',
+        lambda m: f"{F_TEAL}{code_spans[int(m.group(1))]}{RESET}",
+        text,
+    )
+    return text
+
+
+def _render_markdown(md: str, width: int) -> list[str]:
+    """Render markdown text into a list of styled, word-wrapped lines.
+
+    A deliberately small renderer (no deps): headings, bullet/numbered lists,
+    blockquotes, fenced code blocks, horizontal rules, and inline styling.
+    Lines are wrapped to `width` visible columns.
+    """
+    out: list[str] = []
+    in_fence = False
+    for raw in md.split("\n"):
+        line = raw.rstrip("\n")
+
+        # Fenced code blocks: render verbatim (no wrap, no inline styling).
+        fence = re.match(r'^\s*```(.*)$', line)
+        if fence:
+            in_fence = not in_fence
+            out.append(f"{F_DIM}{'─' * min(width, 40)}{RESET}")
+            continue
+        if in_fence:
+            out.append(f"{F_TEAL}{line}{RESET}")
+            continue
+
+        if not line.strip():
+            out.append("")
+            continue
+
+        # Horizontal rule.
+        if re.match(r'^\s*([-*_])\1{2,}\s*$', line):
+            out.append(f"{F_DIM}{'─' * width}{RESET}")
+            continue
+
+        # Headings.
+        h = re.match(r'^(#{1,6})\s+(.*)$', line)
+        if h:
+            txt = _render_inline_md(h.group(2))
+            for wl in _wrap_ansi(txt, width):
+                out.append(f"{BOLD}{F_BLUE}{wl}{RESET}")
+            continue
+
+        # Blockquote.
+        if line.lstrip().startswith(">"):
+            txt = _render_inline_md(line.lstrip()[1:].lstrip())
+            for wl in _wrap_ansi(txt, width - 2):
+                out.append(f"{F_DIM}▏{RESET} {F_GRAY}{wl}{RESET}")
+            continue
+
+        # Bullet list.
+        b = re.match(r'^(\s*)[-*+]\s+(.*)$', line)
+        if b:
+            indent = " " * len(b.group(1))
+            txt = _render_inline_md(b.group(2))
+            wrapped = _wrap_ansi(txt, width - len(indent) - 2)
+            out.append(f"{indent}{F_TEAL}•{RESET} {wrapped[0]}")
+            for wl in wrapped[1:]:
+                out.append(f"{indent}  {wl}")
+            continue
+
+        # Numbered list.
+        n = re.match(r'^(\s*)(\d+)\.\s+(.*)$', line)
+        if n:
+            indent = " " * len(n.group(1))
+            marker = f"{n.group(2)}."
+            txt = _render_inline_md(n.group(3))
+            wrapped = _wrap_ansi(txt, width - len(indent) - len(marker) - 1)
+            out.append(f"{indent}{F_TEAL}{marker}{RESET} {wrapped[0]}")
+            for wl in wrapped[1:]:
+                out.append(f"{indent}{' ' * (len(marker) + 1)}{wl}")
+            continue
+
+        # Plain paragraph.
+        for wl in _wrap_ansi(_render_inline_md(line), width):
+            out.append(wl)
+    return out
+
+
+def _print_framed(md: str, label: str, label_color: str) -> None:
+    """Render markdown inside a left-margin frame with a vertical rule.
+
+    The whole block is indented and gutter-railed so the assistant's reply is
+    visually contained — aligned, framed, and separated from the prompt.
+    """
+    margin = 2
+    gutter = f"{label_color}▏{RESET}"
+    width = _term_width()
+    content_width = max(40, width - margin - 2)
+
+    print(f"\n{' ' * margin}{BOLD}{label_color}{label}{RESET}")
+    for line in _render_markdown(md, content_width):
+        print(f"{' ' * margin}{gutter} {line}" if line else f"{' ' * margin}{gutter}")
+
+
+# ---------------------------------------------------------------------------
 # API helpers
 # ---------------------------------------------------------------------------
 def _api(method: str, path: str, data: dict | None = None, stream=False):
@@ -828,16 +1000,23 @@ def cmd_run(args: list[str]):
             _info(f"  zallama transcribe {model} <audio-file.wav>")
             sys.exit(1)
 
-    # Print a beautiful Fluent 2 style banner header
-    print(_color("\n╭──────────────────────────────────────────────────────────╮", F_BLUE))
-    print(f"{_color('│', F_BLUE)}  {BOLD}{F_WHITE}ZALLAMA INTERACTIVE CHAT{RESET}                             {_color('│', F_BLUE)}")
-    model_line = f"Model: {model}"
-    padded_model = model_line + " " * (52 - len(model_line))
-    print(f"{_color('│', F_BLUE)}  {F_GRAY}{padded_model}{RESET} {_color('│', F_BLUE)}")
-    info_line = "Type message and press Enter. /exit to quit."
-    padded_info = info_line + " " * (52 - len(info_line))
-    print(f"{_color('│', F_BLUE)}  {F_DIM}{padded_info}{RESET} {_color('│', F_BLUE)}")
-    print(_color("╰──────────────────────────────────────────────────────────╯", F_BLUE))
+    # Width-aware Fluent 2 style banner header. The inner width adapts to the
+    # terminal (capped) so a long model name never overflows or misaligns the box.
+    inner = min(_term_width() - 4, 64)
+    bar = "─" * inner
+
+    def _banner_row(text: str, color: str) -> str:
+        pad = " " * max(0, inner - _visible_len(text))
+        return f"{_color('│', F_BLUE)} {color}{text}{pad}{RESET} {_color('│', F_BLUE)}"
+
+    def _trunc(s: str) -> str:
+        return s if len(s) <= inner else s[: inner - 1] + "…"
+
+    print(_color(f"\n╭{bar}╮", F_BLUE))
+    print(_banner_row("ZALLAMA INTERACTIVE CHAT", BOLD + F_WHITE))
+    print(_banner_row(_trunc(f"Model: {model}"), F_GRAY))
+    print(_banner_row(_trunc("Type a message and press Enter. /exit to quit, /clear to reset."), F_DIM))
+    print(_color(f"╰{bar}╯", F_BLUE))
 
     # First, ensure the model is loaded (may take a moment)
     print(_color(f"⏳ Loading model '{model}'...", F_ORANGE), end="", flush=True)
@@ -873,7 +1052,12 @@ def cmd_run(args: list[str]):
         spinner = Spinner("Thinking...")
         spinner.start()
 
-        full_response = ""
+        # Stream reasoning live (it's transient "thinking"), but accumulate the
+        # answer content and render it beautified once complete — markdown can't
+        # be cleanly formatted token-by-token, so we draft, then re-render.
+        beautify = sys.stdout.isatty()
+        reasoning_text = ""
+        content_text = ""
         try:
             r = requests.post(
                 f"{ZALLAMA_HOST}/v1/chat/completions",
@@ -881,7 +1065,7 @@ def cmd_run(args: list[str]):
                 stream=True,
                 timeout=None,
             )
-            
+
             if r.status_code != 200:
                 spinner.stop()
                 try:
@@ -894,24 +1078,17 @@ def cmd_run(args: list[str]):
             buffer = b""
             spinner_stopped = False
             in_reasoning = False
-            in_content = False
+            content_started = False
 
             done = False
             for chunk in r.iter_content(chunk_size=None):
-                if not spinner_stopped:
-                    spinner.stop()
-                    spinner_stopped = True
-
                 buffer += chunk
                 while b"\n" in buffer:
                     line_bytes, buffer = buffer.split(b"\n", 1)
                     line_str = line_bytes.decode("utf-8", errors="ignore").strip()
                     if not line_str:
                         continue
-                    if line_str.startswith("data: "):
-                        text = line_str[6:]
-                    else:
-                        text = line_str
+                    text = line_str[6:] if line_str.startswith("data: ") else line_str
 
                     if text == "[DONE]":
                         done = True
@@ -920,29 +1097,45 @@ def cmd_run(args: list[str]):
                     try:
                         chunk_json = json.loads(text)
                         delta = chunk_json["choices"][0]["delta"]
-                        
+
                         reasoning_content = delta.get("reasoning_content", "")
                         delta_content = delta.get("content", "")
-                        
+
                         if reasoning_content:
+                            if not spinner_stopped:
+                                spinner.stop(); spinner_stopped = True
                             if not in_reasoning:
                                 in_reasoning = True
                                 print(f"\n{BOLD}{F_PURPLE}🧠 Thinking Process:{RESET}")
                             print(_color(reasoning_content, F_DIM), end="", flush=True)
-                            full_response += reasoning_content
+                            reasoning_text += reasoning_content
                         elif delta_content:
+                            # Keep the spinner spinning while drafting the answer
+                            # so the user sees progress; the frame prints at the end.
                             if in_reasoning:
                                 in_reasoning = False
-                                print(f"\n")
-                            if not in_content:
-                                in_content = True
-                                print(f"\n{BOLD}{F_TEAL}🦙 Assistant:{RESET}")
-                            print(delta_content, end="", flush=True)
-                            full_response += delta_content
+                                print("\n")
+                            if not content_started:
+                                content_started = True
+                                if not beautify and not spinner_stopped:
+                                    spinner.stop(); spinner_stopped = True
+                                if not beautify:
+                                    print(f"\n{BOLD}{F_TEAL}🦙 Assistant:{RESET}")
+                            content_text += delta_content
+                            if not beautify:
+                                print(delta_content, end="", flush=True)
                     except Exception:
                         pass
                 if done:
                     break
+
+            if not spinner_stopped:
+                spinner.stop()
+
+            if beautify and content_text:
+                _print_framed(content_text, "🦙 Assistant", F_TEAL)
+            elif not beautify:
+                print()
 
         except Exception as e:
             spinner.stop()
@@ -952,8 +1145,9 @@ def cmd_run(args: list[str]):
             print(_color("\n[interrupted]", F_DIM))
 
         print()
-        if full_response:
-            history.append({"role": "assistant", "content": full_response})
+        full_response = reasoning_text + content_text
+        if content_text:
+            history.append({"role": "assistant", "content": content_text})
 
 
 def cmd_ps(args: list[str]):
