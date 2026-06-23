@@ -61,35 +61,46 @@ Zallama is built around a **pluggable backend abstraction**: each model declares
 
 ## 🛠️ Installation
 
-**Requirements:** Python 3.10+, and a `llama-server` binary (built from [llama.cpp](https://github.com/ggml-org/llama.cpp) or placed in `./bin/llama-server`). `aria2c` is optional but recommended for fast downloads. For **ASR** (speech-to-text), also build `parakeet-server` and have `ffmpeg` installed (for transcoding non-WAV uploads).
+**Requirements:** Python 3.10+, and a `llama-server` binary (built from [llama.cpp](https://github.com/ggml-org/llama.cpp) or placed in `./bin/llama-server`). `aria2c` is optional but recommended for fast downloads. For **ASR** (speech-to-text) and **TTS** (speech synthesis), build their respective engines and have `ffmpeg` installed.
 
-### Building the inference binaries
-
-Helper scripts build each engine and install the binaries into `./bin/` (the clone and build happen in a throwaway temp dir, so nothing pollutes the repo):
+### 1. Clone the repository
 
 ```bash
-# llama.cpp (text / chat / embeddings / vision) → bin/llama-cli, bin/llama-server
-./build-ggml-llama.cpp.sh
-
-# parakeet.cpp (ASR / speech-to-text) → bin/parakeet-cli, bin/parakeet-server
-./build-ggml-parakeet.cpp.sh
+git clone https://github.com/rzafiamy/zallama.git
+cd zallama
 ```
 
-> Both default to a **CUDA** build. The parakeet script also copies the shared `libggml*.so` next to the binaries and sets their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime — required because parakeet links ggml as shared libraries.
+### 2. Building the inference engines
 
-Run the one-shot installer:
+Helper scripts build each engine and install the binaries into `./bin/` (the clone and build happen in a temporary directory, keeping your repository tree clean):
 
 ```bash
-chmod +x install.sh
-./install.sh
+# llama.cpp (text / chat / embeddings / vision) — requires a release tag/branch name
+./build-ggml-llama.cpp.sh b4600
+
+# parakeet.cpp (ASR / speech-to-text) — requires a release tag/branch name
+./build-ggml-parakeet.cpp.sh master
+
+# kokoro.cpp (TTS / voice synthesis) — requires a release tag/branch name
+./build-ggml-kokoro.cpp.sh v0.1.0
+```
+
+> All scripts default to a **CUDA** build. The parakeet script also copies the shared `libggml*.so` next to the binaries and sets their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime.
+
+### 3. Run the installer
+
+Install the global CLI launcher and register local configuration defaults:
+
+```bash
+sudo bash install.sh
 ```
 
 The installer:
-1. Verifies Python 3 and installs `requirements.txt` into a project-local **`.venv`** (required on modern Debian/Ubuntu, which block system-wide `pip` under [PEP 668](https://peps.python.org/pep-0668/)).
+1. Verifies Python 3 and installs `requirements.txt` into a project-local **`.venv`** (required on modern Debian/Ubuntu under [PEP 668](https://peps.python.org/pep-0668/)).
 2. Checks for a `llama-server` binary (`./bin`, or on `PATH`).
 3. Makes the `zallama` CLI executable and creates `~/.zallama/{models,logs,bin}`.
 4. Symlinks `zallama` into `/usr/local/bin` (or `~/.local/bin`) when possible.
-5. **Installs a systemd service — only when run as root** (`sudo ./install.sh`). See [Deployment](#-deployment-systemd).
+5. **Installs a systemd service — only when run as root** (`sudo bash install.sh`). See [Deployment](#-deployment-systemd).
 
 > **No activation needed:** the `zallama` launcher automatically re-execs into `.venv`, so `zallama serve` and every other command just work. (Set `ZALLAMA_NO_VENV=1` to bypass and use the current interpreter.)
 
@@ -379,7 +390,7 @@ sudo systemctl enable --now zallama
 systemctl status zallama
 ```
 
-> **Note:** `./install.sh` only installs the unit when run as root (`sudo ./install.sh`), and it does **not** enable/start it for you — run `sudo systemctl enable --now zallama` afterwards. Tail logs with `journalctl -u zallama -f`.
+> **Note:** `install.sh` only installs the unit when run as root (`sudo bash install.sh`), and it does **not** enable/start it for you — run `sudo systemctl enable --now zallama` afterwards. Tail logs with `journalctl -u zallama -f`.
 
 ---
 
@@ -402,17 +413,17 @@ Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authenticatio
 |---|---|
 | `Cannot connect to Zallama at ...` | Daemon isn't running — start it with `zallama serve` (or `systemctl start zallama`). |
 | `llama-server binary not found` | Build/place it at `./bin/llama-server`, or set `llama_server.binary` in `config/config.yaml`. |
-| `parakeet-server binary not found` | Build it: `./build-ggml-parakeet.cpp.sh` (installs into `./bin/`). |
-| `libggml*.so: cannot open shared object file` | The parakeet binary can't find its shared libs. Re-run `./build-ggml-parakeet.cpp.sh` (it copies the `.so` files and sets `RPATH=$ORIGIN`), or `apt install patchelf` and `patchelf --set-rpath '$ORIGIN' bin/parakeet-server bin/libggml*.so.*.*`. |
+| `parakeet-server binary not found` | Build it: `./build-ggml-parakeet.cpp.sh master` (installs into `./bin/`). |
+| `libggml*.so: cannot open shared object file` | The parakeet binary can't find its shared libs. Re-run `./build-ggml-parakeet.cpp.sh master` (it copies the `.so` files and sets `RPATH=$ORIGIN`), or `apt install patchelf` and `patchelf --set-rpath '$ORIGIN' bin/parakeet-server bin/libggml*.so.*.*`. |
 | ASR returns "accepts WAV uploads only" | Non-WAV upload and `ffmpeg` is missing — `apt install ffmpeg` (Zallama auto-transcodes once present). |
 | ASR transcribes gibberish for non-English | The model is English-only (`ctc-0.6b` / `tdt-0.6b-v2`). Use multilingual `tdt-0.6b-v3` instead. |
 | Model fails to start / startup timeout | Check `zallama logs <model>`. Often a bad GGUF path, too-high `n_gpu_layers`, or `ctx_size` exceeding VRAM. |
 | Models keep getting unloaded | Increase `idle_timeout`, `max_loaded_models`, or `mem_budget_gb`. |
 | `400` "modality ... cannot serve" | You called an endpoint the model's `modality` doesn't support (e.g. a vision-only flow on the wrong route). |
 | `401 Invalid or missing API key` | `api_key` is set — pass `Authorization: Bearer <key>`. |
-| systemd service missing after install | `install.sh` only installs it as root — run `sudo ./install.sh` then `sudo systemctl enable --now zallama`. |
-| `error: externally-managed-environment` from pip | PEP 668 — don't `pip install` system-wide. Re-run `./install.sh` (it uses `.venv`). If venv creation fails: `sudo apt install python3-venv python3-full`. |
-| `Import error: No module named 'fastapi'` on `serve` | The `.venv` is missing or incomplete — re-run `./install.sh`. |
+| systemd service missing after install | `install.sh` only installs it as root — run `sudo bash install.sh` then `sudo systemctl enable --now zallama`. |
+| `error: externally-managed-environment` from pip | PEP 668 — don't `pip install` system-wide. Re-run `sudo bash install.sh` (it uses `.venv`). If venv creation fails: `sudo apt install python3-venv python3-full`. |
+| `Import error: No module named 'fastapi'` on `serve` | The `.venv` is missing or incomplete — re-run `sudo bash install.sh`. |
 
 ---
 

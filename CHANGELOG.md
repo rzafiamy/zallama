@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-23
+
 ### Added
+- **Text-to-speech (TTS)**: `KokoroServerBackend` runs [kokoro.cpp](https://github.com/mudler/kokoro.cpp)
+  models at the OpenAI-compatible `POST /v1/audio/speech` endpoint. Build the binary with
+  `build-ggml-kokoro.cpp.sh` (copies `libggml*.so` and sets `RPATH=$ORIGIN`).
+- **Model pinning & pre-warming**: models can be pinned so they are loaded eagerly and exempt
+  from LRU/memory eviction, improving first-request latency for TTS and other hot models.
+- **GGUF metadata reader & `calibrate` command**: reads model metadata directly from the GGUF
+  header and derives recommended configuration (e.g. context/memory) for a model.
+- **Speculative decoding**: `LlamaServerBackend` accepts draft-model settings for speculative
+  decoding to accelerate generation.
+- **Real VRAM monitoring**: `GET /api/ps` and `zallama ps` report actual GPU VRAM usage
+  (queried from the GPU) rather than only declared/estimated cost.
+- **Shell completions**: bash and zsh completion scripts for the `zallama` CLI.
+- **`reload` command**: restarts running models to apply registry parameter changes without a
+  full daemon restart.
+- **Project website**: a Vite + Tailwind CSS site with interactive features.
 - **Pluggable backend abstraction** (`server/backends.py`): a `Backend` protocol isolates
   engine-specific logic (binary, argument building, health path) from the generic process
   lifecycle, so new modalities can be added as new backends rather than cross-cutting changes.
@@ -34,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LICENSE` (MIT), this `CHANGELOG.md`, and an expanded README.
 
 ### Changed
+- **Interactive chat markdown rendering**: the `run` chat now renders markdown with
+  width-aware formatting in the terminal.
+- **Web UI redesign**: updated to the Fluent 2 design language with an enhanced color palette
+  and structured table layouts.
 - **Default host is now `127.0.0.1`** (was `0.0.0.0`) — localhost-only by default; opt in to
   network exposure explicitly, ideally alongside `api_key`.
 - **Per-model startup locking**: a slow model startup no longer blocks requests to other models
@@ -72,5 +93,6 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/rzafiamy/zallama/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rzafiamy/zallama/releases/tag/v1.0.0

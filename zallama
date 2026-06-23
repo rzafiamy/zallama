@@ -146,6 +146,178 @@ def _print_table(headers: list[str], rows: list[list[str]], col_aligns: list[str
 
 
 # ---------------------------------------------------------------------------
+# Markdown rendering for the interactive chat
+# ---------------------------------------------------------------------------
+_ANSI_RE = re.compile(r'\033\[[0-9;]*m')
+
+
+def _visible_len(s: str) -> int:
+    """Length of a string ignoring ANSI escape codes."""
+    return len(_ANSI_RE.sub('', s))
+
+
+def _term_width(default: int = 80) -> int:
+    """Terminal width in columns, with a sane fallback for non-ttys/pipes."""
+    import shutil
+    try:
+        cols = shutil.get_terminal_size((default, 24)).columns
+    except Exception:
+        cols = default
+    return max(40, cols)
+
+
+def _wrap_ansi(text: str, width: int) -> list[str]:
+    """Word-wrap a single line to `width` visible columns, ANSI-aware.
+
+    Splits on spaces, measuring with _visible_len so color codes don't count
+    toward the column budget. Words longer than `width` (e.g. URLs) are left
+    intact on their own line rather than hard-split mid-escape.
+    """
+    words = text.split(" ")
+    lines: list[str] = []
+    cur = ""
+    cur_len = 0
+    for word in words:
+        wlen = _visible_len(word)
+        if cur and cur_len + 1 + wlen > width:
+            lines.append(cur)
+            cur, cur_len = word, wlen
+        else:
+            if cur:
+                cur += " " + word
+                cur_len += 1 + wlen
+            else:
+                cur, cur_len = word, wlen
+    if cur or not lines:
+        lines.append(cur)
+    return lines
+
+
+def _render_inline_md(text: str) -> str:
+    """Apply inline markdown styling: **bold**, *italic*, `code`, links.
+
+    Order matters: code spans are protected first so their contents aren't
+    re-styled, then bold before italic so `**x**` isn't eaten by the italic rule.
+    """
+    # Inline code — teal, protect contents from further styling via placeholders.
+    code_spans: list[str] = []
+
+    def _stash_code(m: re.Match) -> str:
+        code_spans.append(m.group(1))
+        return f"\x00{len(code_spans) - 1}\x00"
+
+    text = re.sub(r'`([^`]+)`', _stash_code, text)
+    # Links [label](url) -> label (dim url)
+    text = re.sub(
+        r'\[([^\]]+)\]\(([^)]+)\)',
+        lambda m: f"{F_BLUE}{m.group(1)}{RESET} {F_DIM}({m.group(2)}){RESET}",
+        text,
+    )
+    # Bold then italic.
+    text = re.sub(r'\*\*([^*]+)\*\*', lambda m: f"{BOLD}{m.group(1)}{RESET}", text)
+    text = re.sub(r'__([^_]+)__', lambda m: f"{BOLD}{m.group(1)}{RESET}", text)
+    text = re.sub(r'(?<!\*)\*([^*\n]+)\*(?!\*)', lambda m: f"{F_GRAY}{m.group(1)}{RESET}", text)
+    # Restore code spans (styled, after everything else).
+    text = re.sub(
+        r'\x00(\d+)\x00',
+        lambda m: f"{F_TEAL}{code_spans[int(m.group(1))]}{RESET}",
+        text,
+    )
+    return text
+
+
+def _render_markdown(md: str, width: int) -> list[str]:
+    """Render markdown text into a list of styled, word-wrapped lines.
+
+    A deliberately small renderer (no deps): headings, bullet/numbered lists,
+    blockquotes, fenced code blocks, horizontal rules, and inline styling.
+    Lines are wrapped to `width` visible columns.
+    """
+    out: list[str] = []
+    in_fence = False
+    for raw in md.split("\n"):
+        line = raw.rstrip("\n")
+
+        # Fenced code blocks: render verbatim (no wrap, no inline styling).
+        fence = re.match(r'^\s*```(.*)$', line)
+        if fence:
+            in_fence = not in_fence
+            out.append(f"{F_DIM}{'─' * min(width, 40)}{RESET}")
+            continue
+        if in_fence:
+            out.append(f"{F_TEAL}{line}{RESET}")
+            continue
+
+        if not line.strip():
+            out.append("")
+            continue
+
+        # Horizontal rule.
+        if re.match(r'^\s*([-*_])\1{2,}\s*$', line):
+            out.append(f"{F_DIM}{'─' * width}{RESET}")
+            continue
+
+        # Headings.
+        h = re.match(r'^(#{1,6})\s+(.*)$', line)
+        if h:
+            txt = _render_inline_md(h.group(2))
+            for wl in _wrap_ansi(txt, width):
+                out.append(f"{BOLD}{F_BLUE}{wl}{RESET}")
+            continue
+
+        # Blockquote.
+        if line.lstrip().startswith(">"):
+            txt = _render_inline_md(line.lstrip()[1:].lstrip())
+            for wl in _wrap_ansi(txt, width - 2):
+                out.append(f"{F_DIM}▏{RESET} {F_GRAY}{wl}{RESET}")
+            continue
+
+        # Bullet list.
+        b = re.match(r'^(\s*)[-*+]\s+(.*)$', line)
+        if b:
+            indent = " " * len(b.group(1))
+            txt = _render_inline_md(b.group(2))
+            wrapped = _wrap_ansi(txt, width - len(indent) - 2)
+            out.append(f"{indent}{F_TEAL}•{RESET} {wrapped[0]}")
+            for wl in wrapped[1:]:
+                out.append(f"{indent}  {wl}")
+            continue
+
+        # Numbered list.
+        n = re.match(r'^(\s*)(\d+)\.\s+(.*)$', line)
+        if n:
+            indent = " " * len(n.group(1))
+            marker = f"{n.group(2)}."
+            txt = _render_inline_md(n.group(3))
+            wrapped = _wrap_ansi(txt, width - len(indent) - len(marker) - 1)
+            out.append(f"{indent}{F_TEAL}{marker}{RESET} {wrapped[0]}")
+            for wl in wrapped[1:]:
+                out.append(f"{indent}{' ' * (len(marker) + 1)}{wl}")
+            continue
+
+        # Plain paragraph.
+        for wl in _wrap_ansi(_render_inline_md(line), width):
+            out.append(wl)
+    return out
+
+
+def _print_framed(md: str, label: str, label_color: str) -> None:
+    """Render markdown inside a left-margin frame with a vertical rule.
+
+    The whole block is indented and gutter-railed so the assistant's reply is
+    visually contained — aligned, framed, and separated from the prompt.
+    """
+    margin = 2
+    gutter = f"{label_color}▏{RESET}"
+    width = _term_width()
+    content_width = max(40, width - margin - 2)
+
+    print(f"\n{' ' * margin}{BOLD}{label_color}{label}{RESET}")
+    for line in _render_markdown(md, content_width):
+        print(f"{' ' * margin}{gutter} {line}" if line else f"{' ' * margin}{gutter}")
+
+
+# ---------------------------------------------------------------------------
 # API helpers
 # ---------------------------------------------------------------------------
 def _api(method: str, path: str, data: dict | None = None, stream=False):
@@ -279,7 +451,7 @@ def cmd_add(args: list[str]):
     if len(filtered_args) < 2:
         _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--modality <modality>] [--backend <backend>]")
         _info("Supported modalities: text, asr, tts, image")
-        _info("Supported backends: llama-server, parakeet-server")
+        _info("Supported backends: llama-server, parakeet-server, kokoro-server")
         sys.exit(1)
         
     name, file_path = filtered_args[0], filtered_args[1]
@@ -399,6 +571,387 @@ def cmd_remove(args: list[str]):
         sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# GGUF metadata reader (header-only; no deps)
+# ---------------------------------------------------------------------------
+def _read_gguf_metadata(path: Path) -> dict:
+    """Parse the key/value metadata from a GGUF file header.
+
+    Reads only the header (not the tensor data), so it is fast even on
+    multi-GB files. Returns a flat {key: value} dict for the scalar string/int
+    keys we need to size a KV-cache (block_count, attention.head_count[_kv],
+    embedding_length, context_length). Supports GGUF v2/v3.
+    """
+    import struct
+
+    # GGUF scalar type ids -> (struct format, size in bytes).
+    _SCALAR = {
+        0: ("B", 1), 1: ("b", 1), 2: ("H", 2), 3: ("h", 2),
+        4: ("I", 4), 5: ("i", 4), 6: ("f", 4), 7: ("?", 1),
+        10: ("Q", 8), 11: ("q", 8), 12: ("d", 8),
+    }
+    STRING, ARRAY = 8, 9
+
+    with open(path, "rb") as f:
+        magic = f.read(4)
+        if magic != b"GGUF":
+            raise ValueError(f"Not a GGUF file (bad magic): {path}")
+        version = struct.unpack("<I", f.read(4))[0]
+        # tensor_count (u64) then metadata_kv_count (u64) in v2/v3.
+        _ = struct.unpack("<Q", f.read(8))[0]
+        kv_count = struct.unpack("<Q", f.read(8))[0]
+
+        def read_str() -> str:
+            n = struct.unpack("<Q", f.read(8))[0]
+            return f.read(n).decode("utf-8", "replace")
+
+        def read_scalar(tid: int):
+            fmt, size = _SCALAR[tid]
+            return struct.unpack("<" + fmt, f.read(size))[0]
+
+        def skip_value(tid: int):
+            # Consume a value of the given type without keeping it (for arrays
+            # and keys we don't care about), so the cursor stays aligned.
+            if tid == STRING:
+                read_str()
+            elif tid == ARRAY:
+                elem_tid = struct.unpack("<I", f.read(4))[0]
+                count = struct.unpack("<Q", f.read(8))[0]
+                for _ in range(count):
+                    skip_value(elem_tid)
+            else:
+                read_scalar(tid)
+
+        meta: dict = {}
+        for _ in range(kv_count):
+            key = read_str()
+            tid = struct.unpack("<I", f.read(4))[0]
+            if tid == STRING:
+                meta[key] = read_str()
+            elif tid == ARRAY:
+                skip_value(ARRAY)  # arrays aren't needed for sizing
+            else:
+                meta[key] = read_scalar(tid)
+        meta["_gguf_version"] = version
+        return meta
+
+
+def _gguf_arch_dims(meta: dict) -> dict | None:
+    """Extract layer/head/embedding dims from GGUF metadata, arch-agnostic.
+
+    Keys are namespaced by architecture (e.g. "llama.block_count"). We read the
+    `general.architecture` value and look up that prefix. Returns None if the
+    essential keys are missing (e.g. a non-text GGUF), letting the caller fall
+    back to a size-based estimate.
+    """
+    arch = meta.get("general.architecture")
+    if not arch:
+        return None
+
+    def g(suffix: str):
+        return meta.get(f"{arch}.{suffix}")
+
+    n_layer = g("block_count")
+    n_embd = g("embedding_length")
+    n_head = g("attention.head_count")
+    # GQA: head_count_kv defaults to head_count when absent (full MHA).
+    n_head_kv = g("attention.head_count_kv") or n_head
+    train_ctx = g("context_length")
+    if not (n_layer and n_embd and n_head and n_head_kv):
+        return None
+    head_dim = n_embd // n_head
+    return {
+        "arch": arch,
+        "n_layer": int(n_layer),
+        "n_embd": int(n_embd),
+        "n_head": int(n_head),
+        "n_head_kv": int(n_head_kv),
+        "head_dim": int(head_dim),
+        "train_ctx": int(train_ctx) if train_ctx else None,
+    }
+
+
+def _query_total_vram_gb() -> float | None:
+    """Total VRAM (GB) of GPU 0 via nvidia-smi, or None if unavailable."""
+    import shutil
+    import subprocess
+
+    if shutil.which("nvidia-smi") is None:
+        return None
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.total",
+             "--format=csv,noheader,nounits"],
+            text=True, timeout=5,
+        )
+    except Exception:
+        return None
+    first = out.strip().splitlines()
+    if not first:
+        return None
+    try:
+        return int(first[0].strip()) / 1024.0  # MiB -> GiB
+    except ValueError:
+        return None
+
+
+def cmd_calibrate(args: list[str]):
+    """Recommend max ctx_size + mem_gb for a model from your VRAM (dry-run).
+
+    Usage: zallama calibrate <model>
+
+    Queries total GPU VRAM, reads the model's GGUF architecture (layers, heads,
+    GQA, head_dim), and computes the largest context window whose KV-cache still
+    fits alongside the model weights and a compute reserve. Prints the
+    recommendation and the exact `zallama set` command — it writes nothing.
+    """
+    if not args:
+        _err("Usage: zallama calibrate <model>")
+        _info("Recommends a max ctx_size + mem_gb from your VRAM. Changes nothing.")
+        sys.exit(1)
+    model_name = args[0]
+
+    # 1. Locate the model entry (file path, size, current params).
+    r = _api("GET", "/api/models")
+    if r.status_code != 200:
+        _err(f"Failed to fetch models: {r.text}"); sys.exit(1)
+    entry = None
+    for m in r.json().get("models", []):
+        if m["name"] == model_name or model_name in m.get("aliases", []):
+            entry = m
+            break
+    if not entry:
+        _err(f"Model '{model_name}' not found in registry."); sys.exit(1)
+    if entry.get("modality", "text") != "text":
+        _err(f"Calibration targets text models; '{model_name}' is "
+             f"'{entry.get('modality')}'. ctx_size sizing doesn't apply.")
+        sys.exit(1)
+    if not entry.get("file_ok"):
+        _err(f"Model file is missing: {entry.get('file')}"); sys.exit(1)
+
+    # 2. VRAM budget.
+    total_vram = _query_total_vram_gb()
+    if total_vram is None:
+        _err("Could not query VRAM (no nvidia-smi or no NVIDIA GPU).")
+        _info("Calibration currently supports NVIDIA GPUs only.")
+        sys.exit(1)
+
+    file_gb = entry.get("file_size", 0) / 1e9
+    model_path = Path(entry["file"])
+
+    # 3. GGUF architecture.
+    try:
+        meta = _read_gguf_metadata(model_path)
+        dims = _gguf_arch_dims(meta)
+    except Exception as e:
+        dims = None
+        _info(f"Could not read GGUF metadata ({e}); using a size-only estimate.")
+
+    # 4. Budgeting. Leave a slice of VRAM for the OS/desktop + llama.cpp's
+    #    compute buffers (activations, graph). 88% usable is a safe default on
+    #    an 8GB laptop GPU where a few hundred MB are always taken by the DE.
+    usable = total_vram * 0.88
+    # Weights resident in VRAM ~= on-disk GGUF size (n_gpu_layers=99 => all on
+    # GPU). A small compute reserve scales with model size.
+    compute_reserve = max(0.4, file_gb * 0.10)
+    kv_budget_gb = usable - file_gb - compute_reserve
+
+    cur_ctx = entry.get("params", {}).get("ctx_size", 4096)
+
+    if dims and kv_budget_gb > 0:
+        # KV-cache bytes per token = 2 (K+V) * n_layer * n_head_kv * head_dim *
+        # bytes_per_elem. llama.cpp defaults to f16 KV (2 bytes).
+        bytes_per_tok = 2 * dims["n_layer"] * dims["n_head_kv"] * dims["head_dim"] * 2
+        max_ctx = int((kv_budget_gb * 1e9) / bytes_per_tok)
+        # Round down to a multiple of 1024 and clamp to the model's trained ctx.
+        max_ctx = (max_ctx // 1024) * 1024
+        if dims["train_ctx"]:
+            max_ctx = min(max_ctx, dims["train_ctx"])
+        max_ctx = max(max_ctx, 1024)
+        kv_at_ctx = bytes_per_tok * max_ctx / 1e9
+        est_mem_gb = round(file_gb + kv_at_ctx + compute_reserve, 1)
+        method = "GGUF KV-cache model"
+    else:
+        # Fallback: no arch dims — recommend a conservative ctx and estimate
+        # mem from file size only.
+        max_ctx = 4096 if file_gb < usable * 0.6 else 2048
+        est_mem_gb = round(file_gb * 1.2 + compute_reserve, 1)
+        method = "size-only estimate (GGUF dims unavailable)"
+
+    # 5. Report. Print only — never write.
+    print(f"\n{BOLD}{F_BLUE} Calibration for '{model_name}'{RESET}")
+    rows = [
+        ["GPU VRAM (total)", f"{total_vram:.1f} GB"],
+        ["Usable (88%)", f"{usable:.1f} GB"],
+        ["Model weights (file)", f"{file_gb:.1f} GB"],
+        ["Compute reserve", f"{compute_reserve:.1f} GB"],
+        ["KV-cache budget", f"{max(kv_budget_gb, 0):.1f} GB"],
+    ]
+    if dims:
+        rows.append(["Architecture",
+                     f"{dims['arch']} • {dims['n_layer']}L • "
+                     f"{dims['n_head_kv']} KV-heads • head_dim {dims['head_dim']}"])
+        if dims["train_ctx"]:
+            rows.append(["Trained ctx", f"{dims['train_ctx']}"])
+    rows += [
+        ["Current ctx_size", str(cur_ctx)],
+        [_color("→ Recommended ctx_size", F_TEAL + BOLD),
+         _color(str(max_ctx), F_TEAL + BOLD)],
+        [_color("→ Recommended mem_gb", F_TEAL + BOLD),
+         _color(str(est_mem_gb), F_TEAL + BOLD)],
+    ]
+    _print_table(["FIELD", "VALUE"], rows)
+    print(f"\n{F_DIM}  Method: {method}. KV-cache assumes f16 ("
+          f"halve mem with a quantized KV cache).{RESET}")
+
+    if kv_budget_gb <= 0:
+        _err(f"Weights ({file_gb:.1f} GB) + reserve exceed usable VRAM "
+             f"({usable:.1f} GB). This model may not fit fully on GPU; "
+             f"lower n_gpu_layers or use a smaller quant.")
+
+    print(f"\n{BOLD}  To apply (dry-run only — nothing was changed):{RESET}")
+    print(f"    {_color(f'zallama set {model_name} ctx_size={max_ctx} mem_gb={est_mem_gb}', CYAN)}")
+    print(f"\n{F_DIM}  Then `zallama reload {model_name}` (or it applies on next load).{RESET}\n")
+
+
+def cmd_show(args: list[str]):
+    """Show a single model's full configuration: zallama show <model>
+
+    `zallama list` is a summary table; this prints *everything* the registry
+    holds for one model — resolved file path, every param (merged view of the
+    effective launch params), aliases, artifacts, declared mem_gb, and live
+    status — so there is no longer a setting you cannot see from the CLI.
+    """
+    if not args:
+        _err("Usage: zallama show <model>")
+        sys.exit(1)
+    model_name = args[0]
+
+    r = _api("GET", "/api/models")
+    if r.status_code != 200:
+        _err(f"Failed to fetch models: {r.text}"); sys.exit(1)
+    entry = None
+    for m in r.json().get("models", []):
+        if m["name"] == model_name or model_name in m.get("aliases", []):
+            entry = m
+            break
+    if not entry:
+        _err(f"Model '{model_name}' not found in registry."); sys.exit(1)
+
+    size = entry.get("file_size", 0)
+    size_str = f"{size / 1e9:.2f} GB" if size else "?"
+    status = _color("● RUNNING", F_TEAL) if entry.get("running") else _color("○ stopped", F_DIM)
+    if entry.get("running") and entry.get("port"):
+        status += _color(f"  (port {entry['port']})", F_DIM)
+
+    print(f"\n{BOLD}{F_BLUE} Model: {entry['name']}{RESET}")
+    rows = [
+        ["Status", status],
+        ["Modality", entry.get("modality", "text")],
+        ["Backend", entry.get("backend", "llama-server")],
+        ["File", str(entry.get("file", "?"))
+            + ("" if entry.get("file_ok") else _color("  ✗ MISSING", F_RED))],
+        ["Size", size_str],
+        ["Declared mem_gb", str(entry.get("mem_gb", 0) or "(inferred)")],
+        ["Aliases", ", ".join(entry.get("aliases", [])) or _color("—", F_DIM)],
+        ["Description", entry.get("description", "") or _color("—", F_DIM)],
+    ]
+    artifacts = entry.get("artifacts") or {}
+    if artifacts:
+        rows.append(["Artifacts", ", ".join(f"{k}={v}" for k, v in artifacts.items())])
+    _print_table(["FIELD", "VALUE"], rows)
+
+    # Params: the per-model overrides. Show them explicitly so `set` targets are
+    # discoverable. Empty means "uses the server defaults" (see `zallama config`).
+    params = entry.get("params") or {}
+    print(f"\n{BOLD}  Parameters{RESET} {F_DIM}(overrides; unset keys use server defaults — see `zallama config`){RESET}")
+    if params:
+        prows = [[_color(k, F_TEAL), str(v)] for k, v in sorted(params.items())]
+        _print_table(["KEY", "VALUE"], prows)
+    else:
+        print(_color("    (none — this model uses the server default_params)", F_DIM))
+    print(f"\n{F_DIM}  Change a param: {RESET}{BOLD}zallama set {entry['name']} <key>=<value>{RESET}\n")
+
+
+# Human-readable description of every settable config key, keyed by dotted path.
+# Used by `zallama config` so the available knobs are discoverable from the CLI
+# rather than only from config.py / config.yaml comments.
+_CONFIG_KEY_HELP = {
+    "zallama.host": "Bind address (0.0.0.0 to expose on the network)",
+    "zallama.port": "Daemon port",
+    "zallama.models_dir": "Where models + registry.yaml live",
+    "zallama.logs_dir": "Where per-model logs are written",
+    "zallama.webui": "Serve the bundled web UI",
+    "zallama.log_level": "Logging verbosity (debug/info/warning/error)",
+    "zallama.api_key": "Bearer token required on /v1 and /api (empty = open)",
+    "zallama.request_timeout": "Non-streaming upstream proxy timeout (seconds)",
+    "llama_server.binary": "Explicit llama-server path (empty = auto-detect)",
+    "llama_server.port_start": "First backend port (instances use start, +1, ...)",
+    "llama_server.startup_timeout": "Seconds to wait for a backend /health",
+    "llama_server.idle_timeout": "Unload a model after N idle seconds (0 = never)",
+    "llama_server.max_loaded_models": "Max concurrent models; evicts LRU (0 = unlimited)",
+    "llama_server.mem_budget_gb": "VRAM/RAM budget; evicts LRU to fit (0 = unlimited)",
+    "llama_server.mem_init_gb": "Fallback per-model cost when mem_gb is unknown",
+    "llama_server.default_params": "Default launch params for every model (per-model overridable)",
+}
+
+
+def _flatten_cfg(cfg: dict, prefix: str = "") -> list[tuple[str, object]]:
+    """Flatten a nested config dict into [(dotted.key, value), ...] in order.
+
+    default_params is kept as a single node (rendered as a compact dict) rather
+    than exploded, because those are per-model-overridable defaults, not
+    top-level daemon settings.
+    """
+    out: list[tuple[str, object]] = []
+    for key, val in cfg.items():
+        dotted = f"{prefix}{key}"
+        if isinstance(val, dict) and dotted != "llama_server.default_params":
+            out.extend(_flatten_cfg(val, prefix=f"{dotted}."))
+        else:
+            out.append((dotted, val))
+    return out
+
+
+def cmd_config(args: list[str]):
+    """Show the effective merged configuration and every available key.
+
+    Resolves config through the daemon's own load_config() (the single source of
+    truth, same as `zallama paths`), so it shows exactly what the daemon uses —
+    defaults merged with config.yaml and env overrides — and works even when the
+    daemon is down. Prints only; to change a value, edit config.yaml and restart.
+    """
+    root = Path(__file__).resolve().parent
+    sys.path.insert(0, str(root))
+    try:
+        from server.config import load_config, _find_config_file
+        cfg = load_config()
+        config_file = _find_config_file()
+    except Exception as e:
+        _err(f"Could not load configuration: {e}")
+        sys.exit(1)
+
+    src = str(config_file) if config_file else "(none — using built-in defaults)"
+    print(f"\n{BOLD}{F_BLUE} Effective Zallama Configuration{RESET}")
+    print(f"{F_DIM}  Source: {src}{RESET}")
+
+    rows = []
+    for dotted, val in _flatten_cfg(cfg):
+        if dotted == "llama_server.default_params" and isinstance(val, dict):
+            shown = ", ".join(f"{k}={v}" for k, v in val.items())
+        elif val == "" or val is None:
+            shown = _color("(empty)", F_DIM)
+        else:
+            shown = str(val)
+        desc = _CONFIG_KEY_HELP.get(dotted, "")
+        rows.append([_color(dotted, F_TEAL), shown, _color(desc, F_DIM)])
+    _print_table(["KEY", "VALUE", "DESCRIPTION"], rows)
+
+    print(f"\n{F_DIM}  To change a value: edit {src if config_file else '~/.zallama/config.yaml'} "
+          f"and restart the daemon.{RESET}")
+    print(f"{F_DIM}  Per-model overrides of default_params: {RESET}{BOLD}zallama set <model> <key>=<value>{RESET}\n")
+
+
 import threading
 
 class Spinner:
@@ -447,16 +1000,23 @@ def cmd_run(args: list[str]):
             _info(f"  zallama transcribe {model} <audio-file.wav>")
             sys.exit(1)
 
-    # Print a beautiful Fluent 2 style banner header
-    print(_color("\n╭──────────────────────────────────────────────────────────╮", F_BLUE))
-    print(f"{_color('│', F_BLUE)}  {BOLD}{F_WHITE}ZALLAMA INTERACTIVE CHAT{RESET}                             {_color('│', F_BLUE)}")
-    model_line = f"Model: {model}"
-    padded_model = model_line + " " * (52 - len(model_line))
-    print(f"{_color('│', F_BLUE)}  {F_GRAY}{padded_model}{RESET} {_color('│', F_BLUE)}")
-    info_line = "Type message and press Enter. /exit to quit."
-    padded_info = info_line + " " * (52 - len(info_line))
-    print(f"{_color('│', F_BLUE)}  {F_DIM}{padded_info}{RESET} {_color('│', F_BLUE)}")
-    print(_color("╰──────────────────────────────────────────────────────────╯", F_BLUE))
+    # Width-aware Fluent 2 style banner header. The inner width adapts to the
+    # terminal (capped) so a long model name never overflows or misaligns the box.
+    inner = min(_term_width() - 4, 64)
+    bar = "─" * inner
+
+    def _banner_row(text: str, color: str) -> str:
+        pad = " " * max(0, inner - _visible_len(text))
+        return f"{_color('│', F_BLUE)} {color}{text}{pad}{RESET} {_color('│', F_BLUE)}"
+
+    def _trunc(s: str) -> str:
+        return s if len(s) <= inner else s[: inner - 1] + "…"
+
+    print(_color(f"\n╭{bar}╮", F_BLUE))
+    print(_banner_row("ZALLAMA INTERACTIVE CHAT", BOLD + F_WHITE))
+    print(_banner_row(_trunc(f"Model: {model}"), F_GRAY))
+    print(_banner_row(_trunc("Type a message and press Enter. /exit to quit, /clear to reset."), F_DIM))
+    print(_color(f"╰{bar}╯", F_BLUE))
 
     # First, ensure the model is loaded (may take a moment)
     print(_color(f"⏳ Loading model '{model}'...", F_ORANGE), end="", flush=True)
@@ -492,7 +1052,12 @@ def cmd_run(args: list[str]):
         spinner = Spinner("Thinking...")
         spinner.start()
 
-        full_response = ""
+        # Stream reasoning live (it's transient "thinking"), but accumulate the
+        # answer content and render it beautified once complete — markdown can't
+        # be cleanly formatted token-by-token, so we draft, then re-render.
+        beautify = sys.stdout.isatty()
+        reasoning_text = ""
+        content_text = ""
         try:
             r = requests.post(
                 f"{ZALLAMA_HOST}/v1/chat/completions",
@@ -500,7 +1065,7 @@ def cmd_run(args: list[str]):
                 stream=True,
                 timeout=None,
             )
-            
+
             if r.status_code != 200:
                 spinner.stop()
                 try:
@@ -513,24 +1078,17 @@ def cmd_run(args: list[str]):
             buffer = b""
             spinner_stopped = False
             in_reasoning = False
-            in_content = False
+            content_started = False
 
             done = False
             for chunk in r.iter_content(chunk_size=None):
-                if not spinner_stopped:
-                    spinner.stop()
-                    spinner_stopped = True
-
                 buffer += chunk
                 while b"\n" in buffer:
                     line_bytes, buffer = buffer.split(b"\n", 1)
                     line_str = line_bytes.decode("utf-8", errors="ignore").strip()
                     if not line_str:
                         continue
-                    if line_str.startswith("data: "):
-                        text = line_str[6:]
-                    else:
-                        text = line_str
+                    text = line_str[6:] if line_str.startswith("data: ") else line_str
 
                     if text == "[DONE]":
                         done = True
@@ -539,29 +1097,45 @@ def cmd_run(args: list[str]):
                     try:
                         chunk_json = json.loads(text)
                         delta = chunk_json["choices"][0]["delta"]
-                        
+
                         reasoning_content = delta.get("reasoning_content", "")
                         delta_content = delta.get("content", "")
-                        
+
                         if reasoning_content:
+                            if not spinner_stopped:
+                                spinner.stop(); spinner_stopped = True
                             if not in_reasoning:
                                 in_reasoning = True
                                 print(f"\n{BOLD}{F_PURPLE}🧠 Thinking Process:{RESET}")
                             print(_color(reasoning_content, F_DIM), end="", flush=True)
-                            full_response += reasoning_content
+                            reasoning_text += reasoning_content
                         elif delta_content:
+                            # Keep the spinner spinning while drafting the answer
+                            # so the user sees progress; the frame prints at the end.
                             if in_reasoning:
                                 in_reasoning = False
-                                print(f"\n")
-                            if not in_content:
-                                in_content = True
-                                print(f"\n{BOLD}{F_TEAL}🦙 Assistant:{RESET}")
-                            print(delta_content, end="", flush=True)
-                            full_response += delta_content
+                                print("\n")
+                            if not content_started:
+                                content_started = True
+                                if not beautify and not spinner_stopped:
+                                    spinner.stop(); spinner_stopped = True
+                                if not beautify:
+                                    print(f"\n{BOLD}{F_TEAL}🦙 Assistant:{RESET}")
+                            content_text += delta_content
+                            if not beautify:
+                                print(delta_content, end="", flush=True)
                     except Exception:
                         pass
                 if done:
                     break
+
+            if not spinner_stopped:
+                spinner.stop()
+
+            if beautify and content_text:
+                _print_framed(content_text, "🦙 Assistant", F_TEAL)
+            elif not beautify:
+                print()
 
         except Exception as e:
             spinner.stop()
@@ -571,8 +1145,9 @@ def cmd_run(args: list[str]):
             print(_color("\n[interrupted]", F_DIM))
 
         print()
-        if full_response:
-            history.append({"role": "assistant", "content": full_response})
+        full_response = reasoning_text + content_text
+        if content_text:
+            history.append({"role": "assistant", "content": content_text})
 
 
 def cmd_ps(args: list[str]):
@@ -587,7 +1162,7 @@ def cmd_ps(args: list[str]):
         return
 
     print(f"\n{BOLD}{F_BLUE} Running Model Processes{RESET}")
-    headers = ["MODEL", "PORT", "MEMORY", "UPTIME", "LAST USED"]
+    headers = ["MODEL", "PORT", "EST. MEM", "VRAM (real)", "UPTIME", "LAST USED"]
     rows = []
     now = time.time()
     for p in procs:
@@ -595,12 +1170,15 @@ def cmd_ps(args: list[str]):
         port = str(p["port"])
         mem_gb = p.get("mem_gb", 0)
         mem_str = f"{mem_gb:.1f} GB" if mem_gb else "?"
+        vram = p.get("vram_gb")
+        vram_str = f"{vram:.1f} GB" if vram else _color("—", F_DIM)
         uptime = int(now - p.get("started_at", now))
         last = int(now - p.get("last_used", now))
         rows.append([
             _color(name, F_TEAL + BOLD),
             _color(port, F_BLUE),
             mem_str,
+            vram_str,
             _fmt_duration(uptime),
             f"{_fmt_duration(last)} ago"
         ])
@@ -615,11 +1193,13 @@ def _print_mem_status(mem: dict):
     budget = mem.get("budget_gb") or 0
     loaded = mem.get("loaded_gb", 0)
     count = mem.get("loaded_count", 0)
+    vram = mem.get("vram_used_gb")
+    vram_str = f"  •  {vram:.1f} GB real VRAM" if vram else ""
     if budget > 0:
         head = mem.get("headroom_gb", 0)
-        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB / {budget:.1f} GB used  •  {head:.1f} GB free  •  {count} model(s) loaded", F_BLUE))
+        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB / {budget:.1f} GB est.  •  {head:.1f} GB free{vram_str}  •  {count} model(s) loaded", F_BLUE))
     elif count:
-        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB loaded across {count} model(s)", F_BLUE))
+        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB est. loaded across {count} model(s){vram_str}", F_BLUE))
 
 
 def cmd_load(args: list[str]):
@@ -929,8 +1509,8 @@ def _fmt_duration(secs: int) -> str:
 # Commands whose first positional argument is a registered model name. Used by
 # the completer to offer model names at the right position.
 _MODEL_ARG_COMMANDS = {
-    "set", "remove", "rm", "run", "load", "unload", "stop",
-    "reload", "logs", "pull",
+    "set", "show", "calibrate", "remove", "rm", "run", "load", "unload",
+    "stop", "reload", "logs", "pull",
 }
 
 
@@ -1003,6 +1583,9 @@ COMMANDS = {
     "ls": cmd_list,
     "add": cmd_add,
     "set": cmd_set,
+    "show": cmd_show,
+    "calibrate": cmd_calibrate,
+    "config": cmd_config,
     "remove": cmd_remove,
     "rm": cmd_remove,
     "run": cmd_run,
@@ -1043,6 +1626,9 @@ def main():
             ("list [--remote]", "List registered or remote preset models"),
             ("add <name> <file>", "Register a local .gguf model"),
             ("set <name> <k>=<v> ...", "Configure parameters for a registered model"),
+            ("show <name>", "Show a model's full configuration"),
+            ("calibrate <name>", "Recommend max ctx_size + mem_gb from your VRAM (dry-run)"),
+            ("config", "Show effective config + every available setting"),
             ("search <query>", "Search HuggingFace GGUF models"),
             ("pull <name>", "Pull a model from HF/unsloth"),
             ("remove <name>", "Remove a model from registry"),

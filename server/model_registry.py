@@ -146,6 +146,7 @@ class ModelRegistry:
         artifacts: dict | None = None,
         aliases: list[str] | None = None,
         mem_gb: float | None = None,
+        pinned: bool = False,
     ) -> dict:
         """Register (or replace) a model in registry.yaml."""
         entry: dict[str, Any] = {
@@ -163,6 +164,8 @@ class ModelRegistry:
             entry["artifacts"] = artifacts
         if mem_gb:
             entry["mem_gb"] = mem_gb
+        if pinned:
+            entry["pinned"] = True
         if params:
             entry["params"] = params
 

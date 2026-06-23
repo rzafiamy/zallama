@@ -97,6 +97,18 @@ class ProcessManager:
             self._model_locks[model_name] = lock
         return lock
 
+    @staticmethod
+    def _is_pinned(entry: dict) -> bool:
+        """A pinned model is pre-warmed at startup and never evicted.
+
+        Pinning exists for backends whose cold load is slow and not GPU-bound
+        (e.g. kokoro-server TTS loads ONNX models on CPU in tens of seconds). For
+        those, paying the load once at startup and keeping the instance resident
+        turns a 50s first-request into a sub-second one — at the cost of holding
+        the model's memory for the process lifetime, which is the intended trade.
+        """
+        return bool(entry.get("pinned"))
+
     async def get_or_start(self, model_name: str, entry: dict, model_path: Path) -> ModelInstance:
         """Return running instance for model, starting it if necessary.
 
@@ -135,6 +147,27 @@ class ProcessManager:
                 self._instances[model_name] = inst
             return inst
 
+    async def prewarm_pinned(self, registry) -> None:
+        """Start every pinned model so its slow cold load happens at boot.
+
+        Pinned models (e.g. kokoro-server TTS, whose ONNX load is a slow CPU
+        operation) are loaded here once, off the request path, and then kept
+        resident by the eviction exemptions. A failure to warm one model is
+        logged and skipped — it must not block startup or the other models.
+        """
+        pinned = [e for e in registry.list_models() if self._is_pinned(e)]
+        if not pinned:
+            return
+        logger.info(f"Pre-warming {len(pinned)} pinned model(s)...")
+        for entry in pinned:
+            name = entry["name"]
+            try:
+                model_path = registry.resolve_path(entry)
+                await self.get_or_start(name, entry, model_path)
+                logger.info(f"Pinned model '{name}' is warm")
+            except Exception as e:
+                logger.warning(f"Failed to pre-warm pinned model '{name}': {e}")
+
     async def stop(self, model_name: str) -> bool:
         """Stop a running model instance."""
         async with self._global_lock:
@@ -151,6 +184,7 @@ class ProcessManager:
 
     def list_running(self) -> list[dict]:
         """Return info about all running instances."""
+        by_pid = self._gpu_used_by_pid()
         result = []
         for name, inst in self._instances.items():
             result.append({
@@ -160,6 +194,10 @@ class ProcessManager:
                 "modality": inst.entry.get("modality", "text"),
                 "backend": inst.backend.name,
                 "mem_gb": round(inst.mem_gb, 2),
+                # Measured GPU VRAM via nvidia-smi; None for CPU-only backends
+                # or when nvidia-smi is unavailable. This is the *real*
+                # footprint, vs. mem_gb which is the launch-time estimate.
+                "vram_gb": self._vram_for_instance(inst, by_pid),
                 "started_at": inst.started_at,
                 "last_used": inst.last_used,
                 "alive": inst.is_alive(),
@@ -169,8 +207,12 @@ class ProcessManager:
     def memory_status(self) -> dict:
         """Loaded memory vs. configured budget (GB)."""
         used = round(self._loaded_mem_gb(), 2)
+        by_pid = self._gpu_used_by_pid()
+        measured = [self._vram_for_instance(i, by_pid) for i in self._instances.values()]
+        vram_total = round(sum(v for v in measured if v is not None), 2) if by_pid else None
         return {
             "loaded_gb": used,
+            "vram_used_gb": vram_total,  # measured GPU total; None if unavailable
             "budget_gb": self._mem_budget_gb,
             "headroom_gb": round(self._mem_budget_gb - used, 2) if self._mem_budget_gb > 0 else None,
             "max_loaded_models": self._max_loaded,
@@ -193,7 +235,8 @@ class ProcessManager:
             now = time.time()
             to_evict = [
                 name for name, inst in self._instances.items()
-                if (now - inst.last_used) > self._idle_timeout
+                if not self._is_pinned(inst.entry)
+                and (now - inst.last_used) > self._idle_timeout
             ]
             evicted = [self._instances.pop(name) for name in to_evict]
         for inst in evicted:
@@ -229,6 +272,71 @@ class ProcessManager:
     def _loaded_mem_gb(self) -> float:
         return sum(inst.mem_gb for inst in self._instances.values())
 
+    @staticmethod
+    def _gpu_used_by_pid() -> dict[int, float]:
+        """Map of {pid: VRAM GB} for GPU compute processes, via nvidia-smi.
+
+        Returns the *measured* per-process VRAM footprint so callers can show
+        real usage instead of (or alongside) the static launch-time estimate.
+        Empty dict if nvidia-smi is unavailable or no NVIDIA GPU is present —
+        CPU-only backends (e.g. kokoro ONNX) simply won't appear.
+        """
+        import shutil
+        import subprocess
+
+        if shutil.which("nvidia-smi") is None:
+            return {}
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                 "--format=csv,noheader,nounits"],
+                text=True, timeout=5,
+            )
+        except Exception:
+            return {}
+        result: dict[int, float] = {}
+        for line in out.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) != 2:
+                continue
+            try:
+                pid = int(parts[0])
+                mib = float(parts[1])
+            except ValueError:
+                continue
+            result[pid] = mib / 1024.0  # MiB -> GiB
+        return result
+
+    def _vram_for_instance(self, inst: ModelInstance, by_pid: dict[int, float]) -> float | None:
+        """Measured VRAM (GB) for one instance, or None if it has no GPU usage.
+
+        Matches the backend's own PID first; falls back to summing any GPU
+        process living in the instance's process group (a backend may spawn
+        worker PIDs under the same group created by os.setsid).
+        """
+        if not by_pid:
+            return None
+        try:
+            pid = inst.process.pid
+        except Exception:
+            return None
+        if pid in by_pid:
+            return round(by_pid[pid], 2)
+        try:
+            pgid = os.getpgid(pid)
+        except (ProcessLookupError, PermissionError):
+            return round(by_pid[pid], 2) if pid in by_pid else None
+        total = 0.0
+        matched = False
+        for gpu_pid, gb in by_pid.items():
+            try:
+                if os.getpgid(gpu_pid) == pgid:
+                    total += gb
+                    matched = True
+            except (ProcessLookupError, PermissionError):
+                continue
+        return round(total, 2) if matched else None
+
     async def _make_room_locked(self, incoming_cost: float):
         """Evict LRU instances until an incoming model fits both budgets.
 
@@ -245,8 +353,24 @@ class ProcessManager:
                 and (self._loaded_mem_gb() + incoming_cost) > self._mem_budget_gb
             )
 
+        def next_victim() -> str | None:
+            # LRU is first; skip pinned models — they are never evicted, even
+            # under capacity pressure. If only pinned models remain, give up and
+            # let the incoming model exceed the budget rather than killing a
+            # warm-pinned instance.
+            for name, inst in self._instances.items():
+                if not self._is_pinned(inst.entry):
+                    return name
+            return None
+
         while self._instances and (over_count() or over_mem()):
-            victim_name = next(iter(self._instances))  # LRU is first
+            victim_name = next_victim()
+            if victim_name is None:
+                logger.warning(
+                    "Capacity reached but all loaded models are pinned — "
+                    f"admitting incoming {incoming_cost:.1f}GB over budget."
+                )
+                break
             victim = self._instances.pop(victim_name)
             reason = "count" if over_count() else "memory"
             logger.info(
