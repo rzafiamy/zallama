@@ -133,17 +133,42 @@ SHORTHANDS = {
         "modality": "asr",
         "backend": "parakeet-server",
     },
+    # --- TTS / text-to-speech (kokoro.cpp) ----------------------------------
+    # kokoro-server loads a *directory* of files (two ONNX models + a voice
+    # pack) named by content hash, so this entry declares `files` (a list) and
+    # `dir` (the per-model subdirectory they're downloaded into) instead of a
+    # single `file`. The registry entry's `file` becomes that directory.
+    "kokoro:82m": {
+        "repo": "rleo/kokoro-onnx",
+        "dir": "kokoro-82m",
+        "files": [
+            "8fbea51ea711f2af382e88c833d9e288c6dc82ce5e98421ea61c058ce21a34cb",
+            "67f7dd6fed1742193e475a2fe9d060df315d9a6f434b966b15aec69fc2ed966c",
+            "c3bf79648d4d8b7874b992e1cc6275688e7881f0818ec6ed8e7255c32d05ba11",
+        ],
+        "description": "Kokoro-82M TTS (ONNX, 54 voices)",
+        "modality": "tts",
+        "backend": "kokoro-server",
+    },
 }
 
 
 class DownloadTask:
     def __init__(self, model_name: str, repo: str, filename: str, local_path: Path,
                  mmproj_filename: str | None = None,
-                 modality: str | None = None, backend: str | None = None):
+                 modality: str | None = None, backend: str | None = None,
+                 multi_files: list[str] | None = None, dest_dir: Path | None = None):
         self.model_name = model_name
         self.repo = repo
         self.filename = filename
         self.local_path = local_path
+        # Multi-file models (e.g. kokoro TTS) download a *set* of files into a
+        # single directory rather than one weights file. When `multi_files` is
+        # set, `dest_dir` is that directory and the registry entry's `file`
+        # points at it; `filename`/`local_path` are unused for the actual
+        # download in that case.
+        self.multi_files = multi_files
+        self.dest_dir = dest_dir
         # Non-text models (e.g. ASR/parakeet) carry an explicit modality+backend
         # so registration wires them to the right engine instead of the default
         # llama-server text path.
@@ -246,6 +271,7 @@ class DownloadManager:
     # default (None here means "let the registry default apply").
     _MODALITY_BACKEND = {
         "asr": "parakeet-server",
+        "tts": "kokoro-server",
     }
 
     @classmethod
@@ -317,6 +343,8 @@ class DownloadManager:
             filename = ""
             modality: str | None = None
             backend: str | None = None
+            multi_files: list[str] | None = None
+            multi_dir: str | None = None
             model_name = model_name_or_url.strip()
 
             # Format check: hf://repo/path/to/file.gguf or repo/path/to/file.gguf
@@ -328,10 +356,17 @@ class DownloadManager:
             if cleaned.lower() in SHORTHANDS:
                 sh = SHORTHANDS[cleaned.lower()]
                 repo = sh["repo"]
-                filename = sh["file"]
                 modality = sh.get("modality")
                 backend = sh.get("backend")
                 model_name = cleaned.lower()
+                # Multi-file shorthands (e.g. kokoro TTS) declare `files` + `dir`
+                # instead of a single `file`: a set of files downloaded into one
+                # directory that the backend loads as its --model.
+                if "files" in sh:
+                    multi_files = list(sh["files"])
+                    multi_dir = sh.get("dir", model_name.replace(":", "_"))
+                else:
+                    filename = sh["file"]
             else:
                 # Expecting format: username/repo/filename.gguf or username/repo
                 parts = cleaned.split("/")
@@ -368,22 +403,40 @@ class DownloadManager:
             if modality in (None, "text"):
                 mmproj_filename = await self._detect_mmproj(repo)
 
-            local_path = self.models_dir / filename
-            task = DownloadTask(
-                model_name, repo, filename, local_path, mmproj_filename,
-                modality=modality, backend=backend
-            )
+            if multi_files is not None:
+                # Multi-file model: a directory of files, no single weights path.
+                dest_dir = self.models_dir / multi_dir
+                local_path = dest_dir  # registry `file` is the directory itself
+                task = DownloadTask(
+                    model_name, repo, "", local_path,
+                    modality=modality, backend=backend,
+                    multi_files=multi_files, dest_dir=dest_dir,
+                )
+            else:
+                local_path = self.models_dir / filename
+                task = DownloadTask(
+                    model_name, repo, filename, local_path, mmproj_filename,
+                    modality=modality, backend=backend
+                )
             self._tasks[model_name] = task
 
             # Trigger background task
             asyncio.create_task(self._download_loop(task))
             msg = f"Started downloading '{model_name}' in the background."
-            if mmproj_filename:
+            if multi_files is not None:
+                msg += f" ({len(multi_files)} files → {multi_dir}/)"
+            elif mmproj_filename:
                 msg += f" (vision projector '{mmproj_filename}' included)"
             return model_name, msg
 
     async def _download_loop(self, task: DownloadTask):
         """Asynchronously download the model file using aria2c or concurrent Python requests."""
+        # Multi-file models (kokoro TTS) download a set of files into a directory
+        # and register that directory, on a separate, simpler path.
+        if task.multi_files is not None:
+            await self._download_multi(task)
+            return
+
         url = f"https://huggingface.co/{task.repo}/resolve/main/{task.filename}"
         logger.info(f"Downloading model '{task.model_name}' from {url}")
 
@@ -453,6 +506,88 @@ class DownloadManager:
                 if path.exists():
                     try:
                         os.remove(path)
+                    except Exception:
+                        pass
+
+    async def _download_multi(self, task: DownloadTask):
+        """Download a set of files into one directory and register the directory.
+
+        Used by multi-file models (kokoro TTS): the backend's --model is a
+        directory of files (named by content hash), so we fetch each file with a
+        plain streaming download, accumulate progress across them, then register
+        the directory as the model's `file`.
+        """
+        task.status = "downloading"
+        dest_dir = task.dest_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Sum the sizes up-front so the progress bar reflects the whole set.
+            total = 0
+            sizes: dict[str, int] = {}
+            async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+                for name in task.multi_files:
+                    url = f"https://huggingface.co/{task.repo}/resolve/main/{name}"
+                    head = await client.head(url)
+                    sz = int(head.headers.get("content-length", 0))
+                    sizes[name] = sz
+                    total += sz
+            task.total_bytes = total
+            task.completed_bytes = 0
+
+            async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
+                for name in task.multi_files:
+                    dest = dest_dir / name
+                    # Skip files already present at the expected size (resumable
+                    # across re-pulls without re-downloading the big ONNX models).
+                    if dest.exists() and sizes.get(name) and dest.stat().st_size == sizes[name]:
+                        task.completed_bytes += sizes[name]
+                        continue
+                    url = f"https://huggingface.co/{task.repo}/resolve/main/{name}"
+                    logger.info(f"Downloading '{name}' from {url}")
+                    temp = dest.with_suffix(dest.suffix + ".download")
+                    async with client.stream("GET", url) as resp:
+                        if resp.status_code != 200:
+                            raise RuntimeError(
+                                f"Failed to download '{name}': HTTP {resp.status_code}"
+                            )
+                        with open(temp, "wb") as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
+                                f.write(chunk)
+                                task.completed_bytes += len(chunk)
+                    temp.rename(dest)
+
+            task.status = "completed"
+            task.speed = 0
+            task.eta = 0
+
+            description = f"Downloaded from {task.repo}"
+            if task.model_name in SHORTHANDS:
+                description = SHORTHANDS[task.model_name]["description"]
+
+            # kokoro takes no launch flags; `voice`/`speed` are per-request
+            # synthesis knobs the /v1/audio/speech route injects from these
+            # params when the client omits them. speed=1.0 is normal rate.
+            self.registry.add_model(
+                name=task.model_name,
+                file_path=str(dest_dir),
+                description=description,
+                modality=task.modality,
+                backend=task.backend,
+                params={"voice": "af_heart", "speed": 1.0},
+            )
+            logger.info(f"Completed and registered model: {task.model_name}")
+
+        except Exception as e:
+            task.status = "failed"
+            task.error = str(e)
+            logger.error(f"Download failed for '{task.model_name}': {e}")
+            # Leave any complete files in place (re-pull resumes); clean partials.
+            for name in task.multi_files or []:
+                partial = dest_dir / (name + ".download")
+                if partial.exists():
+                    try:
+                        os.remove(partial)
                     except Exception:
                         pass
 

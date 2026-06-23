@@ -279,7 +279,7 @@ def cmd_add(args: list[str]):
     if len(filtered_args) < 2:
         _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--modality <modality>] [--backend <backend>]")
         _info("Supported modalities: text, asr, tts, image")
-        _info("Supported backends: llama-server, parakeet-server")
+        _info("Supported backends: llama-server, parakeet-server, kokoro-server")
         sys.exit(1)
         
     name, file_path = filtered_args[0], filtered_args[1]

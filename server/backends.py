@@ -215,11 +215,62 @@ class ParakeetServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# kokoro-server backend (TTS / text-to-speech)
+# ---------------------------------------------------------------------------
+class KokoroServerBackend:
+    """kokoro.cpp's server — OpenAI-compatible text-to-speech.
+
+    Exposes POST /v1/audio/speech (JSON in, WAV out) and GET /health. Build it
+    with build-ggml-kokoro.cpp.sh, which installs `kokoro-server` into ./bin/.
+
+    Note: kokoro's `--model` is a *resource directory* (not a single weights
+    file), because the model loads several files (two ONNX models + a voice
+    pack) by name. The downloader fetches them into one directory, and the
+    registry's `file` for a kokoro model points at that directory.
+    """
+    name = "kokoro-server"
+    binary_name = "kokoro-server"
+    modalities = {TTS}
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        # kokoro-server accepts only --model/--host/--port; it has no launch-time
+        # synthesis flags. `voice`/`speed` are per-request fields handled by the
+        # /v1/audio/speech route (which also applies registry-param defaults), so
+        # there is nothing else to forward here.
+        #
+        # kokoro-server wants the resource *directory*. The registry stores the
+        # directory as this model's `file`, so use it directly; only fall back to
+        # the parent if a file path was registered by mistake (and it isn't an
+        # existing directory).
+        resource_dir = model_path
+        if model_path.suffix and not model_path.is_dir():
+            resource_dir = model_path.parent
+        return [
+            binary,
+            "--model", str(resource_dir),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # Registry of backends
 # ---------------------------------------------------------------------------
 _BACKENDS: dict[str, Backend] = {
     LlamaServerBackend.name: LlamaServerBackend(),
     ParakeetServerBackend.name: ParakeetServerBackend(),
+    KokoroServerBackend.name: KokoroServerBackend(),
 }
 
 DEFAULT_BACKEND = LlamaServerBackend.name

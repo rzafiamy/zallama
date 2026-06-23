@@ -322,3 +322,50 @@ async def audio_transcriptions(
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type"),
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/audio/speech  (TTS)
+# ---------------------------------------------------------------------------
+@router.post("/audio/speech")
+async def audio_speech(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Proxy an OpenAI-style speech request to a TTS backend (kokoro-server).
+
+    JSON in, audio out: the client posts {model, input, voice, ...} and the
+    backend returns binary audio (WAV). We pick the instance from `model`, then
+    forward the JSON body and stream the audio bytes (and content type) back.
+    """
+    body = await request.json()
+    model_name = _model_id_from_body(body)
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="audio/speech")
+    inst.touch()
+
+    # Apply server-side defaults from the model's registry params for synthesis
+    # knobs the client omitted. kokoro-server takes `voice`/`speed` only in the
+    # request body (its CLI exposes no such launch flags), so this is the only
+    # place a registered default can take effect. An explicit client value wins.
+    try:
+        params = registry.get(model_name).get("params") or {}
+    except Exception:
+        params = {}
+    for key in ("voice", "speed"):
+        if key in params and key not in body:
+            body[key] = params[key]
+
+    upstream_url = f"{inst.base_url}/v1/audio/speech"
+    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+        try:
+            resp = await client.post(upstream_url, json=body)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"kokoro-server error: {e}")
+    # kokoro-server returns audio/wav on success, or a JSON error body otherwise;
+    # pass the upstream content and content type straight back to the client.
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type"),
+    )
