@@ -184,6 +184,7 @@ class ProcessManager:
 
     def list_running(self) -> list[dict]:
         """Return info about all running instances."""
+        by_pid = self._gpu_used_by_pid()
         result = []
         for name, inst in self._instances.items():
             result.append({
@@ -193,6 +194,10 @@ class ProcessManager:
                 "modality": inst.entry.get("modality", "text"),
                 "backend": inst.backend.name,
                 "mem_gb": round(inst.mem_gb, 2),
+                # Measured GPU VRAM via nvidia-smi; None for CPU-only backends
+                # or when nvidia-smi is unavailable. This is the *real*
+                # footprint, vs. mem_gb which is the launch-time estimate.
+                "vram_gb": self._vram_for_instance(inst, by_pid),
                 "started_at": inst.started_at,
                 "last_used": inst.last_used,
                 "alive": inst.is_alive(),
@@ -202,8 +207,12 @@ class ProcessManager:
     def memory_status(self) -> dict:
         """Loaded memory vs. configured budget (GB)."""
         used = round(self._loaded_mem_gb(), 2)
+        by_pid = self._gpu_used_by_pid()
+        measured = [self._vram_for_instance(i, by_pid) for i in self._instances.values()]
+        vram_total = round(sum(v for v in measured if v is not None), 2) if by_pid else None
         return {
             "loaded_gb": used,
+            "vram_used_gb": vram_total,  # measured GPU total; None if unavailable
             "budget_gb": self._mem_budget_gb,
             "headroom_gb": round(self._mem_budget_gb - used, 2) if self._mem_budget_gb > 0 else None,
             "max_loaded_models": self._max_loaded,
@@ -262,6 +271,71 @@ class ProcessManager:
 
     def _loaded_mem_gb(self) -> float:
         return sum(inst.mem_gb for inst in self._instances.values())
+
+    @staticmethod
+    def _gpu_used_by_pid() -> dict[int, float]:
+        """Map of {pid: VRAM GB} for GPU compute processes, via nvidia-smi.
+
+        Returns the *measured* per-process VRAM footprint so callers can show
+        real usage instead of (or alongside) the static launch-time estimate.
+        Empty dict if nvidia-smi is unavailable or no NVIDIA GPU is present —
+        CPU-only backends (e.g. kokoro ONNX) simply won't appear.
+        """
+        import shutil
+        import subprocess
+
+        if shutil.which("nvidia-smi") is None:
+            return {}
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                 "--format=csv,noheader,nounits"],
+                text=True, timeout=5,
+            )
+        except Exception:
+            return {}
+        result: dict[int, float] = {}
+        for line in out.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) != 2:
+                continue
+            try:
+                pid = int(parts[0])
+                mib = float(parts[1])
+            except ValueError:
+                continue
+            result[pid] = mib / 1024.0  # MiB -> GiB
+        return result
+
+    def _vram_for_instance(self, inst: ModelInstance, by_pid: dict[int, float]) -> float | None:
+        """Measured VRAM (GB) for one instance, or None if it has no GPU usage.
+
+        Matches the backend's own PID first; falls back to summing any GPU
+        process living in the instance's process group (a backend may spawn
+        worker PIDs under the same group created by os.setsid).
+        """
+        if not by_pid:
+            return None
+        try:
+            pid = inst.process.pid
+        except Exception:
+            return None
+        if pid in by_pid:
+            return round(by_pid[pid], 2)
+        try:
+            pgid = os.getpgid(pid)
+        except (ProcessLookupError, PermissionError):
+            return round(by_pid[pid], 2) if pid in by_pid else None
+        total = 0.0
+        matched = False
+        for gpu_pid, gb in by_pid.items():
+            try:
+                if os.getpgid(gpu_pid) == pgid:
+                    total += gb
+                    matched = True
+            except (ProcessLookupError, PermissionError):
+                continue
+        return round(total, 2) if matched else None
 
     async def _make_room_locked(self, incoming_cost: float):
         """Evict LRU instances until an incoming model fits both budgets.

@@ -968,7 +968,7 @@ def cmd_ps(args: list[str]):
         return
 
     print(f"\n{BOLD}{F_BLUE} Running Model Processes{RESET}")
-    headers = ["MODEL", "PORT", "MEMORY", "UPTIME", "LAST USED"]
+    headers = ["MODEL", "PORT", "EST. MEM", "VRAM (real)", "UPTIME", "LAST USED"]
     rows = []
     now = time.time()
     for p in procs:
@@ -976,12 +976,15 @@ def cmd_ps(args: list[str]):
         port = str(p["port"])
         mem_gb = p.get("mem_gb", 0)
         mem_str = f"{mem_gb:.1f} GB" if mem_gb else "?"
+        vram = p.get("vram_gb")
+        vram_str = f"{vram:.1f} GB" if vram else _color("—", F_DIM)
         uptime = int(now - p.get("started_at", now))
         last = int(now - p.get("last_used", now))
         rows.append([
             _color(name, F_TEAL + BOLD),
             _color(port, F_BLUE),
             mem_str,
+            vram_str,
             _fmt_duration(uptime),
             f"{_fmt_duration(last)} ago"
         ])
@@ -996,11 +999,13 @@ def _print_mem_status(mem: dict):
     budget = mem.get("budget_gb") or 0
     loaded = mem.get("loaded_gb", 0)
     count = mem.get("loaded_count", 0)
+    vram = mem.get("vram_used_gb")
+    vram_str = f"  •  {vram:.1f} GB real VRAM" if vram else ""
     if budget > 0:
         head = mem.get("headroom_gb", 0)
-        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB / {budget:.1f} GB used  •  {head:.1f} GB free  •  {count} model(s) loaded", F_BLUE))
+        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB / {budget:.1f} GB est.  •  {head:.1f} GB free{vram_str}  •  {count} model(s) loaded", F_BLUE))
     elif count:
-        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB loaded across {count} model(s)", F_BLUE))
+        print(_color(f"\n  📊 Memory usage: {loaded:.1f} GB est. loaded across {count} model(s){vram_str}", F_BLUE))
 
 
 def cmd_load(args: list[str]):
