@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import time
+import unicodedata
 import uuid
 from typing import Any, AsyncIterator
 
@@ -399,6 +401,23 @@ async def audio_transcriptions(
 # ---------------------------------------------------------------------------
 # POST /v1/audio/speech  (TTS)
 # ---------------------------------------------------------------------------
+def _sanitize_tts_input(text: str) -> str:
+    """Flatten text so kokoro doesn't truncate it.
+
+    kokoro's pipeline splits on `\\n+` and yields one chunk per line; stray
+    newlines or control chars can cut synthesis short at the first blank line.
+    Strip control characters (Cc/Cf/Co/Cs), drop underscores (mispronounced),
+    and collapse all whitespace runs to single spaces so the input is one line.
+    """
+    # Keep whitespace control chars (\n, \t, ...) as spaces so sentences don't
+    # run together; drop the rest (NUL, zero-width, other Cc/Cf/Co/Cs).
+    cleaned = "".join(
+        ch for ch in text
+        if ch.isspace() or unicodedata.category(ch)[0] != "C"
+    )
+    return re.sub(r"\s+", " ", cleaned.replace("_", "")).strip()
+
+
 @router.post("/audio/speech")
 async def audio_speech(
     request: Request,
@@ -412,6 +431,11 @@ async def audio_speech(
     forward the JSON body and stream the audio bytes (and content type) back.
     """
     body = await request.json()
+    # Collapse newlines/control chars so kokoro doesn't truncate at the first
+    # blank line (its pipeline splits on `\n+` and drops trailing chunks).
+    raw_input = body.get("input")
+    if isinstance(raw_input, str):
+        body["input"] = _sanitize_tts_input(raw_input)
     model_name = _model_id_from_body(body)
     inst = await _resolve_instance(model_name, pm, registry, endpoint="audio/speech")
     inst.touch()
