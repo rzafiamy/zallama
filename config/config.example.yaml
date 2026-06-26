@@ -35,6 +35,21 @@ llama_server:
     mlock: false
     no_mmap: false
 
+# --- RAG: built-in vector store (zvec) + reranking --------------------------
+# zvec is Zallama's in-process vector store, backed by the `zvec` library
+# (Alibaba, Apache-2.0) — an embedded HNSW vector DB, no external server. It
+# embeds and searches by calling Zallama's own /v1/embeddings, so it just needs
+# a default embedding model. Reranking runs a cross-encoder on llama-server in
+# --reranking mode and is exposed at POST /v1/rerank.
+rag:
+  embedding_model: ""   # registry name of the default embedding model for zvec
+  rerank_model: ""      # registry name of the default reranker (/v1/rerank, zvec rerank)
+  zvec_dir: "~/.zallama/zvec"   # vector store dir (one subdir per collection + manifest)
+  default_top_k: 5      # default number of results a zvec query returns
+# Env overrides: ZALLAMA_EMBEDDING_MODEL, ZALLAMA_RERANK_MODEL,
+#                ZALLAMA_ZVEC_DIR, ZALLAMA_RAG_TOP_K.
+# Register a reranker model with `modality: rerank, backend: rerank-server`.
+
 # --- Other backends (ASR / TTS / image) -------------------------------------
 # Additional modalities run on their own backend binary but reuse the lifecycle
 # settings above (port_start, startup_timeout, idle_timeout, the memory budget).

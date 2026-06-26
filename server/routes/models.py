@@ -20,8 +20,47 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..dependencies import get_pm, get_registry, get_dm
+from ..backends import (
+    ALL_MODALITIES,
+    DEFAULT_BACKEND,
+    TEXT,
+    default_backend_for,
+    validate_backend,
+)
 
 router = APIRouter(prefix="/api")
+
+
+def _resolve_modality_backend(modality: str, backend: str) -> tuple[str, str]:
+    """Validate modality + backend and fill in a backend from the modality.
+
+    If the caller specifies a non-text modality but leaves backend at the
+    default, pick the modality's backend automatically (e.g. rerank ->
+    rerank-server). An explicit backend is validated against the registry.
+    Raises HTTPException(400) on any invalid value.
+    """
+    modality = (modality or TEXT).strip().lower()
+    if modality not in ALL_MODALITIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown modality '{modality}'. "
+                   f"Supported: {', '.join(sorted(ALL_MODALITIES))}.",
+        )
+    backend = (backend or DEFAULT_BACKEND).strip()
+    # Auto-resolve the backend from the modality when the caller didn't override
+    # it. For text this keeps the llama-server default.
+    if backend == DEFAULT_BACKEND and modality != TEXT:
+        try:
+            resolved = default_backend_for(modality)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if resolved:
+            backend = resolved
+    try:
+        backend = validate_backend(backend)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return modality, backend
 
 
 class PullModelRequest(BaseModel):
@@ -95,13 +134,14 @@ async def add_model(req: AddModelRequest, registry=Depends(get_registry)):
             status_code=400,
             detail=f"File not found: {file_path}. Provide an absolute path to an existing .gguf file."
         )
+    modality, backend = _resolve_modality_backend(req.modality, req.backend)
     entry = registry.add_model(
         name=req.name,
         file_path=str(file_path),
         params=req.params or None,
         description=req.description,
-        modality=req.modality,
-        backend=req.backend,
+        modality=modality,
+        backend=backend,
         artifacts=req.artifacts or None,
         aliases=req.aliases or None,
         mem_gb=req.mem_gb or None,

@@ -27,6 +27,7 @@
 - [Vision (Multimodal) Models](#-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
+- [RAG: Reranking & the zvec Vector Store](#-rag-reranking--the-zvec-vector-store)
 - [OpenAI API Integration](#-openai-api-integration)
 - [Deployment (systemd)](#-deployment-systemd)
 - [Security](#-security)
@@ -38,7 +39,7 @@
 
 Zallama acts as a dynamic router and process manager for your local GGUF models. It exposes a single, unified endpoint that is fully OpenAI-compatible. When you request a model, Zallama starts the underlying backend (e.g. `llama-server`) in the background, routes your request, and automatically unloads the model after a period of inactivity to free up RAM/VRAM.
 
-Zallama is built around a **pluggable backend abstraction**: each model declares a `modality` (`text`, `asr`, and — by design — `tts`, `image`) and a `backend`. Text/chat/embeddings and **vision** (via an `mmproj` projector) ship on `llama-server`, and **speech-to-text (ASR)** ships on `parakeet-server` ([parakeet.cpp](https://github.com/mudler/parakeet.cpp)); the architecture is structured so additional modalities are added as new backends rather than as cross-cutting changes.
+Zallama is built around a **pluggable backend abstraction**: each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, and — by design — `image`) and a `backend`. Text/chat and **vision** (via an `mmproj` projector) ship on `llama-server`; **embeddings** and **reranking** run `llama-server` in `--embedding` / `--reranking` mode; **speech-to-text (ASR)** ships on `parakeet-server` ([parakeet.cpp](https://github.com/mudler/parakeet.cpp)) and **text-to-speech (TTS)** on `kokoro-server`. The architecture is structured so additional modalities are added as new backends rather than as cross-cutting changes.
 
 ---
 
@@ -50,6 +51,7 @@ Zallama is built around a **pluggable backend abstraction**: each model declares
 - **🔌 Full OpenAI /v1 API:** Full drop-in replacement for OpenAI endpoints (Chat, Completions, and Embeddings) with streaming supported via SSE.
 - **👁️ Vision (Multimodal):** Run vision models by attaching an `mmproj` projector artifact — image input flows through `/v1/chat/completions`.
 - **🎙️ Speech-to-Text (ASR):** Transcribe audio via `/v1/audio/transcriptions` (OpenAI-compatible) on the `parakeet-server` backend. Any input format (mp3/m4a/webm/flac/…) is auto-transcoded to WAV with `ffmpeg`. Multilingual models (e.g. Parakeet TDT v3, 25 European languages incl. French) supported.
+- **🔎 Built-in RAG:** Cross-encoder reranking at `/v1/rerank` plus **zvec**, an in-process HNSW vector store (the [`zvec`](https://zvec.org) library — no external DB server) with `/v1/zvec/*` ingest & semantic-search endpoints and a `zallama zvec` CLI.
 - **🧩 Pluggable Backends & Modalities:** Each model declares a `modality` and `backend`. A `Backend` abstraction isolates engine-specific logic, so new modalities (TTS, image generation) slot in as new backends. A modality guard returns a clear error if a model is used on an incompatible endpoint.
 - **🌐 Sleek Embedded Web UI:** Access model management, registration, loading/unloading, and streaming chat at `http://localhost:11435`.
 - **⚙️ Config-Driven Architecture:** Define global defaults and customize per-model parameters (context size, GPU layers offload, batching options) in simple YAML configurations.
@@ -161,7 +163,7 @@ list                   List registered models (alias: ls)
 add <name> <file>      Register a local .gguf model
 set <name> <k>=<v>...  Configure parameters for a registered model
 pull <name> [--type T] Pull model from HF / Unsloth presets (uses aria2c).
-                       --type sets modality (text|asr) for raw HF paths.
+                       --type sets modality (text|embedding|rerank|asr|tts) for raw HF paths.
 remove <name>          Remove a model from registry (alias: rm)
 run <name>             Interactive chat with a model (streams reasoning)
 ps                     Show running model processes
@@ -262,7 +264,7 @@ models:
 > **Applying changes:** The registry reloads from disk automatically, so adding, editing, or removing an entry takes effect on the next request — no daemon restart. The one exception is a model that's **already running**: its `llama-server` keeps the params it launched with, so run `zallama reload <name>` to restart it with the new params. (Changes to `config.yaml` are read only at startup and do require `systemctl restart zallama`.)
 
 Each entry may declare:
-- **`modality`** — `text` (default), `asr`, or the planned `tts` / `image`. Determines which endpoints the model may serve. Requests to a mismatched endpoint return a clear `400`.
+- **`modality`** — `text` (default), `embedding`, `rerank`, `asr`, `tts`, or the planned `image`. Determines which endpoints the model may serve. Requests to a mismatched endpoint return a clear `400`. (Legacy embedding models registered as `text` with `params: embedding: true` are still treated as `embedding` at runtime.)
 - **`backend`** — which engine runs the model (default `llama-server`). New backends resolve their own binary from `./bin/<name>`, `~/.zallama/bin/<name>`, or `PATH`.
 - **`artifacts`** — extra files beyond the primary GGUF (e.g. `mmproj` for vision, and — for future backends — vocoders, etc.). Paths are absolute or relative to `models_dir`.
 - **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size.
@@ -341,7 +343,82 @@ curl http://localhost:11435/v1/audio/transcriptions \
 
 Zallama separates the **generic process lifecycle** (spawn, health-check, port assignment, LRU eviction, kill) from **engine-specific logic** (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a `Backend` abstraction in [`server/backends.py`](server/backends.py).
 
-This is the seam for new modalities. `LlamaServerBackend` covers text, chat, embeddings, and vision; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`). Adding TTS or image generation means adding a new `Backend` subclass and the matching endpoint proxy — no changes to the process manager or registry schema. The remaining OpenAI endpoints (`/v1/audio/speech`, `/v1/images/generations`) are already mapped in the modality guard, awaiting their backends.
+This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`). Adding image generation means adding a new `Backend` subclass and the matching endpoint proxy — no changes to the process manager or registry schema. The `/v1/images/generations` endpoint is already mapped in the modality guard, awaiting its backend.
+
+---
+
+## 🔎 RAG: Reranking & the zvec Vector Store
+
+Zallama ships everything needed for retrieval-augmented generation locally: an embedding model (already supported via `/v1/embeddings`), a **reranker**, and **zvec** — an in-process vector store. No external vector database server to run.
+
+> **zvec** is backed by the [`zvec`](https://zvec.org) library (Alibaba, Apache-2.0), an embedded HNSW-indexed vector database. It runs inside the Zallama daemon — each collection is a directory under `rag.zvec_dir` (default `~/.zallama/zvec`), tracked by a small `collections.json` manifest. Install it with the rest of the deps (`pip install -r requirements.txt`).
+
+### One-command setup
+
+`zallama pull` has shorthands for an embedding model and a reranker that write the correct registry entries (the `embedding-server` and `rerank-server` backends) for you:
+
+```bash
+zallama pull nomic-embed:v1.5      # embedding model → /v1/embeddings
+zallama pull bge-reranker:v2-m3    # reranker        → /v1/rerank
+```
+
+Then point the `rag` config block at them (or use the matching env vars):
+
+```yaml
+rag:
+  embedding_model: "nomic-embed:v1.5"
+  rerank_model: "bge-reranker:v2-m3"
+```
+
+### Reranking — `POST /v1/rerank`
+
+Reranking scores how relevant each document is to a query using a cross-encoder model (e.g. `bge-reranker-v2-m3`). It runs on `llama-server` in `--reranking` mode via the `rerank-server` backend. Register a reranker with `modality: rerank, backend: rerank-server` in `models/registry.yaml`, then:
+
+```bash
+curl http://localhost:11435/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bge-reranker-v2-m3",
+    "query": "How do I unload a model?",
+    "documents": ["zallama unload <name> stops a model", "zallama pull fetches a model"],
+    "top_n": 2,
+    "return_documents": true
+  }'
+```
+
+Returns a Cohere/Jina-style `{ "results": [{ "index", "relevance_score", "document"? }] }`, sorted by score.
+
+### zvec vector store
+
+zvec stores documents and their embeddings (HNSW index, persisted under `rag.zvec_dir`). It embeds and searches by calling Zallama's own `/v1/embeddings`, so it just needs a default embedding model — set `rag.embedding_model` (or `ZALLAMA_EMBEDDING_MODEL`). A query can optionally rerank its candidates.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/zvec/collections` | Create a collection (`name`, optional `embedding_model`, `dim`) |
+| `GET /v1/zvec/collections` | List collections |
+| `DELETE /v1/zvec/collections/{name}` | Delete a collection |
+| `POST /v1/zvec/{name}/upsert` | Add/replace documents (auto-embedded) |
+| `POST /v1/zvec/{name}/query` | Semantic search (`query`, `top_k`, `filter`, optional `rerank_model`) |
+| `POST /v1/zvec/{name}/delete` | Delete documents by `ids` |
+
+From the CLI:
+
+```bash
+zallama zvec create notes                       # uses rag.embedding_model
+zallama zvec upsert notes ./docs.txt            # one document per line (or a JSON array)
+zallama zvec query notes "how to unload a model" --top-k 3 --rerank bge-reranker-v2-m3
+zallama zvec collections
+```
+
+Or over HTTP:
+
+```bash
+curl http://localhost:11435/v1/zvec/notes/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "how to unload a model", "top_k": 3, "rerank_model": "bge-reranker-v2-m3"}'
+```
+
+Configure defaults in the `rag` block of `config/config.yaml` (`embedding_model`, `rerank_model`, `zvec_dir`, `default_top_k`).
 
 ---
 

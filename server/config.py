@@ -48,6 +48,15 @@ DEFAULTS: dict[str, Any] = {
             "no_mmap": False,
         },
     },
+    # Retrieval-Augmented Generation: the built-in "zvec" vector store and the
+    # default models it leans on. zvec embeds/queries by calling Zallama's own
+    # /v1/embeddings (embedding_model) and can rerank with rerank_model.
+    "rag": {
+        "embedding_model": "",   # default model for zvec embed/query (registry name)
+        "rerank_model": "",      # default model for /v1/rerank and zvec rerank
+        "zvec_dir": "~/.zallama/zvec",  # SQLite vector store location
+        "default_top_k": 5,      # default candidates returned by a zvec query
+    },
 }
 
 
@@ -98,6 +107,10 @@ def load_config() -> dict[str, Any]:
         "ZALLAMA_LOG_LEVEL": ("zallama", "log_level"),
         "LLAMA_SERVER_BINARY": ("llama_server", "binary"),
         "LLAMA_GPU_LAYERS": ("llama_server", "default_params", "n_gpu_layers"),
+        "ZALLAMA_EMBEDDING_MODEL": ("rag", "embedding_model"),
+        "ZALLAMA_RERANK_MODEL": ("rag", "rerank_model"),
+        "ZALLAMA_ZVEC_DIR": ("rag", "zvec_dir"),
+        "ZALLAMA_RAG_TOP_K": ("rag", "default_top_k"),
     }
     for env_key, path in env_map.items():
         val = os.environ.get(env_key)
@@ -114,10 +127,12 @@ def load_config() -> dict[str, Any]:
     # Resolve paths
     cfg["zallama"]["models_dir"] = str(_expand_path(cfg["zallama"]["models_dir"]))
     cfg["zallama"]["logs_dir"] = str(_expand_path(cfg["zallama"]["logs_dir"]))
+    cfg["rag"]["zvec_dir"] = str(_expand_path(cfg["rag"]["zvec_dir"]))
 
     # Ensure directories exist
     Path(cfg["zallama"]["models_dir"]).mkdir(parents=True, exist_ok=True)
     Path(cfg["zallama"]["logs_dir"]).mkdir(parents=True, exist_ok=True)
+    Path(cfg["rag"]["zvec_dir"]).mkdir(parents=True, exist_ok=True)
 
     return cfg
 

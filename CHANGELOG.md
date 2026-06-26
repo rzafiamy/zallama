@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **RAG support**: retrieval-augmented generation built into Zallama.
+  - **Reranking**: `RerankServerBackend` runs `llama-server` in `--reranking` mode (cross-encoder
+    relevance scoring) behind a new `POST /v1/rerank` endpoint (Cohere/Jina-style response).
+    Register reranker models with `modality: rerank, backend: rerank-server`.
+  - **zvec vector store**: an in-process vector store backed by the [`zvec`](https://zvec.org)
+    library (Alibaba, Apache-2.0) — an embedded HNSW vector DB, no external server. New
+    `POST/GET/DELETE /v1/zvec/collections` and per-collection `upsert` / `query` / `delete`
+    endpoints. Each collection is a directory under `rag.zvec_dir` (tracked by a manifest). zvec
+    embeds and searches by calling Zallama's own `/v1/embeddings`, and a query can optionally
+    rerank its candidates with a reranker model.
+  - **`rag` config block + env overrides**: `rag.embedding_model`, `rag.rerank_model`,
+    `rag.zvec_dir`, `rag.default_top_k` (env: `ZALLAMA_EMBEDDING_MODEL`, `ZALLAMA_RERANK_MODEL`,
+    `ZALLAMA_ZVEC_DIR`, `ZALLAMA_RAG_TOP_K`).
+  - **`zallama zvec` CLI**: `collections`, `create`, `drop`, `upsert <file>`, and
+    `query <text> [--top-k] [--rerank]` subcommands.
+
+### Changed
+- **Embeddings are now a first-class modality**: `modality: embedding` on the new
+  `EmbeddingServerBackend` (`llama-server --embedding`) serves `/v1/embeddings`, symmetric with
+  `rerank`. The modality guard now protects `/v1/embeddings` (a chat model can't serve it, and an
+  embedding model can't serve `/v1/chat/completions`). Legacy embedding models registered as
+  `text` with `params: {embedding: true}` keep working — they are treated as `embedding` at
+  runtime. The `nomic-embed:v1.5` shorthand now writes `modality: embedding`.
+- **Configurable modality**: `zallama set <model> modality=<text|embedding|rerank|asr|tts|image>`
+  now reclassifies an existing model, auto-selecting the matching backend (and `backend=`
+  overrides the engine). `/api/models/add` validates modality and backend against the registered
+  set and fills in the backend from the modality. The modality→backend mapping is centralized in
+  `server/backends.py` (`MODALITY_BACKEND` / `default_backend_for`) and reused by the downloader.
+
 ## [1.1.0] - 2026-06-23
 
 ### Added

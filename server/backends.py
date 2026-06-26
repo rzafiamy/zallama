@@ -10,7 +10,9 @@ particular inference engine lives here.
 This is the seam that lets new modalities (TTS, ASR, image generation) be added
 as *new Backend subclasses* rather than as cross-cutting changes:
 
-  - LlamaServerBackend    → text / chat / embeddings / vision (llama-server)
+  - LlamaServerBackend    → text / chat / vision      (llama-server)
+  - EmbeddingServerBackend→ embeddings (llama-server --embedding)
+  - RerankServerBackend   → rerank     (llama-server --reranking)
   - ParakeetServerBackend → ASR        (parakeet-server)
   - (future) TtsBackend       → TTS        (llama-tts / a tts server)
   - (future) DiffusionBackend → image gen  (sd-server / llama-diffusion)
@@ -38,18 +40,65 @@ TEXT = "text"
 ASR = "asr"
 TTS = "tts"
 IMAGE = "image"
+# Reranking (cross-encoder relevance scoring). Runs on llama-server in
+# --reranking mode, which is a *different launch mode* than a chat/embedding
+# model, so it is modelled as its own modality (a reranker model can serve
+# /v1/rerank but not /v1/chat/completions, and vice-versa).
+RERANK = "rerank"
+# Embeddings. Runs on llama-server with --embedding, which (like --reranking) is
+# a distinct launch mode: an embedding model serves /v1/embeddings but not
+# /v1/chat/completions. Modelling it as its own modality keeps it symmetric with
+# rerank and lets the modality guard protect the endpoint.
+EMBEDDING = "embedding"
 
-ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE}
+ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING}
+
+# Default backend for each modality. This is the canonical "which engine serves
+# this modality" map; the downloader and the model-management API both resolve
+# through default_backend_for() so a modality is wired to its backend in exactly
+# one place. TEXT maps to None so a text entry stays clean and uses the registry
+# default (llama-server). IMAGE has no backend yet (awaiting a diffusion backend).
+MODALITY_BACKEND: dict[str, str | None] = {
+    TEXT: None,                       # llama-server default (also vision)
+    EMBEDDING: "embedding-server",
+    RERANK: "rerank-server",
+    ASR: "parakeet-server",
+    TTS: "kokoro-server",
+    IMAGE: None,                      # no backend implemented yet
+}
+
+
+def default_backend_for(modality: str | None) -> str | None:
+    """Return the default backend name for a modality, validating the modality.
+
+    Returns None for text (let the registry default apply). Raises ValueError
+    for an unknown modality, or one whose backend is not implemented yet.
+    """
+    m = (modality or TEXT).strip().lower()
+    if m not in ALL_MODALITIES:
+        raise ValueError(
+            f"Unknown modality '{m}'. Supported: {', '.join(sorted(ALL_MODALITIES))}."
+        )
+    if m not in MODALITY_BACKEND or (m != TEXT and MODALITY_BACKEND[m] is None):
+        raise ValueError(f"Modality '{m}' has no backend implemented yet.")
+    return MODALITY_BACKEND[m]
+
+
+def validate_backend(name: str | None) -> str:
+    """Validate a backend name against the registry, returning the resolved name."""
+    return get_backend(name).name
+
 
 # Maps an OpenAI-style endpoint to the modality required to serve it.
 # Used by the routes layer to reject mismatches with a clear error.
 ENDPOINT_MODALITY = {
     "chat/completions": TEXT,
     "completions": TEXT,
-    "embeddings": TEXT,
+    "embeddings": EMBEDDING,
     "audio/transcriptions": ASR,
     "audio/speech": TTS,
     "images/generations": IMAGE,
+    "rerank": RERANK,
 }
 
 
@@ -167,6 +216,82 @@ class LlamaServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# llama-server backend in reranking mode (cross-encoder relevance scoring)
+# ---------------------------------------------------------------------------
+class RerankServerBackend(LlamaServerBackend):
+    """llama-server launched in reranking mode (--reranking / --pooling rank).
+
+    Reuses the llama-server binary and all of LlamaServerBackend's param/flag
+    handling, but is a distinct backend so it appears separately in `ps`, slots
+    into the LRU/eviction lifecycle on its own, and is matched to the RERANK
+    modality. It exposes POST /v1/rerank (and /rerank) upstream.
+
+    A reranker GGUF (e.g. bge-reranker-v2-m3) must be a cross-encoder model;
+    --reranking enables the rank pooling head and the /rerank route.
+    """
+    name = "rerank-server"
+    binary_name = "llama-server"
+    modalities = {RERANK}
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = super().build_args(
+            binary, port, model_path, entry, merged_params, artifacts
+        )
+        # Enable reranking. --reranking turns on rank pooling and the /rerank
+        # endpoint; it is mutually exclusive with --embedding upstream, so the
+        # registry should not set `embedding` on a rerank model.
+        if "--reranking" not in args:
+            args.append("--reranking")
+        return args
+
+
+# ---------------------------------------------------------------------------
+# llama-server backend in embedding mode (vector embeddings)
+# ---------------------------------------------------------------------------
+class EmbeddingServerBackend(LlamaServerBackend):
+    """llama-server launched in embedding mode (--embedding).
+
+    Like RerankServerBackend, this reuses the llama-server binary and param
+    handling but is a distinct backend tied to the EMBEDDING modality, so it
+    shows up separately in `ps` and the modality guard can keep chat traffic off
+    an embedding model (and vice-versa). It serves POST /v1/embeddings.
+
+    --embedding is forced on here, so an embedding model needs no `embedding:
+    true` param (legacy entries that still set it are harmless — the flag is
+    de-duplicated below).
+    """
+    name = "embedding-server"
+    binary_name = "llama-server"
+    modalities = {EMBEDDING}
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = super().build_args(
+            binary, port, model_path, entry, merged_params, artifacts
+        )
+        # --embedding enables the embeddings endpoint; mutually exclusive with
+        # --reranking upstream. De-dup in case a legacy entry set embedding=true.
+        if "--embedding" not in args:
+            args.append("--embedding")
+        return args
+
+
+# ---------------------------------------------------------------------------
 # parakeet-server backend (ASR / speech-to-text)
 # ---------------------------------------------------------------------------
 class ParakeetServerBackend:
@@ -269,6 +394,8 @@ class KokoroServerBackend:
 # ---------------------------------------------------------------------------
 _BACKENDS: dict[str, Backend] = {
     LlamaServerBackend.name: LlamaServerBackend(),
+    EmbeddingServerBackend.name: EmbeddingServerBackend(),
+    RerankServerBackend.name: RerankServerBackend(),
     ParakeetServerBackend.name: ParakeetServerBackend(),
     KokoroServerBackend.name: KokoroServerBackend(),
 }

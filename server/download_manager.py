@@ -116,6 +116,25 @@ SHORTHANDS = {
         "file": "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
         "description": "DeepSeek R1 Distilled Qwen 1.5B (Q4_K_M)"
     },
+    # --- RAG: embeddings & reranking ----------------------------------------
+    # Embedding models run llama-server in --embedding mode via the
+    # embedding-server backend and serve /v1/embeddings.
+    "nomic-embed:v1.5": {
+        "repo": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+        "file": "nomic-embed-text-v1.5.Q4_K_M.gguf",
+        "description": "Nomic Embed Text v1.5 (embeddings, Q4_K_M)",
+        "modality": "embedding",
+        "backend": "embedding-server",
+    },
+    # Rerankers are cross-encoders; they run llama-server in --reranking mode via
+    # the rerank-server backend and serve /v1/rerank.
+    "bge-reranker:v2-m3": {
+        "repo": "gpustack/bge-reranker-v2-m3-GGUF",
+        "file": "bge-reranker-v2-m3-Q4_K_M.gguf",
+        "description": "BGE Reranker v2-m3 (rerank, multilingual, Q4_K_M)",
+        "modality": "rerank",
+        "backend": "rerank-server",
+    },
     # --- ASR / speech-to-text (parakeet.cpp) --------------------------------
     # These run on parakeet-server, not llama-server, so they carry an explicit
     # modality/backend that the downloader propagates into the registry entry.
@@ -267,30 +286,21 @@ class DownloadManager:
         """A multimodal projector (vision) gguf, by HF naming convention."""
         return "mmproj" in filename.lower()
 
-    # Which backend serves each non-text modality. Text uses the llama-server
-    # default (None here means "let the registry default apply").
-    _MODALITY_BACKEND = {
-        "asr": "parakeet-server",
-        "tts": "kokoro-server",
-    }
-
     @classmethod
     def _backend_for_modality(cls, modality: str) -> tuple[str | None, str | None]:
         """Map an explicit modality to (modality, backend).
 
-        Text is the default: it returns (None, None) so the registry entry stays
-        clean and runs on llama-server. A known non-text modality selects its
-        backend; an unknown value is rejected with a clear error.
+        Delegates to the canonical map in backends.py. Text returns (None, None)
+        so the registry entry stays clean and runs on llama-server; a known
+        non-text modality selects its backend; an unknown/unsupported value is
+        rejected with a clear error.
         """
+        from .backends import TEXT, default_backend_for
+
         m = (modality or "").strip().lower()
-        if m in ("", "text"):
+        if m in ("", TEXT):
             return None, None
-        backend = cls._MODALITY_BACKEND.get(m)
-        if backend is None:
-            raise ValueError(
-                f"Unsupported --type '{modality}'. "
-                f"Supported: text, {', '.join(sorted(cls._MODALITY_BACKEND))}."
-            )
+        backend = default_backend_for(m)  # raises ValueError if unknown/unsupported
         return m, backend
 
     @classmethod
@@ -474,13 +484,20 @@ class DownloadManager:
             if task.model_name in SHORTHANDS:
                 description = SHORTHANDS[task.model_name]["description"]
 
-            # Params are backend-specific: llama-server text models want
-            # ctx_size/n_gpu_layers, while parakeet-server (ASR) does not accept
-            # those flags. Pick defaults from the model's modality.
-            if task.modality and task.modality != "text":
-                params = {"threads": 4}
-            else:
+            # Params are backend-specific. The llama-server-based backends
+            # (text, embedding-server, rerank-server) take ctx/gpu flags; the
+            # ASR/TTS backends do not accept those flags. Pick defaults from the
+            # backend rather than the modality so all llama-server variants match.
+            _llama_backends = {"llama-server", "embedding-server", "rerank-server"}
+            if (task.backend or "llama-server") in _llama_backends:
                 params = {"ctx_size": 4096, "n_gpu_layers": 99}
+            else:
+                params = {"threads": 4}
+
+            # A shorthand may declare its own params (e.g. an embedding model that
+            # must launch with `embedding: true`). These override the defaults.
+            if task.model_name in SHORTHANDS:
+                params.update(SHORTHANDS[task.model_name].get("params") or {})
 
             self.registry.add_model(
                 name=task.model_name,

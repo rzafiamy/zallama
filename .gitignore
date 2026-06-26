@@ -32,3 +32,5 @@ build/
 # Configuration overrides (prevent pushing credentials/local configurations)
 config/config.yaml
 models/registry.yaml
+
+dist.zip

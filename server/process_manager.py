@@ -417,8 +417,11 @@ class ProcessManager:
     ) -> ModelInstance:
         """Spawn a new inference server process for the model's backend."""
         from .dependencies import get_registry  # local import to avoid cycle
+        from .model_registry import ModelRegistry  # local import to avoid cycle
 
-        backend = get_backend(entry.get("backend"))
+        # Resolve via backend_of so legacy embedding entries (text +
+        # params.embedding=true) map onto the embedding-server backend.
+        backend = get_backend(ModelRegistry.backend_of(entry))
         binary = self._binary_for(backend)
         artifacts = get_registry().resolve_artifacts(entry)
         merged = self._merged_params(entry)

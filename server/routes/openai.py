@@ -7,6 +7,7 @@ Implements:
   POST /v1/chat/completions   (streaming + non-streaming)
   POST /v1/completions        (streaming + non-streaming)
   POST /v1/embeddings
+  POST /v1/rerank                 (cross-encoder reranking, llama-server --reranking)
   POST /v1/audio/transcriptions   (ASR — multipart upload, parakeet-server)
 """
 from __future__ import annotations
@@ -258,6 +259,77 @@ async def embeddings(
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
     return JSONResponse(content=resp.json(), status_code=resp.status_code)
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/rerank  (cross-encoder reranking)
+# ---------------------------------------------------------------------------
+@router.post("/rerank")
+async def rerank(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Rerank documents against a query with a cross-encoder model.
+
+    Body: {model, query, documents: [str | {text}], top_n?, return_documents?}.
+    Proxies to llama-server's /v1/rerank (RerankServerBackend launches it with
+    --reranking). Returns a Cohere/Jina-style response:
+
+        {"model", "results": [{"index", "relevance_score", "document"?}], "usage"}
+
+    Document objects are accepted for convenience and normalized to strings,
+    since llama-server's /rerank takes a flat list of document strings.
+    """
+    body = await request.json()
+    model_name = _model_id_from_body(body)
+
+    query = body.get("query")
+    if not query or not isinstance(query, str):
+        raise HTTPException(status_code=400, detail="'query' (string) is required")
+
+    raw_docs = body.get("documents")
+    if not isinstance(raw_docs, list) or not raw_docs:
+        raise HTTPException(
+            status_code=400, detail="'documents' must be a non-empty list"
+        )
+    documents = [d.get("text", "") if isinstance(d, dict) else str(d) for d in raw_docs]
+
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="rerank")
+    inst.touch()
+
+    upstream_url = f"{inst.base_url}/v1/rerank"
+    upstream_body = {"model": model_name, "query": query, "documents": documents}
+    if "top_n" in body:
+        upstream_body["top_n"] = body["top_n"]
+
+    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+        try:
+            resp = await client.post(upstream_url, json=upstream_body)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
+
+    if resp.status_code != 200:
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+
+    # llama-server returns {"results": [{"index", "relevance_score"}], ...}.
+    # Normalize to a stable shape, sort by score desc, honour top_n and
+    # return_documents (off by default, matching Cohere/Jina).
+    data = resp.json()
+    results = data.get("results", [])
+    norm = [
+        {"index": r["index"], "relevance_score": r.get("relevance_score", r.get("score", 0.0))}
+        for r in results
+    ]
+    norm.sort(key=lambda r: r["relevance_score"], reverse=True)
+    top_n = body.get("top_n")
+    if isinstance(top_n, int) and top_n > 0:
+        norm = norm[:top_n]
+    if body.get("return_documents"):
+        for r in norm:
+            r["document"] = {"text": documents[r["index"]]}
+
+    return JSONResponse(content={"model": model_name, "results": norm, "usage": data.get("usage", {})})
 
 
 # ---------------------------------------------------------------------------

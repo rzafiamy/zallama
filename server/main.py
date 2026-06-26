@@ -34,6 +34,7 @@ from server import dependencies
 from server.routes import openai as openai_routes
 from server.routes import models as model_routes
 from server.routes import health as health_routes
+from server.routes import zvec as zvec_routes
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +76,11 @@ async def lifespan(app: FastAPI):
 
     from server.download_manager import DownloadManager
     dm = DownloadManager(registry, cfg["zallama"]["models_dir"])
+
+    # zvec vector store (RAG). Single SQLite file under rag.zvec_dir; the routes
+    # layer embeds/queries through the existing /v1 models.
+    from server.zvec.store import init_store
+    init_store(cfg["rag"]["zvec_dir"])
 
     dependencies.set_pm(pm)
     dependencies.set_registry(registry)
@@ -157,6 +163,7 @@ def create_app(cfg: dict) -> FastAPI:
     # Routes
     app.include_router(health_routes.router)
     app.include_router(openai_routes.router)
+    app.include_router(zvec_routes.router)
     app.include_router(model_routes.router)
 
     # Embedded Web UI

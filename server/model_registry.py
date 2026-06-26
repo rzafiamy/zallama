@@ -27,7 +27,10 @@ from typing import Any
 
 import yaml
 
-from .backends import DEFAULT_BACKEND, TEXT
+from .backends import DEFAULT_BACKEND, EMBEDDING, TEXT
+from .backends import EmbeddingServerBackend
+
+EMBEDDING_BACKEND = EmbeddingServerBackend.name
 
 
 class ModelNotFoundError(Exception):
@@ -99,11 +102,31 @@ class ModelRegistry:
     # Entry introspection helpers
     # -----------------------------------------------------------------------
     @staticmethod
-    def modality_of(entry: dict) -> str:
+    def _is_legacy_embedding(entry: dict) -> bool:
+        """A pre-modality embedding entry: a text model with params.embedding=true.
+
+        Before embeddings became a first-class modality, embedding models were
+        registered as text with `params: {embedding: true}`. We keep those
+        working by treating them as the EMBEDDING modality/backend at runtime,
+        without rewriting the persisted registry.
+        """
+        m = (entry.get("modality") or TEXT).strip()
+        if m != TEXT:
+            return False
+        if (entry.get("backend") or DEFAULT_BACKEND).strip() != DEFAULT_BACKEND:
+            return False
+        return bool((entry.get("params") or {}).get("embedding"))
+
+    @classmethod
+    def modality_of(cls, entry: dict) -> str:
+        if cls._is_legacy_embedding(entry):
+            return EMBEDDING
         return (entry.get("modality") or TEXT).strip()
 
-    @staticmethod
-    def backend_of(entry: dict) -> str:
+    @classmethod
+    def backend_of(cls, entry: dict) -> str:
+        if cls._is_legacy_embedding(entry):
+            return EMBEDDING_BACKEND
         return (entry.get("backend") or DEFAULT_BACKEND).strip()
 
     # -----------------------------------------------------------------------

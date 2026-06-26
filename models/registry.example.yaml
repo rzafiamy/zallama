@@ -7,7 +7,7 @@
 # Each entry:
 #   name:        unique id, also the OpenAI "model" name and registry key
 #   file:        primary gguf (absolute, or relative to models_dir)
-#   modality:    text | asr | tts | image          (optional, default: text)
+#   modality:    text | embedding | rerank | asr | tts | image  (default: text)
 #   backend:     which engine runs it               (optional, default: llama-server)
 #   artifacts:   extra files (mmproj for vision, …) (optional)
 #   params:      per-model overrides of llama_server.default_params (optional)
@@ -49,3 +49,33 @@ models:
     description: "NVIDIA Parakeet TDT 0.6B v2 (speech-to-text)"
     params:
       threads: 4
+
+  # --- RAG: embedding model ---------------------------------------------------
+  # Runs llama-server in --embedding mode via the embedding-server backend and
+  # serves POST /v1/embeddings. zvec uses this to embed & search documents; set
+  # it as rag.embedding_model in config.yaml. `zallama pull nomic-embed:v1.5`
+  # downloads it and writes this entry for you.
+  # (Legacy entries that instead set `params: {embedding: true}` on a text model
+  # still work — they are treated as the embedding modality at runtime.)
+  - name: nomic-embed:v1.5
+    file: nomic-embed-text-v1.5.Q4_K_M.gguf
+    modality: embedding
+    backend: embedding-server
+    description: "Nomic Embed Text v1.5 (embeddings)"
+    params:
+      ctx_size: 4096
+      n_gpu_layers: 99
+
+  # --- RAG: reranker (cross-encoder) ------------------------------------------
+  # Runs llama-server in --reranking mode via the rerank-server backend and is
+  # exposed at POST /v1/rerank. zvec can use it to rerank query candidates; set
+  # it as rag.rerank_model in config.yaml. `zallama pull bge-reranker:v2-m3`
+  # downloads it and writes this entry for you.
+  - name: bge-reranker:v2-m3
+    file: bge-reranker-v2-m3-Q4_K_M.gguf
+    modality: rerank
+    backend: rerank-server
+    description: "BGE Reranker v2-m3 (rerank, multilingual)"
+    params:
+      ctx_size: 4096
+      n_gpu_layers: 99

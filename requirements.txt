@@ -4,3 +4,5 @@ python-multipart>=0.0.9
 httpx>=0.27.0
 pyyaml>=6.0.1
 requests>=2.31.0
+numpy>=1.24.0
+zvec>=0.5.1            # in-process HNSW vector DB for RAG (server/zvec)

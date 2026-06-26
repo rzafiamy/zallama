@@ -450,8 +450,9 @@ def cmd_add(args: list[str]):
             
     if len(filtered_args) < 2:
         _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--modality <modality>] [--backend <backend>]")
-        _info("Supported modalities: text, asr, tts, image")
-        _info("Supported backends: llama-server, parakeet-server, kokoro-server")
+        _info("Supported modalities: text, embedding, rerank, asr, tts, image")
+        _info("Supported backends: llama-server, embedding-server, rerank-server, parakeet-server, kokoro-server")
+        _info("Tip: set --modality only; the matching backend is auto-selected.")
         sys.exit(1)
         
     name, file_path = filtered_args[0], filtered_args[1]
@@ -481,6 +482,9 @@ def cmd_set(args: list[str]):
         _info("Examples:")
         _info("  zallama set qwen3.5-4b-q4_k_m reasoning=false ctx_size=8192")
         _info("  zallama set llama3.2:1b n_gpu_layers=99")
+        _info("  zallama set my-reranker modality=rerank    # backend auto-selected")
+        _info("  zallama set my-embed modality=embedding    # serve /v1/embeddings")
+        _info("Special keys: modality (text|embedding|rerank|asr|tts|image), backend.")
         sys.exit(1)
 
     model_name = args[0]
@@ -503,6 +507,14 @@ def cmd_set(args: list[str]):
         sys.exit(1)
 
     params = model_entry.get("params", {}).copy()
+    # modality / backend are entry-level fields, not llama-server params. Setting
+    # `modality=rerank` reclassifies the model; the server then auto-resolves the
+    # matching backend unless `backend=` is also given. Setting `backend=` alone
+    # overrides just the engine. These are pulled out of the kv loop below.
+    modality = model_entry.get("modality", "text")
+    backend = model_entry.get("backend", "llama-server")
+    backend_explicit = False
+
     for kv in kv_args:
         if "=" not in kv:
             _err(f"Invalid argument format: '{kv}'. Expected format: key=value")
@@ -510,6 +522,14 @@ def cmd_set(args: list[str]):
         key, val = kv.split("=", 1)
         key = key.strip()
         val = val.strip()
+
+        if key == "modality":
+            modality = val.lower()
+            continue
+        if key == "backend":
+            backend = val
+            backend_explicit = True
+            continue
 
         # Convert val to appropriate type
         if val.lower() == "true":
@@ -532,6 +552,12 @@ def cmd_set(args: list[str]):
         else:
             params[key] = parsed_val
 
+    # If the modality changed but the backend wasn't set explicitly, let the
+    # server pick the modality's default backend by sending the llama-server
+    # default (text) / clearing a now-mismatched backend.
+    if not backend_explicit and modality != model_entry.get("modality", "text"):
+        backend = "llama-server"
+
     # Unload model first if it's running so the parameters apply immediately on next run
     if model_entry.get("running"):
         _api("POST", f"/api/models/{model_entry['name']}/unload")
@@ -542,19 +568,20 @@ def cmd_set(args: list[str]):
         "description": model_entry["description"],
         "aliases": model_entry["aliases"],
         "params": params,
-        # Preserve non-text modality / backend / extra artifacts (e.g. vision
+        # Preserve / update modality & backend (+ extra artifacts like a vision
         # mmproj) so a `set` doesn't silently reset them to defaults.
-        "modality": model_entry.get("modality", "text"),
-        "backend": model_entry.get("backend", "llama-server"),
+        "modality": modality,
+        "backend": backend,
         "artifacts": model_entry.get("artifacts", {}),
         "mem_gb": model_entry.get("mem_gb", 0),
     }
 
     r = _api("POST", "/api/models/add", payload)
     if r.status_code == 200:
-        _ok(f"Updated parameters for '{model_entry['name']}' to: {params}")
+        _ok(f"Updated '{model_entry['name']}' "
+            f"(modality={modality}, backend={backend}) params={params}")
     else:
-        _err(f"Failed to update model parameters: {r.json().get('detail', r.text)}")
+        _err(f"Failed to update model: {r.json().get('detail', r.text)}")
 
 
 def cmd_remove(args: list[str]):
@@ -1309,11 +1336,12 @@ def cmd_logs(args: list[str]):
 
 
 def cmd_pull(args: list[str]):
-    """Pull a model: zallama pull <name-or-hf-path> [--type text|asr]
+    """Pull a model: zallama pull <name-or-hf-path> [--type text|asr|tts|rerank]
 
     --type sets the model's modality (default: text). Use it for raw HF paths
     whose repo name gives no hint, e.g.
         zallama pull owner/asr-repo/model.gguf --type asr
+        zallama pull owner/reranker-repo/model.gguf --type rerank
     Shorthands and parakeet.cpp repos are detected automatically.
     """
     model = None
@@ -1323,7 +1351,7 @@ def cmd_pull(args: list[str]):
         a = args[i]
         if a in ("--type", "-t"):
             if i + 1 >= len(args):
-                _err("--type requires a value (text|asr)")
+                _err("--type requires a value (text|asr|tts|rerank)")
                 sys.exit(1)
             mtype = args[i + 1]
             i += 2
@@ -1334,7 +1362,7 @@ def cmd_pull(args: list[str]):
             i += 1
 
     if not model:
-        _err("Usage: zallama pull <model-name-or-hf-path> [--type text|asr]")
+        _err("Usage: zallama pull <model-name-or-hf-path> [--type text|asr|tts|rerank]")
         _print_remote_presets()
         sys.exit(1)
 
@@ -1480,6 +1508,116 @@ def cmd_health(args: list[str]):
     print()
 
 
+def cmd_zvec(args: list[str]):
+    """Manage the built-in zvec vector store (RAG retrieval)."""
+    sub = args[0] if args else "help"
+    rest = args[1:]
+
+    if sub in ("help", "-h", "--help"):
+        print(f"\n{BOLD}{F_BLUE} zallama zvec — vector store (RAG){RESET}")
+        print(f"  {_color('zvec collections', CYAN):<48}{DIM}List collections{RESET}")
+        print(f"  {_color('zvec create <name> [--model M] [--dim N]', CYAN):<48}{DIM}Create a collection{RESET}")
+        print(f"  {_color('zvec drop <name>', CYAN):<48}{DIM}Delete a collection{RESET}")
+        print(f"  {_color('zvec upsert <name> <file>', CYAN):<48}{DIM}Add docs (one per line, or JSON array){RESET}")
+        print(f"  {_color('zvec query <name> <text> [--top-k K] [--rerank M]', CYAN):<48}{DIM}Semantic search{RESET}")
+        print()
+        return
+
+    if sub == "collections":
+        r = _api("GET", "/v1/zvec/collections")
+        data = r.json().get("data", [])
+        if not data:
+            _info("No collections yet. Create one with: zallama zvec create <name>")
+            return
+        headers = ["NAME", "EMBEDDING MODEL", "DIM", "DOCS"]
+        rows = [[c["name"], c["embedding_model"], str(c["dim"]), str(c["count"])] for c in data]
+        print(f"\n{BOLD}{F_BLUE} zvec Collections{RESET}")
+        _print_table(headers, rows)
+        print()
+        return
+
+    if sub == "create":
+        if not rest:
+            _err("Usage: zallama zvec create <name> [--model M] [--dim N]")
+            sys.exit(1)
+        name = rest[0]
+        body = {"name": name}
+        if "--model" in rest:
+            body["embedding_model"] = rest[rest.index("--model") + 1]
+        if "--dim" in rest:
+            body["dim"] = int(rest[rest.index("--dim") + 1])
+        r = _api("POST", "/v1/zvec/collections", body)
+        if r.status_code >= 400:
+            _err(r.json().get("detail", r.text)); sys.exit(1)
+        c = r.json()
+        _ok(f"Created collection '{c['name']}' (model={c['embedding_model']}, dim={c['dim']})")
+        return
+
+    if sub == "drop":
+        if not rest:
+            _err("Usage: zallama zvec drop <name>"); sys.exit(1)
+        r = _api("DELETE", f"/v1/zvec/collections/{rest[0]}")
+        if r.status_code >= 400:
+            _err(r.json().get("detail", r.text)); sys.exit(1)
+        _ok(f"Deleted collection '{rest[0]}'")
+        return
+
+    if sub == "upsert":
+        if len(rest) < 2:
+            _err("Usage: zallama zvec upsert <name> <file>"); sys.exit(1)
+        name, path = rest[0], rest[1]
+        text = Path(path).read_text(encoding="utf-8")
+        stripped = text.lstrip()
+        if stripped.startswith("[") or stripped.startswith("{"):
+            docs = json.loads(text)
+            if isinstance(docs, dict):
+                docs = [docs]
+        else:
+            docs = [line.strip() for line in text.splitlines() if line.strip()]
+        r = _api("POST", f"/v1/zvec/{name}/upsert", {"documents": docs})
+        if r.status_code >= 400:
+            _err(r.json().get("detail", r.text)); sys.exit(1)
+        _ok(f"Upserted {r.json().get('upserted', 0)} document(s) into '{name}'")
+        return
+
+    if sub == "query":
+        if len(rest) < 2:
+            _err("Usage: zallama zvec query <name> <text> [--top-k K] [--rerank M]"); sys.exit(1)
+        name = rest[0]
+        # Everything that isn't a flag is the query text.
+        flags = {"--top-k", "--rerank"}
+        text_parts = []
+        i = 1
+        body = {}
+        while i < len(rest):
+            if rest[i] == "--top-k":
+                body["top_k"] = int(rest[i + 1]); i += 2
+            elif rest[i] == "--rerank":
+                body["rerank_model"] = rest[i + 1]; i += 2
+            else:
+                text_parts.append(rest[i]); i += 1
+        body["query"] = " ".join(text_parts)
+        r = _api("POST", f"/v1/zvec/{name}/query", body)
+        if r.status_code >= 400:
+            _err(r.json().get("detail", r.text)); sys.exit(1)
+        results = r.json().get("results", [])
+        if not results:
+            _info("No results."); return
+        print(f"\n{BOLD}{F_BLUE} Results for '{body['query']}' in '{name}'{RESET}")
+        for res in results:
+            score = res.get("score")
+            score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
+            print(f"  {_color(score_s, F_TEAL)}  {_color(res['id'], DIM)}")
+            snippet = res["text"].replace("\n", " ")
+            print(f"      {snippet[:120]}{'…' if len(snippet) > 120 else ''}")
+        print()
+        return
+
+    _err(f"Unknown zvec subcommand: '{sub}'")
+    _info("Run 'zallama zvec help' for usage.")
+    sys.exit(1)
+
+
 def cmd_version(args: list[str]):
     print(f"\n{BOLD}{F_BLUE} Zallama Version Information{RESET}")
     headers = ["PROPERTY", "VALUE"]
@@ -1564,6 +1702,8 @@ def cmd___complete(args: list[str]):
     if index <= 1:
         # Completing the subcommand itself. Hide internal/alias-noise entries.
         candidates = [c for c in COMMANDS if not c.startswith("-") and not c.startswith("__")]
+    elif prev == "zvec":
+        candidates = ["collections", "create", "drop", "upsert", "query"]
     elif prev in _MODEL_ARG_COMMANDS:
         candidates = _registry_model_names()
     # (Other positions — file paths for `add`, key=value for `set` — are left to
@@ -1598,6 +1738,7 @@ COMMANDS = {
     "reload": cmd_reload,
     "logs": cmd_logs,
     "paths": cmd_paths,
+    "zvec": cmd_zvec,
     "health": cmd_health,
     "version": cmd_version,
     "--version": cmd_version,
@@ -1639,6 +1780,7 @@ def main():
             ("reload <name>", "Restart a running model to apply registry param changes"),
             ("logs <name>", "Tail llama-server logs for a model"),
             ("paths", "Show where zallama stores its files"),
+            ("zvec <subcommand>", "Manage the built-in vector store (RAG)"),
             ("health", "Show daemon health status"),
             ("version", "Show version"),
         ]
