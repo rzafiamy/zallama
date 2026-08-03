@@ -6,7 +6,7 @@ Usage: zallama <command> [args]
 Commands:
   serve           Start the Zallama daemon
   list            List registered models
-  add <name> <file>  Register a local .gguf model
+  add <name> <file>  Register a local .gguf model (--mmproj for vision)
   remove <name>   Remove a model from registry
   run <name>      Interactive chat with a model
   ps              Show running model processes
@@ -431,9 +431,10 @@ def cmd_list(args: list[str]):
 
 
 def cmd_add(args: list[str]):
-    """Register a model: zallama add <name> <file> [--modality <val>] [--backend <val>]"""
+    """Register a model: zallama add <name> <file> [--mmproj <file>] [--modality <val>] [--backend <val>]"""
     modality = "text"
     backend = "llama-server"
+    artifacts = {}
     
     filtered_args = []
     i = 0
@@ -444,14 +445,22 @@ def cmd_add(args: list[str]):
         elif args[i] == "--backend" and i + 1 < len(args):
             backend = args[i+1]
             i += 2
+        elif args[i] == "--mmproj" and i + 1 < len(args):
+            mmproj = Path(args[i+1]).expanduser().resolve()
+            if not mmproj.exists():
+                _err(f"Projector file not found: {mmproj}")
+                sys.exit(1)
+            artifacts["mmproj"] = str(mmproj)
+            i += 2
         else:
             filtered_args.append(args[i])
             i += 1
             
     if len(filtered_args) < 2:
-        _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--modality <modality>] [--backend <backend>]")
+        _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--mmproj <path-to-mmproj.gguf>] [--modality <modality>] [--backend <backend>]")
         _info("Supported modalities: text, embedding, rerank, asr, tts, image")
         _info("Supported backends: llama-server, embedding-server, rerank-server, parakeet-server, kokoro-server")
+        _info("Vision example: zallama add qwen2.5-vl model.gguf --mmproj mmproj.gguf")
         _info("Tip: set --modality only; the matching backend is auto-selected.")
         sys.exit(1)
         
@@ -469,10 +478,12 @@ def cmd_add(args: list[str]):
         "file": abs_path, 
         "description": desc,
         "modality": modality,
-        "backend": backend
+        "backend": backend,
+        "artifacts": artifacts,
     })
     if r.status_code == 200:
-        _ok(f"Model '{name}' registered ({modality} / {backend}) → {abs_path}")
+        suffix = f" with mmproj → {artifacts['mmproj']}" if artifacts.get("mmproj") else ""
+        _ok(f"Model '{name}' registered ({modality} / {backend}) → {abs_path}{suffix}")
 
 
 def cmd_set(args: list[str]):

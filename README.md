@@ -21,6 +21,7 @@
 - [Features](#-features)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
+- [Using Existing Local Models](#-using-existing-local-models)
 - [CLI Reference](#-cli-reference)
 - [Configuration Files](#-configuration-files)
 - [Memory-Aware Eviction](#-memory-aware-eviction)
@@ -155,12 +156,101 @@ zallama run llama3.2:3b
 
 ---
 
+## 📦 Using Existing Local Models
+
+Zallama can use GGUF files that you already downloaded or copied into the
+configured `models_dir`, but it does not auto-discover every file in that
+directory. A model must be registered before it appears in `zallama list`, the
+Web UI, or OpenAI-compatible `/v1/models`.
+
+First check where Zallama stores models:
+
+```bash
+zallama config
+```
+
+By default, the model directory is `~/.zallama/models`. If you copy a model
+there:
+
+```bash
+cp ~/Downloads/mistral-7b-q4.gguf ~/.zallama/models/
+```
+
+register it with:
+
+```bash
+zallama add mistral-7b ~/.zallama/models/mistral-7b-q4.gguf
+```
+
+You can also register a file outside `models_dir` by passing its absolute path:
+
+```bash
+zallama add my-model /data/models/my-model-q4_k_m.gguf
+```
+
+For manual registry edits, relative paths are resolved under `models_dir`:
+
+```yaml
+models:
+  - name: "mistral-7b"
+    file: "mistral-7b-q4.gguf"
+    params:
+      ctx_size: 8192
+      n_gpu_layers: 99
+```
+
+After registration, use it like any pulled model:
+
+```bash
+zallama run mistral-7b
+```
+
+For a vision model, copy both the base GGUF and its projector file. The base
+model is still registered as a text/chat model, and the projector is attached as
+an `mmproj` artifact:
+
+```bash
+cp ~/Downloads/qwen2.5-vl-7b-q4_k_m.gguf ~/.zallama/models/
+cp ~/Downloads/mmproj-qwen2.5-vl-7b-f16.gguf ~/.zallama/models/
+```
+
+Then register the base model and projector together:
+
+```bash
+zallama add qwen2.5-vl-7b \
+  ~/.zallama/models/qwen2.5-vl-7b-q4_k_m.gguf \
+  --mmproj ~/.zallama/models/mmproj-qwen2.5-vl-7b-f16.gguf
+```
+
+Or edit the registry entry by hand:
+
+```yaml
+models:
+  - name: "qwen2.5-vl-7b"
+    file: "qwen2.5-vl-7b-q4_k_m.gguf"
+    modality: "text"
+    backend: "llama-server"
+    artifacts:
+      mmproj: "mmproj-qwen2.5-vl-7b-f16.gguf"
+    params:
+      ctx_size: 8192
+      n_gpu_layers: 99
+```
+
+When the model loads, Zallama resolves both paths relative to `models_dir` and
+passes `--mmproj <file>` to `llama-server`. If the `mmproj` file is missing or
+not listed in `artifacts`, the model may still load for text, but image input
+will not work as a vision model.
+
+---
+
 ## 🖥️ CLI Reference
 
 ```
 serve                  Start the Zallama daemon
 list                   List registered models (alias: ls)
 add <name> <file>      Register a local .gguf model
+                       --mmproj attaches a vision projector file
 set <name> <k>=<v>...  Configure parameters for a registered model
 pull <name> [--type T] Pull model from HF / Unsloth presets (uses aria2c).
                        --type sets modality (text|embedding|rerank|asr|tts) for raw HF paths.
@@ -199,6 +289,62 @@ cp completions/_zallama ~/.zsh/completions/_zallama
 ---
 
 ## ⚙️ Configuration Files
+
+### How to Change Settings
+
+Use `zallama config` to see the effective configuration, where it was loaded
+from, and the available keys:
+
+```bash
+zallama config
+```
+
+For global daemon settings, copy the example config and edit only the values you
+want to override:
+
+```bash
+mkdir -p ~/.zallama
+cp config/config.example.yaml ~/.zallama/config.yaml
+$EDITOR ~/.zallama/config.yaml
+```
+
+Zallama looks for the first existing config file in this order:
+
+1. `<repo>/config/config.yaml`
+2. `~/.zallama/config.yaml`
+3. `/etc/zallama/config.yaml`
+
+Anything omitted falls back to the built-in defaults. Restart the daemon after
+changing `config.yaml` because global config is read at startup:
+
+```bash
+systemctl restart zallama
+```
+
+For per-model launch settings, prefer the CLI:
+
+```bash
+zallama set <model> <key>=<value> [<key>=<value> ...]
+zallama set llama3.2:1b ctx_size=8192 n_gpu_layers=99
+zallama set my-reranker modality=rerank
+zallama show llama3.2:1b
+```
+
+Per-model changes are saved in the model registry and apply on the next load. If
+the model is already running, reload it:
+
+```bash
+zallama reload <model>
+```
+
+Environment variables can override common settings for one shell/session:
+
+```bash
+ZALLAMA_HOST=0.0.0.0 ZALLAMA_PORT=11435 zallama serve
+ZALLAMA_MODELS_DIR=/data/models zallama serve
+LLAMA_GPU_LAYERS=99 zallama serve
+ZALLAMA_EMBEDDING_MODEL=my-embed zallama serve
+```
 
 ### Global Settings (`config/config.yaml`)
 ```yaml
