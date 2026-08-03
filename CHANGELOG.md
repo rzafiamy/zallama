@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-03
+
 ### Added
 - **RAG support**: retrieval-augmented generation built into Zallama.
   - **Reranking**: `RerankServerBackend` runs `llama-server` in `--reranking` mode (cross-encoder
@@ -36,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overrides the engine). `/api/models/add` validates modality and backend against the registered
   set and fills in the backend from the modality. The modality→backend mapping is centralized in
   `server/backends.py` (`MODALITY_BACKEND` / `default_backend_for`) and reused by the downloader.
+- **README rewrite**: restructured around an "own your AI" narrative with a guided first-run
+  walkthrough ("Your First 5 Minutes"), a features table, and a two-layer explanation of global
+  vs. per-model configuration.
 
 ## [1.1.0] - 2026-06-23
 
