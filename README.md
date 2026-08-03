@@ -2,31 +2,46 @@
 
 # 🦙 Zallama
 
-**A simple, memory-aware, multimodal-ready local LLM server powered by `llama.cpp`.**
+### Own your AI.
+
+**A local, multimodal, memory-aware LLM server — your models, your hardware, your rules.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![llama.cpp](https://img.shields.io/badge/powered%20by-llama.cpp-black.svg)](https://github.com/ggml-org/llama.cpp)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20compatible-412991.svg?logo=openai&logoColor=white)](#-openai-api-integration)
+[![Local First](https://img.shields.io/badge/data-never%20leaves%20your%20machine-2ea44f.svg)](#-security)
 [![Changelog](https://img.shields.io/badge/changelog-keep%20a%20changelog-orange.svg)](CHANGELOG.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-contributing)
 
 </div>
 
-> A self-contained local LLM ecosystem powered by `llama-server` (llama.cpp).
+---
+
+## 🌱 Why Zallama exists
+
+Every time you send a prompt to a cloud API, you're renting intelligence — and handing over your data, your context, and your habits along with it. Your hardware is idle. Your bill keeps growing. And the model behind the curtain can change, get deprecated, or get more expensive overnight.
+
+Zallama flips that. It's a small daemon that turns any `.gguf` model into a real, standing service on **your** machine — chat, vision, speech, embeddings, reranking, retrieval — all speaking the OpenAI API dialect your tools already know. Point your existing app at `http://localhost:11435` instead of `api.openai.com`, and nothing else has to change.
+
+You decide which models load, how much RAM/VRAM they get, when they sleep, and who's allowed to talk to them. Nobody else's usage policy, nobody else's outage, nobody else's log retention.
+
+**This is what it looks like to own your AI.**
+
+---
 
 ## 📚 Table of Contents
 
-- [Features](#-features)
-- [Installation](#-installation)
+- [What You Get](#-what-you-get)
+- [Installation](#️-installation)
 - [Prebuilt Packages](#-prebuilt-packages)
-- [Quick Start](#-quick-start)
-- [Using Existing Local Models](#-using-existing-local-models)
-- [CLI Reference](#-cli-reference)
-- [Configuration Files](#-configuration-files)
+- [Your First 5 Minutes](#-your-first-5-minutes)
+- [Using Models You Already Have](#-using-models-you-already-have)
+- [CLI Reference](#️-cli-reference)
+- [Configuration](#️-configuration)
 - [Memory-Aware Eviction](#-memory-aware-eviction)
-- [Vision (Multimodal) Models](#-vision-multimodal-models)
+- [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
 - [RAG: Reranking & the zvec Vector Store](#-rag-reranking--the-zvec-vector-store)
@@ -35,36 +50,34 @@
 - [Security](#-security)
 - [Troubleshooting](#-troubleshooting)
 - [Contributing](#-contributing)
-- [License](#-license)
+- [License](#️-license)
 
 ---
 
-Zallama acts as a dynamic router and process manager for your local GGUF models. It exposes a single, unified endpoint that is fully OpenAI-compatible. When you request a model, Zallama starts the underlying backend (e.g. `llama-server`) in the background, routes your request, and automatically unloads the model after a period of inactivity to free up RAM/VRAM.
+## ✨ What You Get
 
-Zallama is built around a **pluggable backend abstraction**: each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, and — by design — `image`) and a `backend`. Text/chat and **vision** (via an `mmproj` projector) ship on `llama-server`; **embeddings** and **reranking** run `llama-server` in `--embedding` / `--reranking` mode; **speech-to-text (ASR)** ships on `parakeet-server` ([parakeet.cpp](https://github.com/mudler/parakeet.cpp)) and **text-to-speech (TTS)** on `kokoro-server`. The architecture is structured so additional modalities are added as new backends rather than as cross-cutting changes.
+| | |
+|---|---|
+| 🚀 **A CLI that gets out of your way** | `zallama serve`, `zallama pull`, `zallama run`, `zallama set`, `zallama ps` — five commands cover most of your day. |
+| ⚡ **Fast model acquisition** | Downloads accelerate through `aria2c` (8 parallel connections), with a pure-Python parallel fallback. |
+| 🧠 **Reasoning models, rendered live** | DeepSeek-R1, Qwen 3.5, and other thinking models stream their reasoning in dim/gray inside the interactive chat. |
+| 🔌 **A real OpenAI `/v1` surface** | Chat, Completions, Embeddings — streaming included — so existing SDKs and tools just work. |
+| 👁️ **Vision** | Attach an `mmproj` projector and send images straight through `/v1/chat/completions`. |
+| 🎙️ **Speech-to-text** | `/v1/audio/transcriptions`, any input format auto-transcoded via `ffmpeg`, multilingual models supported. |
+| 🔎 **RAG, built in** | A reranker at `/v1/rerank` plus **zvec**, an embedded HNSW vector store — no external vector DB to run. |
+| 🧩 **Pluggable backends** | Each model declares a `modality` + `backend`; new engines slot in without touching the core. |
+| ⚙️ **Config, not code** | Context size, GPU offload, batching — all YAML, all per-model, all hot-reloadable. |
+| 🔄 **A process manager that behaves** | Health-checked startup, port assignment, concurrency caps, LRU eviction when idle. |
+| 🧠 **Memory awareness** | Set a `mem_budget_gb` and Zallama evicts least-recently-used models to make room — automatically. |
+| 🔒 **Locked down by default** | Binds to `127.0.0.1`, optional Bearer-token auth, sane timeouts out of the box. |
 
----
-
-## ✨ Features
-
-- **🚀 Simple CLI:** Run commands like `zallama serve`, `zallama run <model>`, `zallama add`, `zallama set`, and `zallama ps`.
-- **⚡ High-Performance Downloads:** Accelerated download engine utilizing `aria2c` (with 8 concurrent connections), falling back to Python-based parallel HTTP range requests and standard stream decoders.
-- **🧠 Reasoning Model Support:** Full support for thinking models (e.g., DeepSeek-R1, Qwen 3.5), rendering thinking/reasoning blocks in real-time with dim/gray coloring inside the interactive chat.
-- **🔌 Full OpenAI /v1 API:** Full drop-in replacement for OpenAI endpoints (Chat, Completions, and Embeddings) with streaming supported via SSE.
-- **👁️ Vision (Multimodal):** Run vision models by attaching an `mmproj` projector artifact — image input flows through `/v1/chat/completions`.
-- **🎙️ Speech-to-Text (ASR):** Transcribe audio via `/v1/audio/transcriptions` (OpenAI-compatible) on the `parakeet-server` backend. Any input format (mp3/m4a/webm/flac/…) is auto-transcoded to WAV with `ffmpeg`. Multilingual models (e.g. Parakeet TDT v3, 25 European languages incl. French) supported.
-- **🔎 Built-in RAG:** Cross-encoder reranking at `/v1/rerank` plus **zvec**, an in-process HNSW vector store (the [`zvec`](https://zvec.org) library — no external DB server) with `/v1/zvec/*` ingest & semantic-search endpoints and a `zallama zvec` CLI.
-- **🧩 Pluggable Backends & Modalities:** Each model declares a `modality` and `backend`. A `Backend` abstraction isolates engine-specific logic, so new modalities (TTS, image generation) slot in as new backends. A modality guard returns a clear error if a model is used on an incompatible endpoint.
-- **⚙️ Config-Driven Architecture:** Define global defaults and customize per-model parameters (context size, GPU layers offload, batching options) in simple YAML configurations.
-- **🔄 Dynamic Process Management:** Per-model startup locking, OS-checked port assignment, server health checking, an optional concurrency cap (`max_loaded_models`), and automatic LRU model eviction/unloading when idle.
-- **🧠 Memory-Aware Eviction:** Set a `mem_budget_gb` and Zallama evicts least-recently-used models to keep total declared/estimated memory within budget.
-- **🔒 Production-Ready Defaults:** Binds to `127.0.0.1` by default, optional Bearer-token API key, and configurable request timeouts.
+Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, …), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, and — by design — `image`); new modalities are added as new backends, not as changes scattered across the codebase.
 
 ---
 
 ## 🛠️ Installation
 
-**Requirements:** Python 3.10+, and a `llama-server` binary (built from [llama.cpp](https://github.com/ggml-org/llama.cpp) or placed in `./bin/llama-server`). `aria2c` is optional but recommended for fast downloads. For **ASR** (speech-to-text) and **TTS** (speech synthesis), build their respective engines and have `ffmpeg` installed.
+**Requirements:** Python 3.10+, and a `llama-server` binary (built from [llama.cpp](https://github.com/ggml-org/llama.cpp) or placed in `./bin/llama-server`). `aria2c` is optional but recommended for fast downloads. For **ASR** and **TTS**, build their respective engines and have `ffmpeg` installed.
 
 ### 1. Clone the repository
 
@@ -73,9 +86,9 @@ git clone https://github.com/rzafiamy/zallama.git
 cd zallama
 ```
 
-### 2. Building the inference engines
+### 2. Build the inference engines
 
-Helper scripts build each engine and install the binaries into `./bin/` (the clone and build happen in a temporary directory, keeping your repository tree clean):
+Helper scripts build each engine and install the binaries into `./bin/` (the clone and build happen in a temp directory, keeping your repo tree clean):
 
 ```bash
 # llama.cpp (text / chat / embeddings / vision) — requires a release tag/branch name
@@ -90,26 +103,17 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 > All scripts default to a **CUDA** build. The parakeet script also copies the shared `libggml*.so` next to the binaries and sets their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime.
 >
-> `kokoro.cpp` v0.1.0 requires **CMake 3.29+**. Ubuntu 24.04's apt package is
-> 3.28, so install a newer CMake and run the script with
-> `CMAKE_BIN=/path/to/cmake`.
+> `kokoro.cpp` v0.1.0 requires **CMake 3.29+**. Ubuntu 24.04's apt package is 3.28 — install a newer CMake and run the script with `CMAKE_BIN=/path/to/cmake`.
 
 ### Optional: use prebuilt packages
 
-To simplify setup, prebuilt packages are also available from the shared Google
-Drive folder:
+To skip building from source, prebuilt packages are available from the shared Google Drive folder:
 
 <https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing>
 
-Download the package that matches your platform and accelerator stack, then
-copy the provided binaries into `./bin/` before running the installer. At a
-minimum, Zallama needs `llama-server` available in `./bin/` or on your `PATH`.
-For speech-to-text or text-to-speech, also copy the matching `parakeet-server`
-or `kokoro-server` binaries.
+Download the package matching your platform/accelerator stack, copy the binaries into `./bin/`, then run the installer. At minimum, Zallama needs `llama-server` in `./bin/` or on your `PATH`. For speech-to-text or text-to-speech, also copy `parakeet-server` or `kokoro-server`.
 
 ### 3. Run the installer
-
-Install the global CLI launcher and register local configuration defaults:
 
 ```bash
 sudo bash install.sh
@@ -133,13 +137,11 @@ export PATH="$PWD:$PATH"   # from the zallama checkout
 
 ## 📦 Prebuilt Packages
 
-If you do not want to build the inference engines from source, download a
-prebuilt package from the shared Google Drive folder:
+If you'd rather not build the inference engines from source, download a prebuilt package from the shared Google Drive folder:
 
 <https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing>
 
-After extracting the package, place the engine binaries in the repository's
-`bin/` directory:
+After extracting, place the engine binaries in the repository's `bin/` directory:
 
 ```bash
 mkdir -p ./bin
@@ -159,88 +161,85 @@ Then continue with the installer:
 sudo bash install.sh
 ```
 
-The installer checks `./bin/` first, so locally copied binaries are used
-automatically.
+The installer checks `./bin/` first, so locally copied binaries are used automatically.
 
-See [PREBUILT.md](PREBUILT.md) for the package naming rules and the
-`prebuilt-cli.sh` helper, which detects your Ubuntu/CUDA setup, lists compatible
-packages, and installs the selected archive.
+See [PREBUILT.md](PREBUILT.md) for package naming rules and the `prebuilt-cli.sh` helper, which detects your Ubuntu/CUDA setup, lists compatible packages, and installs the selected archive.
 
-## 🚀 Quick Start
+---
 
-### 1. Start the Daemon
+## 🚀 Your First 5 Minutes
+
+This is the whole loop — start the daemon, pull a model, talk to it. Everything else in this README is a deeper look at one of these four steps.
+
+### 1 · Wake the daemon
+
 ```bash
 zallama serve
 ```
-*Starts the FastAPI controller on `http://localhost:11435`.*
+*Starts the FastAPI controller on `http://localhost:11435`. It sits quietly until a model is requested.*
 
-### 2. Pull a Model from HuggingFace
-Accelerated high-speed model acquisition via `aria2c`:
+### 2 · Pull a model — it's now yours
+
 ```bash
-# Pull using a simple shorthand (from Unsloth's repo)
+# A friendly shorthand (from Unsloth's repo)
 zallama pull llama3.2:3b
 
-# Or pull any GGUF file directly from HuggingFace
+# Or grab any GGUF straight from HuggingFace
 zallama pull unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf
 
-# Pull an ASR (speech-to-text) model — auto-registered as modality=asr
+# Speech-to-text model, auto-registered as modality=asr
 zallama pull parakeet:0.6b
-# Multilingual (25 European languages incl. French):
-zallama pull mudler/parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf
+zallama pull mudler/parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf   # multilingual
 ```
 
-> Parakeet GGUF repos are detected automatically and registered with the ASR backend. For a raw HF path whose repo name gives no hint, force it with `zallama pull <repo>/<file>.gguf --type asr`.
+> Parakeet GGUF repos are auto-detected and registered on the ASR backend. For a raw HF path with an ambiguous name, force it with `zallama pull <repo>/<file>.gguf --type asr`.
 
-### 3. Configure Model Parameters
-Dynamically set context size, GPU offloading, or turn reasoning (thinking blocks) on or off:
+### 3 · Tune it to your hardware
+
 ```bash
-# Set context size to 8192 and disable thinking blocks
-zallama set qwen3.5-4b-q4_k_m reasoning=false ctx_size=8192
-
-# Enable full GPU layers offload
-zallama set llama3.2:1b n_gpu_layers=99
+zallama set qwen3.5-4b-q4_k_m reasoning=false ctx_size=8192   # skip thinking blocks
+zallama set llama3.2:1b n_gpu_layers=99                        # push everything to GPU
 ```
 
-### 4. Run Interactive Chat
+### 4 · Talk to it
+
 ```bash
 zallama run llama3.2:3b
 ```
 
+That's it. You now have a model running on hardware you control, answering only to you.
+
 ---
 
-## 📦 Using Existing Local Models
+## 📦 Using Models You Already Have
 
-Zallama can use GGUF files that you already downloaded or copied into the
-configured `models_dir`, but it does not auto-discover every file in that
-directory. A model must be registered before it appears in `zallama list` or
-OpenAI-compatible `/v1/models`.
+Zallama can serve GGUF files you already downloaded, but it won't auto-discover files sitting in a directory — a model has to be **registered** before it shows up in `zallama list` or `/v1/models`. This is deliberate: nothing runs, and no memory is claimed, until you say so.
 
-First check where Zallama stores models:
+Check where Zallama looks for models:
 
 ```bash
 zallama config
 ```
 
-By default, the model directory is `~/.zallama/models`. If you copy a model
-there:
+Default is `~/.zallama/models`. Copy a model there:
 
 ```bash
 cp ~/Downloads/mistral-7b-q4.gguf ~/.zallama/models/
 ```
 
-register it with:
+Register it:
 
 ```bash
 zallama add mistral-7b ~/.zallama/models/mistral-7b-q4.gguf
 ```
 
-You can also register a file outside `models_dir` by passing its absolute path:
+Or register a file outside `models_dir` by passing its absolute path:
 
 ```bash
 zallama add my-model /data/models/my-model-q4_k_m.gguf
 ```
 
-For manual registry edits, relative paths are resolved under `models_dir`:
+For manual registry edits, relative paths resolve under `models_dir`:
 
 ```yaml
 models:
@@ -251,22 +250,20 @@ models:
       n_gpu_layers: 99
 ```
 
-After registration, use it like any pulled model:
+Then run it like anything else you pulled:
 
 ```bash
 zallama run mistral-7b
 ```
 
-For a vision model, copy both the base GGUF and its projector file. The base
-model is still registered as a text/chat model, and the projector is attached as
-an `mmproj` artifact:
+**Vision models** need one extra file — copy the base GGUF and its projector:
 
 ```bash
 cp ~/Downloads/qwen2.5-vl-7b-q4_k_m.gguf ~/.zallama/models/
 cp ~/Downloads/mmproj-qwen2.5-vl-7b-f16.gguf ~/.zallama/models/
 ```
 
-Then register the base model and projector together:
+Register both together:
 
 ```bash
 zallama add qwen2.5-vl-7b \
@@ -274,7 +271,7 @@ zallama add qwen2.5-vl-7b \
   --mmproj ~/.zallama/models/mmproj-qwen2.5-vl-7b-f16.gguf
 ```
 
-Or edit the registry entry by hand:
+Or by hand:
 
 ```yaml
 models:
@@ -289,10 +286,7 @@ models:
       n_gpu_layers: 99
 ```
 
-When the model loads, Zallama resolves both paths relative to `models_dir` and
-passes `--mmproj <file>` to `llama-server`. If the `mmproj` file is missing or
-not listed in `artifacts`, the model may still load for text, but image input
-will not work as a vision model.
+When the model loads, Zallama resolves both paths relative to `models_dir` and passes `--mmproj <file>` to `llama-server`. If `mmproj` is missing or not listed under `artifacts`, the model may still load for text, but image input won't work.
 
 ---
 
@@ -319,17 +313,14 @@ version                Show version info
 
 ### Tab Completion
 
-`./install.sh` installs **bash** and **zsh** completion automatically when it can
-write to the system completion directories. Once enabled, `<TAB>` completes both
-subcommands and **registered model names**:
+`./install.sh` installs **bash** and **zsh** completion automatically when it can write to the system completion directories. Once enabled, `<TAB>` completes both subcommands and **registered model names**:
 
 ```bash
 zallama r<TAB>          # → reload  remove  rm  run
 zallama run <TAB>       # → completes from your registered models
 ```
 
-Completion reads the model list straight from `registry.yaml`, so it works even
-when the daemon isn't running. To install manually:
+Completion reads the model list straight from `registry.yaml`, so it works even when the daemon isn't running. To install manually:
 
 ```bash
 # bash
@@ -340,19 +331,22 @@ cp completions/_zallama ~/.zsh/completions/_zallama
 
 ---
 
-## ⚙️ Configuration Files
+## ⚙️ Configuration
 
-### How to Change Settings
+There are two layers, and they change on different timescales:
 
-Use `zallama config` to see the effective configuration, where it was loaded
-from, and the available keys:
+- **Global daemon config** (`config/config.yaml`) — host, port, timeouts, memory budgets, defaults. Read once at startup.
+- **Per-model registry** (`models/registry.yaml`) — one entry per model, hot-reloaded from disk on every request.
+
+### See what's active
 
 ```bash
 zallama config
 ```
 
-For global daemon settings, copy the example config and edit only the values you
-want to override:
+Shows the effective configuration, where it was loaded from, and the available keys.
+
+### Change global settings
 
 ```bash
 mkdir -p ~/.zallama
@@ -360,20 +354,21 @@ cp config/config.example.yaml ~/.zallama/config.yaml
 $EDITOR ~/.zallama/config.yaml
 ```
 
-Zallama looks for the first existing config file in this order:
+Zallama looks for the first existing config file, in order:
 
 1. `<repo>/config/config.yaml`
 2. `~/.zallama/config.yaml`
 3. `/etc/zallama/config.yaml`
 
-Anything omitted falls back to the built-in defaults. Restart the daemon after
-changing `config.yaml` because global config is read at startup:
+Anything omitted falls back to built-in defaults. **Restart the daemon** after editing `config.yaml` — global config is read at startup:
 
 ```bash
 systemctl restart zallama
 ```
 
-For per-model launch settings, prefer the CLI:
+### Change per-model settings
+
+Prefer the CLI over hand-editing the registry:
 
 ```bash
 zallama set <model> <key>=<value> [<key>=<value> ...]
@@ -382,14 +377,15 @@ zallama set my-reranker modality=rerank
 zallama show llama3.2:1b
 ```
 
-Per-model changes are saved in the model registry and apply on the next load. If
-the model is already running, reload it:
+Per-model changes are saved to the registry and apply on the model's next load. If it's already running, its process keeps the params it launched with — reload it to pick up the change:
 
 ```bash
 zallama reload <model>
 ```
 
-Environment variables can override common settings for one shell/session:
+### Environment overrides
+
+For a one-off shell/session, without touching any file:
 
 ```bash
 ZALLAMA_HOST=0.0.0.0 ZALLAMA_PORT=11435 zallama serve
@@ -398,7 +394,8 @@ LLAMA_GPU_LAYERS=99 zallama serve
 ZALLAMA_EMBEDDING_MODEL=my-embed zallama serve
 ```
 
-### Global Settings (`config/config.yaml`)
+### Global settings reference (`config/config.yaml`)
+
 ```yaml
 zallama:
   host: "127.0.0.1"      # localhost only; set "0.0.0.0" to expose on the network
@@ -426,7 +423,8 @@ llama_server:
 
 > **Security note:** Zallama binds to `127.0.0.1` by default. If you set `host: "0.0.0.0"` to expose it on your network, also set an `api_key` — the daemon has no auth otherwise.
 
-### Model Registry (`models/registry.yaml`)
+### Model registry reference (`models/registry.yaml`)
+
 ```yaml
 models:
   # Standard text/chat model
@@ -462,7 +460,7 @@ models:
 > **Applying changes:** The registry reloads from disk automatically, so adding, editing, or removing an entry takes effect on the next request — no daemon restart. The one exception is a model that's **already running**: its `llama-server` keeps the params it launched with, so run `zallama reload <name>` to restart it with the new params. (Changes to `config.yaml` are read only at startup and do require `systemctl restart zallama`.)
 
 Each entry may declare:
-- **`modality`** — `text` (default), `embedding`, `rerank`, `asr`, `tts`, or the planned `image`. Determines which endpoints the model may serve. Requests to a mismatched endpoint return a clear `400`. (Legacy embedding models registered as `text` with `params: embedding: true` are still treated as `embedding` at runtime.)
+- **`modality`** — `text` (default), `embedding`, `rerank`, `asr`, `tts`, or the planned `image`. Determines which endpoints the model may serve; requests to a mismatched endpoint return a clear `400`. (Legacy embedding models registered as `text` with `params: embedding: true` are still treated as `embedding` at runtime.)
 - **`backend`** — which engine runs the model (default `llama-server`). New backends resolve their own binary from `./bin/<name>`, `~/.zallama/bin/<name>`, or `PATH`.
 - **`artifacts`** — extra files beyond the primary GGUF (e.g. `mmproj` for vision, and — for future backends — vocoders, etc.). Paths are absolute or relative to `models_dir`.
 - **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size.
@@ -502,7 +500,7 @@ zallama add qwen2-vl-7b ~/.zallama/models/Qwen2-VL-7B-Instruct-Q4_K_M.gguf "Qwen
 # then edit models/registry.yaml to add the `artifacts: { mmproj: ... }` block shown above
 ```
 
-Zallama passes `--mmproj <file>` to the backend automatically, and image input flows through the standard OpenAI `/v1/chat/completions` endpoint (image_url message content).
+Zallama passes `--mmproj <file>` to the backend automatically, and image input flows through the standard OpenAI `/v1/chat/completions` endpoint (`image_url` message content).
 
 ---
 
@@ -622,7 +620,7 @@ Configure defaults in the `rag` block of `config/config.yaml` (`embedding_model`
 
 ## 🌐 OpenAI API Integration
 
-Zallama acts as a standard OpenAI-compatible API gateway. Specify the model you want to target in the request body, and Zallama will handle model loading and routing automatically:
+Zallama acts as a standard OpenAI-compatible API gateway. Specify the model you want in the request body, and Zallama handles loading and routing automatically — meaning any OpenAI SDK, LangChain, or existing integration can point here with a one-line base-URL change:
 
 ```bash
 curl http://localhost:11435/v1/chat/completions \
@@ -671,7 +669,7 @@ systemctl status zallama
 
 ## 🔐 Security
 
-Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authentication, which is safe for single-user local use.
+Owning your AI means owning the responsibility for it running safely. Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authentication, which is safe for single-user local use — and gets more deliberate the further you push it outward.
 
 ### API key
 
@@ -700,7 +698,7 @@ CORS allows all origins but does **not** send credentials.
 
 ### Remote access: prefer a VPN
 
-For personal remote access, the most secure option is to **not expose Zallama publicly at all**: keep `host: 127.0.0.1` and bind to a WireGuard/Tailscale interface and reach it over the VPN. Zero public attack surface, no TLS or auth to configure.
+For personal remote access, the most secure option is to **not expose Zallama publicly at all**: keep `host: 127.0.0.1` and bind to a WireGuard/Tailscale interface, reaching it over the VPN. Zero public attack surface, no TLS or auth to configure.
 
 ### Public exposure: reverse proxy
 
