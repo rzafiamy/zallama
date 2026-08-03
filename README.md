@@ -164,8 +164,8 @@ The installer checks `./bin/` first, so locally copied binaries are used
 automatically.
 
 See [PREBUILT.md](PREBUILT.md) for the package naming rules and the
-`find-compatible-prebuilt.sh` helper, which detects your Ubuntu/CUDA setup and
-prints the best matching archive from a downloaded package folder.
+`prebuilt-cli.sh` helper, which detects your Ubuntu/CUDA setup, lists compatible
+packages, and installs the selected archive.
 
 ## 🚀 Quick Start
 

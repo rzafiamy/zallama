@@ -62,19 +62,54 @@ parakeet.cpp-db755a7-linux-ubuntu24.04-cuda.tar.gz
 7. Keep a `SHA256SUMS` file next to the archives and update it whenever a
    package changes.
 
-## Automatic Selection
+## Interactive Installer
 
-Use `find-compatible-prebuilt.sh` to choose the best archive from a local folder
-containing downloaded packages:
+Use `prebuilt-cli.sh` to detect the current system, show compatible packages in
+a numbered table, and install the selected archive:
 
 ```bash
-./find-compatible-prebuilt.sh /path/to/packages
+./prebuilt-cli.sh
 ```
 
-To restrict selection to one engine:
+By default, the script reads the public Google Drive folder:
+
+```text
+https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing
+```
+
+For Google Drive downloads, the script uses `gdown`. If it is missing,
+`prebuilt-cli.sh` asks whether it should install it with pip before downloading
+the selected archive.
 
 ```bash
-./find-compatible-prebuilt.sh /path/to/packages llama.cpp
+./prebuilt-cli.sh
+```
+
+When a Drive URL is used, the script lists the public folder, shows the
+compatible package table, and downloads only the selected archive into
+`${XDG_CACHE_HOME:-$HOME/.cache}/zallama/prebuilt/downloads`. To use an already
+downloaded package directory instead:
+
+```bash
+./prebuilt-cli.sh --source /path/to/packages
+```
+
+To restrict the table to one engine:
+
+```bash
+./prebuilt-cli.sh --engine llama.cpp
+```
+
+To install into another binary directory:
+
+```bash
+sudo ./prebuilt-cli.sh --bin-dir /opt/zallama/bin
+```
+
+To only print the compatible table without installing:
+
+```bash
+./prebuilt-cli.sh --list-only
 ```
 
 The script detects:
