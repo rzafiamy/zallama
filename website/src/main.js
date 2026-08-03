@@ -32,9 +32,11 @@ window.copyToClipboard = function(elementId, buttonId) {
 };
 
 // ---------------------------------------------------------------------------
-// 2. Terminal Simulator
+// 2. Terminal Simulator (only present on the home page)
 // ---------------------------------------------------------------------------
 const terminalBody = document.getElementById('terminal-body');
+
+if (terminalBody) {
 const terminalCommands = {
   serve: [
     { text: '$ zallama serve', delay: 300, type: 'command' },
@@ -154,10 +156,14 @@ Object.keys(termButtons).forEach(key => {
 
 // Run default simulation on mount
 runTerminalSimulation('serve');
+} // end terminalBody guard
 
 // ---------------------------------------------------------------------------
-// 3. Memory Eviction Simulator
+// 3. Memory Eviction Simulator (only present on the home page)
 // ---------------------------------------------------------------------------
+const memSlider = document.getElementById('mem-budget-slider');
+
+if (memSlider) {
 const memoryModels = {
   qwen: { id: 'qwen', name: 'Qwen 2.5 4B Coder', size: 4.0, file: 'Qwen2.5-Coder-4B-Q4_K_M.gguf', port: 8100 },
   llama: { id: 'llama', name: 'Llama 3.2 3B Instruct', size: 3.6, file: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf', port: 8101 },
@@ -169,7 +175,6 @@ const memoryModels = {
 let memBudget = 12.0;
 let loadedModels = [];
 
-const memSlider = document.getElementById('mem-budget-slider');
 const memDisplay = document.getElementById('mem-budget-display');
 const progressBar = document.getElementById('visualizer-progress-bar');
 const statMemUsage = document.getElementById('stat-mem-usage');
@@ -349,10 +354,14 @@ document.getElementById('btn-load-kokoro').addEventListener('click', () => loadM
 
 // Initial visualizer setup
 renderVisualizer();
+} // end memSlider guard
 
 // ---------------------------------------------------------------------------
-// 4. API Code Snippets Playground
+// 4. API Code Snippets Playground (only present on the home page)
 // ---------------------------------------------------------------------------
+const codeSnippetBox = document.getElementById('code-snippet-box');
+
+if (codeSnippetBox) {
 const codeSnippets = {
   chat: {
     curl: `curl http://localhost:11435/v1/chat/completions \\
@@ -538,8 +547,6 @@ const langButtons = {
   js: document.getElementById('lang-btn-js')
 };
 
-const codeSnippetBox = document.getElementById('code-snippet-box');
-
 // Render Code Snippet
 function renderCodeSnippet() {
   const rawCode = codeSnippets[activeTab][activeLang];
@@ -601,35 +608,20 @@ Object.keys(langButtons).forEach(key => {
 });
 
 renderCodeSnippet();
+} // end codeSnippetBox guard
 
 // ---------------------------------------------------------------------------
-// 5. Global Theme Toggle (adapting standard root attribute data-theme)
+// 5. Scroll Reveal Observer (kawaii fade + rise-in for each section)
 // ---------------------------------------------------------------------------
-const themeToggleBtn = document.getElementById('theme-toggle-btn');
-const themeSun = document.getElementById('theme-sun');
-const themeMoon = document.getElementById('theme-moon');
+const revealElements = document.querySelectorAll('.reveal');
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('active');
+    }
+  });
+}, { threshold: 0.1 });
 
-// Set default moon/sun visual state based on system or local preference
-if (document.documentElement.getAttribute('data-theme') === 'light') {
-  themeSun.classList.remove('hidden');
-  themeMoon.classList.add('hidden');
-} else {
-  themeSun.classList.add('hidden');
-  themeMoon.classList.remove('hidden');
-}
-
-themeToggleBtn.addEventListener('click', () => {
-  const currentTheme = document.documentElement.getAttribute('data-theme');
-  
-  if (currentTheme === 'light') {
-    // Switch to dark theme
-    document.documentElement.removeAttribute('data-theme');
-    themeSun.classList.add('hidden');
-    themeMoon.classList.remove('hidden');
-  } else {
-    // Switch to light theme
-    document.documentElement.setAttribute('data-theme', 'light');
-    themeSun.classList.remove('hidden');
-    themeMoon.classList.add('hidden');
-  }
+document.addEventListener('DOMContentLoaded', () => {
+  revealElements.forEach(el => revealObserver.observe(el));
 });

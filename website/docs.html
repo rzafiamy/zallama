@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Zallama Docs — Setup, CLI &amp; API Reference</title>
+    <meta name="description" content="Full documentation for Zallama: compiling llama.cpp/parakeet.cpp/kokoro.cpp from source, the CLI reference, systemd deployment, the memory eviction policy, and the OpenAI-compatible API reference." />
+    <meta name="author" content="Rija Z." />
+
+    <meta property="og:title" content="Zallama Docs — Setup, CLI & API Reference" />
+    <meta property="og:description" content="Everything you need to build, run, and integrate Zallama: compilation steps, CLI reference, systemd deployment, and the full API reference." />
+    <meta property="og:type" content="website" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  </head>
+  <body class="bg-[#f0f7ff] text-slate-800 antialiased min-h-screen relative bg-grid-pattern">
+    <div class="absolute top-10 left-1/4 w-72 h-72 bg-blue-300/30 rounded-full blur-3xl -z-10 animate-bubble-1"></div>
+    <div class="absolute top-1/3 right-1/4 w-96 h-96 bg-sky-200/40 rounded-full blur-3xl -z-10 animate-bubble-2"></div>
+    <div class="absolute bottom-1/4 left-1/3 w-80 h-80 bg-indigo-200/25 rounded-full blur-3xl -z-10 animate-bubble-3"></div>
+
+    <!-- Header / Navigation -->
+    <header class="sticky top-0 z-50 w-full glass-panel border-b border-sky-100 backdrop-blur-md">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <a href="./index.html" class="flex items-center gap-3">
+          <span class="text-3xl leading-none" aria-hidden="true">🦙</span>
+          <div class="flex flex-col">
+            <span class="font-extrabold text-xl leading-tight tracking-tight text-sky-600">Zallama</span>
+            <span class="text-[9px] text-sky-400 -mt-0.5 font-bold tracking-wider uppercase">Documentation</span>
+          </div>
+        </a>
+
+        <nav class="hidden md:flex items-center gap-6 text-sm font-bold text-slate-500">
+          <a href="#quickstart" class="hover:text-sky-600 transition-colors">Quickstart</a>
+          <a href="#compiling" class="hover:text-sky-600 transition-colors">Compiling</a>
+          <a href="#cli-reference" class="hover:text-sky-600 transition-colors">CLI</a>
+          <a href="#eviction" class="hover:text-sky-600 transition-colors">Eviction Policy</a>
+          <a href="#systemd" class="hover:text-sky-600 transition-colors">Systemd</a>
+          <a href="#api-reference" class="hover:text-sky-600 transition-colors">API Reference</a>
+        </nav>
+
+        <a href="./index.html" class="hidden sm:inline-flex items-center justify-center px-5 py-2.5 text-xs font-bold rounded-2xl bg-sky-500 hover:bg-sky-400 text-white transition-all shadow-md shadow-sky-500/25 bouncy-btn">
+          ← Back to Zallama
+        </a>
+      </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-24">
+
+      <!-- HERO -->
+      <section class="text-center max-w-3xl mx-auto pt-4 pb-4">
+        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white border border-sky-100 text-sky-500 text-xs font-bold mb-6 shadow-sm">
+          <span>📚</span>
+          <span>Developer Documentation</span>
+        </div>
+        <h1 class="text-4xl sm:text-5xl font-black tracking-tight leading-tight text-slate-800">
+          Build, Run, and Integrate <span class="text-gradient-fluent">Zallama</span>
+        </h1>
+        <p class="mt-6 text-base sm:text-lg text-slate-600 leading-relaxed font-medium">
+          Zallama wraps three separate C++ inference engines — <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">llama.cpp</code>, <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">parakeet.cpp</code>, and <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">kokoro.cpp</code> — behind one Python daemon and CLI. This page covers the full contract: compiling from source, the CLI commands, the memory eviction policy, systemd deployment, and the OpenAI-compatible API reference.
+        </p>
+      </section>
+
+      <!-- QUICKSTART -->
+      <section id="quickstart" class="reveal space-y-6">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">🚀</span>
+          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Quickstart</h2>
+        </div>
+        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
+          The installer compiles all three engines for your platform and registers Zallama as a systemd service. Run it with root access:
+        </p>
+        <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-xs font-mono overflow-x-auto shadow-inner"><code>git clone https://github.com/rzafiamy/zallama.git
+cd zallama
+sudo bash install.sh</code></pre>
+        <p class="text-xs text-slate-400 font-semibold max-w-3xl">
+          No root access, or want to compile engines individually / customize build flags? See <a href="#compiling" class="text-sky-600 underline decoration-sky-300">Compiling from source</a> below.
+        </p>
+      </section>
+
+      <!-- COMPILING FROM SOURCE -->
+      <section id="compiling" class="reveal space-y-6">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">🔧</span>
+          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Compiling &amp; Installation</h2>
+        </div>
+        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
+          Compile the C++ binaries for your platform, then run the unified Python-based daemon wrapper. Each build script is independent, so you can rebuild a single engine without touching the others.
+        </p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <!-- Step 1 -->
+          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 1</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">build-ggml-llama.cpp.sh</span>
+              </div>
+              <h3 class="text-base font-extrabold text-slate-800">Compile Llama Engine</h3>
+              <p class="text-xs text-slate-500 leading-relaxed font-medium">
+                Compiles <code class="bg-sky-50 px-1 py-0.5 rounded font-mono">llama.cpp</code> with CUDA support. You <strong>must</strong> pass a tag or branch name (e.g. <code class="text-sky-600 font-mono">b4600</code>).
+              </p>
+            </div>
+            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>./build-ggml-llama.cpp.sh b4600</code></pre>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 2</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">build-ggml-parakeet.cpp.sh</span>
+              </div>
+              <h3 class="text-base font-extrabold text-slate-800">Compile Parakeet ASR</h3>
+              <p class="text-xs text-slate-500 leading-relaxed font-medium">
+                Compiles the speech-to-text <code class="bg-sky-50 px-1 py-0.5 rounded font-mono">parakeet-server</code>, copies shared libraries, and patches paths via <code class="font-mono">patchelf</code>.
+              </p>
+            </div>
+            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>./build-ggml-parakeet.cpp.sh master</code></pre>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 3</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">build-ggml-kokoro.cpp.sh</span>
+              </div>
+              <h3 class="text-base font-extrabold text-slate-800">Compile Kokoro TTS</h3>
+              <p class="text-xs text-slate-500 leading-relaxed font-medium">
+                Compiles the speech synthesis <code class="bg-sky-50 px-1 py-0.5 rounded font-mono">kokoro-server</code> statically. ONNX Runtime is fetched and linked automatically.
+              </p>
+            </div>
+            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>./build-ggml-kokoro.cpp.sh v0.1.0</code></pre>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 4</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">install.sh</span>
+              </div>
+              <h3 class="text-base font-extrabold text-slate-800">Setup Zallama System</h3>
+              <p class="text-xs text-slate-500 leading-relaxed font-medium">
+                Initializes the Python virtual environment, registers symlinks and shell completions, and installs an always-on daemon service. Run with root access.
+              </p>
+            </div>
+            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>sudo bash install.sh</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- CLI REFERENCE -->
+      <section id="cli-reference" class="reveal space-y-6">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">💻</span>
+          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">CLI reference</h2>
+        </div>
+        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
+          Every part of the daemon can be driven from the command line. Try the interactive demo on the <a href="./index.html#terminal" class="text-sky-600 underline decoration-sky-300">home page</a> for a live replay of these commands.
+        </p>
+
+        <div class="glass-card rounded-3xl overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+              <thead class="bg-sky-50/70 text-slate-500 text-xs uppercase font-extrabold tracking-wide">
+                <tr>
+                  <th class="px-5 py-3">Command</th>
+                  <th class="px-5 py-3">Description</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-sky-100 font-medium text-slate-700">
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama serve</td>
+                  <td class="px-5 py-3">Starts the daemon and its OpenAI-compatible gateway on <code class="text-[11px] bg-sky-50 px-1 rounded">http://127.0.0.1:11435</code> by default. Loads the registry and begins idle-sweep checks for the LRU eviction manager.</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama pull &lt;model&gt;</td>
+                  <td class="px-5 py-3">Downloads a model by preset ID (<code class="text-[11px] bg-sky-50 px-1 rounded">llama3.2:3b</code>, <code class="text-[11px] bg-sky-50 px-1 rounded">kokoro:82m</code>) or a direct Hugging Face repo/file path, using <code class="text-[11px] bg-sky-50 px-1 rounded">aria2c</code> when available.</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama run &lt;model&gt;</td>
+                  <td class="px-5 py-3">Pre-loads a model server and drops you into an interactive chat session against it — useful for quick manual testing outside the API.</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama ps</td>
+                  <td class="px-5 py-3">Lists currently loaded model servers with their port, memory footprint, uptime, and last-used timestamp — plus a total memory summary.</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama set &lt;model&gt; &lt;key&gt;=&lt;value&gt;</td>
+                  <td class="px-5 py-3">Updates a model's registry parameters (e.g. <code class="text-[11px] bg-sky-50 px-1 rounded">reasoning=false</code>, <code class="text-[11px] bg-sky-50 px-1 rounded">ctx_size=8192</code>). Already-running models need a manual <code class="text-[11px] bg-sky-50 px-1 rounded">reload</code> to pick up changes.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- EVICTION POLICY -->
+      <section id="eviction" class="reveal space-y-6">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">⚖️</span>
+          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Memory eviction policy</h2>
+        </div>
+        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
+          Zallama tracks a single memory budget (RAM/VRAM, configurable) shared across every loaded model server. When a new model is requested and there isn't enough headroom, the manager evicts the <strong>Least-Recently-Used</strong> server first — repeating until either enough memory is free, or every other model has been evicted.
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="glass-card p-6 rounded-3xl space-y-3">
+            <h3 class="font-extrabold text-slate-800 text-sm">How "recently used" is tracked</h3>
+            <p class="text-sm text-slate-600 leading-relaxed font-medium">Every request that reaches a model server bumps it to the front of the LRU queue. Idle servers sink toward eviction; hot servers stay resident even under memory pressure.</p>
+          </div>
+          <div class="glass-card p-6 rounded-3xl space-y-3">
+            <h3 class="font-extrabold text-slate-800 text-sm">When the budget itself shrinks</h3>
+            <p class="text-sm text-slate-600 leading-relaxed font-medium">Lowering the configured budget while models are loaded triggers the same eviction loop immediately, freeing servers until total usage fits under the new limit.</p>
+          </div>
+        </div>
+        <div class="p-4 bg-sky-50/50 border-2 border-sky-100 rounded-3xl text-sm text-slate-700 font-semibold shadow-sm max-w-3xl">
+          🧪 <strong>Try it yourself:</strong> the <a href="./index.html#visualizer" class="text-sky-600 underline decoration-sky-300">interactive eviction visualizer</a> on the home page simulates this exact policy in the browser — drag the budget slider and load models to watch the LRU queue play out.
+        </div>
+      </section>
+
+      <!-- SYSTEMD -->
+      <section id="systemd" class="reveal space-y-6">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">⚙️</span>
+          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Systemd service setup</h2>
+        </div>
+        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
+          Run Zallama as an always-on backend service that boots up automatically with your server. A root <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">install.sh</code> run registers this for you; otherwise, create the unit file manually:
+        </p>
+
+        <div class="glass-card rounded-3xl overflow-hidden">
+          <div class="px-5 py-3 bg-sky-50/70 border-b border-sky-100 flex items-center justify-between">
+            <span class="text-xs font-extrabold text-slate-500 uppercase tracking-wide">/etc/systemd/system/zallama.service</span>
+          </div>
+          <pre class="p-5 overflow-x-auto text-xs font-mono text-slate-100 bg-slate-900 leading-relaxed"><code>[Unit]
+Description=Zallama — Local LLM Server
+After=network.target
+
+[Service]
+Type=simple
+User=cook
+WorkingDirectory=/home/cook/Documents/Dev/Dev-ai/zallama
+ExecStart=/home/cook/Documents/Dev/Dev-ai/zallama/zallama serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="glass-card p-5 rounded-3xl">
+            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Activate</p>
+            <pre class="bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>sudo systemctl enable --now zallama</code></pre>
+          </div>
+          <div class="glass-card p-5 rounded-3xl">
+            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Follow logs</p>
+            <pre class="bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>journalctl -u zallama -f</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- API REFERENCE -->
+      <section id="api-reference" class="reveal space-y-6">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">🔌</span>
+          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">OpenAI-compatible API reference</h2>
+        </div>
+        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
+          Point any OpenAI SDK, LangChain, or agent framework at Zallama by setting the base URL to your daemon's address (default <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">http://localhost:11435/v1</code>). Try each endpoint live in the <a href="./index.html#usage" class="text-sky-600 underline decoration-sky-300">API playground</a> on the home page.
+        </p>
+
+        <div class="glass-card rounded-3xl overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+              <thead class="bg-sky-50/70 text-slate-500 text-xs uppercase font-extrabold tracking-wide">
+                <tr>
+                  <th class="px-5 py-3">Endpoint</th>
+                  <th class="px-5 py-3">Modality</th>
+                  <th class="px-5 py-3">Description</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-sky-100 font-medium text-slate-700">
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">/v1/chat/completions</td>
+                  <td class="px-5 py-3">Text &amp; Vision</td>
+                  <td class="px-5 py-3">Standard chat completions, with streaming and thinking-block support for reasoning models. Accepts <code class="text-[11px] bg-sky-50 px-1 rounded">image_url</code> content blocks for vision-capable models bound to an <code class="text-[11px] bg-sky-50 px-1 rounded">mmproj</code> projector.</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">/v1/audio/transcriptions</td>
+                  <td class="px-5 py-3">ASR</td>
+                  <td class="px-5 py-3">Upload MP3, WebM, M4A, or FLAC audio; Zallama transcodes with <code class="text-[11px] bg-sky-50 px-1 rounded">ffmpeg</code> and transcribes with a Parakeet-backed model. Supports <code class="text-[11px] bg-sky-50 px-1 rounded">verbose_json</code> and word-level timestamps.</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">/v1/audio/speech</td>
+                  <td class="px-5 py-3">TTS</td>
+                  <td class="px-5 py-3">Synthesizes speech from text with a Kokoro-backed model and streams back an audio file (e.g. MP3).</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div>
+            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Chat — cURL</p>
+            <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-[11px] font-mono overflow-x-auto shadow-inner h-full"><code>curl http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-4b-q4_k_m",
+    "messages": [
+      {"role": "user", "content": "Tell me a joke."}
+    ],
+    "stream": true
+  }'</code></pre>
+          </div>
+          <div>
+            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Transcription — cURL</p>
+            <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-[11px] font-mono overflow-x-auto shadow-inner h-full"><code>curl http://localhost:11435/v1/audio/transcriptions \
+  -F "model=tdt-0.6b-v3-q8_0" \
+  -F "file=@speech.mp3" \
+  -F "response_format=verbose_json" \
+  -F "timestamp_granularities[]=word"</code></pre>
+          </div>
+          <div>
+            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Speech — cURL</p>
+            <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-[11px] font-mono overflow-x-auto shadow-inner h-full"><code>curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "kokoro:82m",
+    "input": "Hello world, this is a local voice generated by Zallama.",
+    "voice": "af_bella"
+  }' \
+  --output speech.mp3</code></pre>
+          </div>
+        </div>
+
+        <div class="p-4 bg-amber-50/70 border-2 border-amber-100 rounded-3xl text-sm text-slate-700 font-semibold shadow-sm max-w-3xl">
+          ⚠️ <strong>Model IDs are registry keys:</strong> the <code class="text-xs bg-white/60 px-1.5 py-0.5 rounded-md font-mono font-bold">model</code> field must match an entry already pulled into <code class="text-xs bg-white/60 px-1.5 py-0.5 rounded-md font-mono font-bold">registry.yaml</code> via <code class="text-xs bg-white/60 px-1.5 py-0.5 rounded-md font-mono font-bold">zallama pull</code>. Requesting an unregistered model returns an error instead of a silent fallback.
+        </div>
+      </section>
+
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="border-t border-sky-100 bg-white/80 mt-24">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex flex-col sm:flex-row items-center justify-between gap-6 text-sm text-slate-400 font-bold">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl opacity-80">🦙</span>
+          <span>© 2026 Zallama. Released under the MIT License.</span>
+        </div>
+        <div class="flex gap-6">
+          <a href="./index.html" class="hover:text-sky-500 transition-colors">Home</a>
+          <a href="https://github.com/rzafiamy/zallama" target="_blank" rel="noopener noreferrer" class="hover:text-sky-500 transition-colors">GitHub</a>
+        </div>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
