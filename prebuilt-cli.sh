@@ -80,42 +80,6 @@ sort_packages() {
     fi
 }
 
-ensure_gdown() {
-    if command -v gdown >/dev/null 2>&1; then
-        return 0
-    fi
-
-    echo "gdown is required to download the selected Google Drive file."
-    if command -v python3 >/dev/null 2>&1; then
-        read -r -p "Install gdown with 'python3 -m pip install --user gdown'? [Y/n] " answer
-        case "${answer:-Y}" in
-            y|Y|yes|YES)
-                python3 -m pip install --user gdown
-                ;;
-            *)
-                echo "ERROR: Cannot continue without gdown for Google Drive URLs." >&2
-                exit 1
-                ;;
-        esac
-    else
-        echo "ERROR: python3 is required to install gdown automatically." >&2
-        exit 1
-    fi
-
-    if ! command -v gdown >/dev/null 2>&1; then
-        local user_base
-        user_base="$(python3 -m site --user-base 2>/dev/null || true)"
-        if [[ -n "$user_base" && -x "$user_base/bin/gdown" ]]; then
-            export PATH="$user_base/bin:$PATH"
-        fi
-    fi
-
-    if ! command -v gdown >/dev/null 2>&1; then
-        echo "ERROR: gdown installed but is not on PATH. Add your Python user bin directory to PATH and rerun." >&2
-        exit 1
-    fi
-}
-
 drive_folder_id() {
     local url="$1"
     local id
@@ -175,7 +139,11 @@ download_drive_file() {
     local cache_dir
     local output
 
-    ensure_gdown
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: python3 is required to download Google Drive files." >&2
+        exit 1
+    fi
+
     cache_base="${ZALLAMA_PREBUILT_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/zallama/prebuilt}"
     cache_dir="${cache_base}/downloads"
     mkdir -p "$cache_dir"
@@ -183,7 +151,71 @@ download_drive_file() {
 
     if [[ ! -f "$output" ]]; then
         echo "Downloading $filename..."
-        gdown "https://drive.google.com/uc?id=${file_id}" -O "$output"
+        python3 - "$file_id" "$output" <<'PY'
+import html
+import http.cookiejar
+import re
+import sys
+import urllib.parse
+import urllib.request
+
+file_id, output = sys.argv[1], sys.argv[2]
+cookie_jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+def open_url(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    return opener.open(req, timeout=60)
+
+def save_response(resp):
+    total = resp.headers.get("Content-Length")
+    done = 0
+    with open(output, "wb") as fh:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk)
+            done += len(chunk)
+            if total:
+                percent = min(100, int(done * 100 / int(total)))
+                print(f"\r{percent:3d}% {done / (1024 * 1024):.1f} MiB", end="", file=sys.stderr)
+            else:
+                print(f"\r{done / (1024 * 1024):.1f} MiB", end="", file=sys.stderr)
+    print(file=sys.stderr)
+
+url = "https://drive.google.com/uc?" + urllib.parse.urlencode({"export": "download", "id": file_id})
+resp = open_url(url)
+ctype = resp.headers.get("Content-Type", "")
+
+if "text/html" not in ctype:
+    save_response(resp)
+    raise SystemExit(0)
+
+body = resp.read().decode("utf-8", "replace")
+confirm = None
+match = re.search(r"confirm=([0-9A-Za-z_]+)", body)
+if match:
+    confirm = html.unescape(match.group(1))
+
+download_url = None
+match = re.search(r'href="(/uc\?export=download[^"]+)"', body)
+if match:
+    download_url = "https://drive.google.com" + html.unescape(match.group(1)).replace("&amp;", "&")
+
+if confirm:
+    url = "https://drive.google.com/uc?" + urllib.parse.urlencode(
+        {"export": "download", "confirm": confirm, "id": file_id}
+    )
+elif download_url:
+    url = download_url
+else:
+    print("ERROR: Google Drive did not provide a downloadable response.", file=sys.stderr)
+    print("The file may not be public, or Google changed the confirmation page.", file=sys.stderr)
+    raise SystemExit(1)
+
+save_response(open_url(url))
+PY
     else
         echo "Using cached download: $output"
     fi

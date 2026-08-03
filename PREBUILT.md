@@ -77,9 +77,8 @@ By default, the script reads the public Google Drive folder:
 https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing
 ```
 
-For Google Drive downloads, the script uses `gdown`. If it is missing,
-`prebuilt-cli.sh` asks whether it should install it with pip before downloading
-the selected archive.
+For Google Drive access, the script uses Python 3 standard-library networking.
+No extra Python packages are required.
 
 ```bash
 ./prebuilt-cli.sh
