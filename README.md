@@ -20,6 +20,7 @@
 
 - [Features](#-features)
 - [Installation](#-installation)
+- [Prebuilt Packages](#-prebuilt-packages)
 - [Quick Start](#-quick-start)
 - [Using Existing Local Models](#-using-existing-local-models)
 - [CLI Reference](#-cli-reference)
@@ -94,6 +95,19 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 > 3.28, so install a newer CMake and run the script with
 > `CMAKE_BIN=/path/to/cmake`.
 
+### Optional: use prebuilt packages
+
+To simplify setup, prebuilt packages are also available from the shared Google
+Drive folder:
+
+<https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing>
+
+Download the package that matches your platform and accelerator stack, then
+copy the provided binaries into `./bin/` before running the installer. At a
+minimum, Zallama needs `llama-server` available in `./bin/` or on your `PATH`.
+For speech-to-text or text-to-speech, also copy the matching `parakeet-server`
+or `kokoro-server` binaries.
+
 ### 3. Run the installer
 
 Install the global CLI launcher and register local configuration defaults:
@@ -117,6 +131,41 @@ export PATH="$PWD:$PATH"   # from the zallama checkout
 ```
 
 ---
+
+## 📦 Prebuilt Packages
+
+If you do not want to build the inference engines from source, download a
+prebuilt package from the shared Google Drive folder:
+
+<https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing>
+
+After extracting the package, place the engine binaries in the repository's
+`bin/` directory:
+
+```bash
+mkdir -p ./bin
+cp /path/to/extracted/package/llama-server ./bin/
+```
+
+Optional modality backends can be copied the same way:
+
+```bash
+cp /path/to/extracted/package/parakeet-server ./bin/   # ASR
+cp /path/to/extracted/package/kokoro-server ./bin/     # TTS
+```
+
+Then continue with the installer:
+
+```bash
+sudo bash install.sh
+```
+
+The installer checks `./bin/` first, so locally copied binaries are used
+automatically.
+
+See [PREBUILT.md](PREBUILT.md) for the package naming rules and the
+`find-compatible-prebuilt.sh` helper, which detects your Ubuntu/CUDA setup and
+prints the best matching archive from a downloaded package folder.
 
 ## 🚀 Quick Start
 
