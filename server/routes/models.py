@@ -155,7 +155,11 @@ async def add_model(req: AddModelRequest, registry=Depends(get_registry)):
 @router.delete("/models/{name:path}")
 async def remove_model(name: str, registry=Depends(get_registry), pm=Depends(get_pm)):
     # Stop if running
-    await pm.stop(name)
+    try:
+        canonical_name = registry.get(name)["name"]
+    except Exception:
+        canonical_name = name
+    await pm.stop(canonical_name)
     ok = registry.remove_model(name)
     if not ok:
         raise HTTPException(status_code=404, detail=f"Model '{name}' not in registry")
@@ -181,7 +185,7 @@ async def load_model(name: str, pm=Depends(get_pm), registry=Depends(get_registr
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
     try:
-        inst = await pm.get_or_start(name, entry, model_path)
+        inst = await pm.get_or_start(entry["name"], entry, model_path)
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
     return {
@@ -196,8 +200,12 @@ async def load_model(name: str, pm=Depends(get_pm), registry=Depends(get_registr
 # POST /api/models/{name}/unload
 # ---------------------------------------------------------------------------
 @router.post("/models/{name:path}/unload")
-async def unload_model(name: str, pm=Depends(get_pm)):
-    stopped = await pm.stop(name)
+async def unload_model(name: str, pm=Depends(get_pm), registry=Depends(get_registry)):
+    try:
+        canonical_name = registry.get(name)["name"]
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    stopped = await pm.stop(canonical_name)
     if not stopped:
         raise HTTPException(status_code=404, detail=f"Model '{name}' is not running")
     return {"status": "stopped", "name": name}
@@ -218,11 +226,12 @@ async def reload_model(name: str, pm=Depends(get_pm), registry=Depends(get_regis
         model_path = registry.resolve_path(entry)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
-    if not pm.is_running(name):
+    canonical_name = entry["name"]
+    if not pm.is_running(canonical_name):
         return {"status": "not_running", "name": name}
-    await pm.stop(name)
+    await pm.stop(canonical_name)
     try:
-        inst = await pm.get_or_start(name, entry, model_path)
+        inst = await pm.get_or_start(canonical_name, entry, model_path)
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
     return {
@@ -319,4 +328,3 @@ async def search_huggingface(q: str):
                 "query": q,
                 "results": results
             }
-

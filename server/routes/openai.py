@@ -74,7 +74,7 @@ async def _resolve_instance(model_name: str, pm, registry, endpoint: str | None 
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     try:
-        inst = await pm.get_or_start(model_name, entry, model_path)
+        inst = await pm.get_or_start(entry["name"], entry, model_path)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Failed to start model: {e}")
     return inst

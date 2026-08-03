@@ -74,6 +74,11 @@ class ProcessManager:
 
         self._instances: OrderedDict[str, ModelInstance] = OrderedDict()
         self._global_lock = asyncio.Lock()
+        # Capacity admission covers eviction, shutdown, and startup. Keeping it
+        # separate from _global_lock lets normal manager operations proceed
+        # while a backend is becoming healthy, without allowing concurrent
+        # starts to over-commit the configured limits.
+        self._admission_lock = asyncio.Lock()
         # Per-model locks so booting one model never blocks requests to another.
         self._model_locks: dict[str, asyncio.Lock] = {}
         self._binary_cache: dict[str, str] = {}
@@ -112,9 +117,12 @@ class ProcessManager:
     async def get_or_start(self, model_name: str, entry: dict, model_path: Path) -> ModelInstance:
         """Return running instance for model, starting it if necessary.
 
-        Held lock is per-model: concurrent loads of *different* models run in
-        parallel, and a slow startup never blocks unrelated requests.
+        The registry's canonical name is the instance identity. This keeps an
+        alias and its canonical name from acquiring separate locks or starting
+        separate backend processes. Starts are serialized only when a capacity
+        limit is configured, so admission cannot oversubscribe the limit.
         """
+        model_name = entry.get("name") or model_name
         # Fast path: already running.
         async with self._global_lock:
             inst = self._instances.get(model_name)
@@ -135,14 +143,24 @@ class ProcessManager:
                     logger.warning(f"Instance {model_name} died unexpectedly, restarting...")
                     del self._instances[model_name]
 
-            # Make room *before* spawning: evict LRU until the incoming model
-            # fits within the count and memory budgets.
             incoming_cost = self._estimate_cost(entry, model_path)
-            async with self._global_lock:
-                await self._make_room_locked(incoming_cost)
+            has_capacity_limit = self._max_loaded > 0 or self._mem_budget_gb > 0
+
+            if has_capacity_limit:
+                # Keep the reservation from capacity check through registration.
+                # The global lock remains short-lived; killing and health checks
+                # happen without it.
+                async with self._admission_lock:
+                    async with self._global_lock:
+                        evicted = self._make_room_locked(incoming_cost)
+                    for victim in evicted:
+                        await self._kill_instance(victim)
+                    inst = await self._spawn(model_name, entry, model_path, incoming_cost)
+                    async with self._global_lock:
+                        self._instances[model_name] = inst
+                    return inst
 
             inst = await self._spawn(model_name, entry, model_path, incoming_cost)
-
             async with self._global_lock:
                 self._instances[model_name] = inst
             return inst
@@ -337,13 +355,15 @@ class ProcessManager:
                 continue
         return round(total, 2) if matched else None
 
-    async def _make_room_locked(self, incoming_cost: float):
+    def _make_room_locked(self, incoming_cost: float) -> list[ModelInstance]:
         """Evict LRU instances until an incoming model fits both budgets.
 
         Caller holds the global lock. Count budget: keep loaded count below
         max_loaded. Memory budget: keep loaded + incoming within mem_budget_gb.
-        Eviction always targets the least-recently-used instance first.
+        Eviction always targets the least-recently-used instance first. Victims
+        are removed here but killed by the caller after releasing the lock.
         """
+        evicted: list[ModelInstance] = []
         def over_count() -> bool:
             return self._max_loaded > 0 and len(self._instances) >= self._max_loaded
 
@@ -378,7 +398,8 @@ class ProcessManager:
                 f"'{victim_name}' ({victim.mem_gb:.1f}GB) to make room "
                 f"for incoming {incoming_cost:.1f}GB"
             )
-            await self._kill_instance(victim)
+            evicted.append(victim)
+        return evicted
 
     def _binary_for(self, backend: Backend) -> str:
         cached = self._binary_cache.get(backend.name)
