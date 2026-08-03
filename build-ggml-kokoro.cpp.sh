@@ -21,6 +21,21 @@ apt install -y git cmake build-essential
 WORKDIR=$(pwd)
 BIN_DIR="${WORKDIR}/bin"
 
+# kokoro.cpp v0.1.0 pulls xtl, which requires CMake 3.29 or newer. Ubuntu
+# 24.04's apt package is 3.28, so allow callers to select a newer install.
+CMAKE_BIN="${CMAKE_BIN:-$(command -v cmake || true)}"
+if [[ -z "${CMAKE_BIN}" || ! -x "${CMAKE_BIN}" ]]; then
+    echo "❌ CMake was not found. Install CMake 3.29 or newer." >&2
+    exit 1
+fi
+CMAKE_VERSION="$("${CMAKE_BIN}" --version | awk 'NR == 1 { print $3 }')"
+if [[ "$(printf '%s\n' "3.29" "${CMAKE_VERSION}" | sort -V | head -n 1)" != "3.29" ]]; then
+    echo "❌ kokoro.cpp requires CMake 3.29 or newer; found ${CMAKE_VERSION}." >&2
+    echo "   Install a newer CMake, then rerun with CMAKE_BIN=/path/to/cmake." >&2
+    exit 1
+fi
+echo "🔧 Using CMake ${CMAKE_VERSION}: ${CMAKE_BIN}"
+
 # Build in a throwaway temp dir so the repo stays clean.
 BUILD_ROOT=$(mktemp -d)
 trap 'rm -rf "${BUILD_ROOT}"' EXIT
@@ -35,13 +50,13 @@ git checkout "${BRANCH_OR_TAG}"
 
 # --- Build ---
 echo "⚙️  Configuring build..."
-cmake -B build \
+"${CMAKE_BIN}" -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_CLI=ON \
     -DBUILD_SERVER=ON
 
 echo "🚀 Compiling (this fetches + statically links ONNX Runtime, may take a while)..."
-cmake --build build --config Release -j "$(nproc)"
+"${CMAKE_BIN}" --build build --config Release -j "$(nproc)"
 
 # --- Install into ./bin ---
 echo "📦 Copying binaries into ${BIN_DIR}..."

@@ -89,6 +89,10 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 ```
 
 > All scripts default to a **CUDA** build. The parakeet script also copies the shared `libggml*.so` next to the binaries and sets their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime.
+>
+> `kokoro.cpp` v0.1.0 requires **CMake 3.29+**. Ubuntu 24.04's apt package is
+> 3.28, so install a newer CMake and run the script with
+> `CMAKE_BIN=/path/to/cmake`.
 
 ### 3. Run the installer
 
