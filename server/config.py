@@ -25,7 +25,9 @@ DEFAULTS: dict[str, Any] = {
         "models_dir": "~/.zallama/models",
         "logs_dir": "~/.zallama/logs",
         "log_level": "info",
-        "api_key": "",          # if set, required as Bearer token on /v1 and /api
+        "api_key": "",          # plaintext Bearer token (prefer api_key_sha256)
+        "api_key_sha256": "",   # SHA-256 hex of the key; set via `zallama apikey`
+        "api_key_expires": "",  # ISO-8601 UTC expiry instant ("" = never)
         "request_timeout": 600, # seconds for non-streaming upstream proxy calls
     },
     "llama_server": {

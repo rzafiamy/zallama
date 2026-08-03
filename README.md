@@ -671,14 +671,69 @@ systemctl status zallama
 
 ## 🔐 Security
 
-Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authentication, which is safe for single-user local use. If you expose it:
+Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authentication, which is safe for single-user local use.
 
-- Set `host: "0.0.0.0"` **only together with** an `api_key`. With a key set, all `/v1` and `/api` calls require an `Authorization: Bearer <key>` header (health checks and API docs stay public).
-  ```bash
-  curl http://localhost:11435/v1/models -H "Authorization: Bearer $YOUR_KEY"
+### API key
+
+Set `host: "0.0.0.0"` **only together with** an API key. The easiest and safest way is the CLI:
+
+```bash
+zallama apikey                     # generate a key valid 30 days (default)
+zallama apikey --expires 90d      # or 12h / 45m / 2026-09-01 / never
+zallama apikey hash <your-key>    # keep a key you chose yourself
+zallama apikey clear              # disable auth
+```
+
+`zallama apikey` generates a 256-bit random key, writes **only its SHA-256 hash** (plus the expiry instant) into `config.yaml`, chmods the file to 600, and prints the key **once** — it cannot be recovered afterwards, so store it in your password manager. Restart the daemon to apply. Expired keys are rejected with a 401 until you issue a new one.
+
+With a key set, everything except `/` and `/health` — including the API docs — requires an `Authorization: Bearer <key>` header, verified hash-to-hash with a constant-time comparison:
+
+```bash
+curl http://localhost:11435/v1/models -H "Authorization: Bearer $YOUR_KEY"
+```
+
+(A plaintext `api_key` config value is still honored for backward compatibility, but `api_key_sha256` is preferred and wins if both are set.)
+
+CORS allows all origins but does **not** send credentials.
+
+> ⚠️ The management API (`/api`) can register models pointing at arbitrary file paths and spawn backend processes. Treat the API key like a shell credential.
+
+### Remote access: prefer a VPN
+
+For personal remote access, the most secure option is to **not expose Zallama publicly at all**: keep `host: 127.0.0.1` and bind to a WireGuard/Tailscale interface and reach it over the VPN. Zero public attack surface, no TLS or auth to configure.
+
+### Public exposure: reverse proxy
+
+If it must face the internet, keep Zallama on `127.0.0.1`, set an `api_key` anyway (defense in depth), and put a TLS-terminating proxy in front. Example with Caddy (automatic Let's Encrypt certificates), exposing **only** the OpenAI-compatible inference surface:
+
+```caddyfile
+llm.example.com {
+    # Only /v1 passes through; management API, docs, and root stay private
+    @api path /v1/*
+    reverse_proxy @api 127.0.0.1:11435
+    respond 403
+
+    request_body {
+        max_size 25MB   # enough for audio uploads; tune down if text-only
+    }
+}
+```
+
+Additional layers worth adding:
+
+- **Firewall:** allow only 80/443 inbound (`ufw allow 80,443/tcp` then `ufw enable`).
+- **Ban abusive clients:** fail2ban or CrowdSec keyed on repeated 401/403 responses.
+- **mTLS:** if your clients support client certificates, require them at the proxy — anonymous scanners can't even complete a TLS handshake.
+- **systemd sandboxing:** in the unit file, run as an unprivileged user with:
+  ```ini
+  [Service]
+  User=zallama
+  NoNewPrivileges=yes
+  ProtectSystem=strict
+  ProtectHome=read-only
+  ReadWritePaths=/home/zallama/.zallama
+  PrivateTmp=yes
   ```
-- Prefer running behind a reverse proxy (TLS termination, rate limiting) for any network-facing deployment.
-- CORS allows all origins but does **not** send credentials.
 
 ---
 

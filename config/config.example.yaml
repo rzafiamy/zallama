@@ -10,7 +10,9 @@ zallama:
   models_dir: "~/.zallama/models"   # model files AND registry.yaml live here
   logs_dir: "~/.zallama/logs"
   log_level: "info"
-  api_key: ""         # if set, required as Bearer token on /v1 and /api
+  api_key: ""            # plaintext Bearer token — prefer the hashed form below
+  api_key_sha256: ""     # SHA-256 hex of the key; manage with `zallama apikey`
+  api_key_expires: ""    # ISO-8601 UTC expiry written by `zallama apikey` ("" = never)
   request_timeout: 600 # Seconds for non-streaming upstream proxy calls
 
 llama_server:

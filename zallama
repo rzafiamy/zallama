@@ -14,6 +14,7 @@ Commands:
   unload <name>   Stop a running model
   logs <name>     Tail logs for a model
   health          Show daemon health status
+  apikey          Generate/rotate the API key (stores only its hash)
   version         Show version
 """
 from __future__ import annotations
@@ -920,7 +921,9 @@ _CONFIG_KEY_HELP = {
     "zallama.models_dir": "Where models + registry.yaml live",
     "zallama.logs_dir": "Where per-model logs are written",
     "zallama.log_level": "Logging verbosity (debug/info/warning/error)",
-    "zallama.api_key": "Bearer token required on /v1 and /api (empty = open)",
+    "zallama.api_key": "Plaintext Bearer token (prefer api_key_sha256; empty = open)",
+    "zallama.api_key_sha256": "SHA-256 hex of the Bearer token; manage with `zallama apikey`",
+    "zallama.api_key_expires": "Key expiry (ISO-8601 UTC; empty = never); set by `zallama apikey`",
     "zallama.request_timeout": "Non-streaming upstream proxy timeout (seconds)",
     "llama_server.binary": "Explicit llama-server path (empty = auto-detect)",
     "llama_server.port_start": "First backend port (instances use start, +1, ...)",
@@ -948,6 +951,123 @@ def _flatten_cfg(cfg: dict, prefix: str = "") -> list[tuple[str, object]]:
         else:
             out.append((dotted, val))
     return out
+
+
+def _config_write_zallama_keys(path: Path, updates: dict[str, str]) -> None:
+    """Set keys inside the top-level `zallama:` section of a config.yaml.
+
+    Edits the file line-by-line so user comments and formatting are preserved
+    (a YAML round-trip would drop them). Creates the file/section as needed.
+    """
+    import re
+
+    lines = path.read_text().splitlines() if path.exists() else []
+
+    # Locate the `zallama:` section and its extent (until the next top-level key)
+    start = next((i for i, l in enumerate(lines) if re.match(r"^zallama:\s*(#.*)?$", l)), None)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append("zallama:")
+        start = len(lines) - 1
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].strip() and not lines[i][0] in " \t#"), len(lines))
+
+    for key, value in updates.items():
+        rendered = f'  {key}: "{value}"'
+        pat = re.compile(rf"^(\s+){re.escape(key)}\s*:")
+        idx = next((i for i in range(start + 1, end) if pat.match(lines[i])), None)
+        if idx is not None:
+            lines[idx] = rendered
+        else:
+            lines.insert(start + 1, rendered)
+            end += 1
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
+    os.chmod(path, 0o600)
+
+
+def _parse_expiry(spec: str) -> str:
+    """Turn '30d' / '12h' / '2026-09-01' / 'never' into an ISO-8601 UTC instant ('' = never)."""
+    import re
+    from datetime import datetime, timedelta, timezone
+
+    spec = spec.strip().lower()
+    if spec in ("never", "none", "0"):
+        return ""
+    m = re.fullmatch(r"(\d+)([dhm])", spec)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        delta = {"d": timedelta(days=n), "h": timedelta(hours=n), "m": timedelta(minutes=n)}[unit]
+        return (datetime.now(timezone.utc) + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        return (datetime.strptime(spec, "%Y-%m-%d")
+                .replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        _err(f"Invalid --expires '{spec}'. Use e.g. 30d, 12h, 45m, 2026-09-01, or never.")
+        sys.exit(1)
+
+
+def cmd_apikey(args: list[str]):
+    """Manage the daemon API key without ever storing it in plaintext.
+
+    zallama apikey [--expires 30d]   Generate a key, store only its SHA-256 hash
+    zallama apikey clear             Disable API-key auth
+    zallama apikey hash <key>        Store the hash of a key you chose yourself
+
+    --expires accepts 30d / 12h / 45m, an absolute date (2026-09-01), or
+    'never'. Default: 30d. The daemon rejects the key after that instant.
+    """
+    import hashlib
+    import secrets as _secrets
+
+    root = Path(__file__).resolve().parent
+    sys.path.insert(0, str(root))
+    from server.config import _find_config_file
+
+    config_file = _find_config_file() or (Path.home() / ".zallama" / "config.yaml")
+
+    expires_spec = "30d"
+    rest: list[str] = []
+    it = iter(args)
+    for a in it:
+        if a == "--expires":
+            expires_spec = next(it, "") or expires_spec
+        elif a.startswith("--expires="):
+            expires_spec = a.split("=", 1)[1]
+        else:
+            rest.append(a)
+    action = rest[0] if rest else "rotate"
+
+    if action == "clear":
+        _config_write_zallama_keys(
+            config_file, {"api_key_sha256": "", "api_key": "", "api_key_expires": ""})
+        _ok(f"API-key auth disabled in {config_file}")
+    elif action in ("rotate", "hash"):
+        if action == "hash":
+            if len(rest) < 2 or not rest[1].strip():
+                _err("Usage: zallama apikey hash <key> [--expires 30d]")
+                sys.exit(1)
+            key = rest[1].strip()
+        else:
+            key = _secrets.token_hex(32)
+        expires = _parse_expiry(expires_spec)
+        digest = hashlib.sha256(key.encode()).hexdigest()
+        _config_write_zallama_keys(
+            config_file,
+            {"api_key_sha256": digest, "api_key": "", "api_key_expires": expires})
+        when = expires if expires else "never"
+        _ok(f"API key hashed into {config_file} (expires: {when})")
+        if action == "rotate":
+            print(f"\n  {BOLD}{key}{RESET}\n")
+            print(f"{F_DIM}  Save it now — it cannot be recovered from the config. "
+                  f"Use it as: Authorization: Bearer <key>{RESET}")
+    else:
+        _err(f"Unknown action '{action}'. Use: zallama apikey [clear|hash <key>] [--expires 30d]")
+        sys.exit(1)
+
+    print(f"{F_DIM}  Restart the daemon to apply (config.yaml is read at startup).{RESET}")
 
 
 def cmd_config(args: list[str]):
@@ -1736,6 +1856,7 @@ COMMANDS = {
     "show": cmd_show,
     "calibrate": cmd_calibrate,
     "config": cmd_config,
+    "apikey": cmd_apikey,
     "remove": cmd_remove,
     "rm": cmd_remove,
     "run": cmd_run,

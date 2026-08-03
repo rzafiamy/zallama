@@ -137,15 +137,33 @@ def create_app(cfg: dict) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Optional API-key auth. When zallama.api_key is set, require it as a Bearer
-    # token on the proxy/management surfaces. Public/local paths stay open so
-    # health checks keep working.
-    api_key = (cfg["zallama"].get("api_key") or "").strip()
-    if api_key:
+    # Optional API-key auth, required everywhere except the bare health check
+    # and landing page, so a network-facing deployment leaks nothing (not even
+    # the API schema) without the key. Preferred form: zallama.api_key_sha256
+    # holds only the SHA-256 hex digest of the key (set via `zallama apikey`),
+    # so the config file never contains the secret itself. Plaintext
+    # zallama.api_key is still honored; the hashed form wins if both are set.
+    api_key_sha256 = (cfg["zallama"].get("api_key_sha256") or "").strip().lower()
+    api_key_plain = (cfg["zallama"].get("api_key") or "").strip()
+    if api_key_sha256 or api_key_plain:
+        import hashlib
+        import secrets
+        from datetime import datetime, timezone
+
         from fastapi import Request
         from fastapi.responses import JSONResponse
 
-        public_prefixes = ("/health", "/docs", "/redoc", "/openapi.json")
+        expected_digest = api_key_sha256 or hashlib.sha256(api_key_plain.encode()).hexdigest()
+
+        # Optional expiry instant (ISO-8601 UTC, written by `zallama apikey`).
+        # After it passes, the key is rejected until a new one is issued.
+        expires_at = None
+        expires_raw = (cfg["zallama"].get("api_key_expires") or "").strip()
+        if expires_raw:
+            expires_at = datetime.strptime(
+                expires_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+        public_prefixes = ("/health",)
 
         @app.middleware("http")
         async def require_api_key(request: Request, call_next):
@@ -154,8 +172,13 @@ def create_app(cfg: dict) -> FastAPI:
                 return await call_next(request)
             auth = request.headers.get("authorization", "")
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-            if token != api_key:
+            digest = hashlib.sha256(token.encode()).hexdigest()
+            if not secrets.compare_digest(digest, expected_digest):
                 return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+            if expires_at and datetime.now(timezone.utc) > expires_at:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "API key expired — issue a new one with `zallama apikey`"})
             return await call_next(request)
 
     # Routes
