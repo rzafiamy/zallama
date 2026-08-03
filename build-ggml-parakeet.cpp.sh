@@ -17,6 +17,25 @@ apt install -y git cmake build-essential libcurl4-openssl-dev patchelf
 WORKDIR=$(pwd)
 BIN_DIR="${WORKDIR}/bin"
 
+# --- Locate CUDA toolkit ---
+# sudo sanitizes PATH (secure_path), so nvcc on /usr/local/cuda/bin is usually
+# not visible even when CUDA is installed. Find it explicitly and tell CMake.
+CUDA_ROOT="${CUDA_HOME:-/usr/local/cuda}"
+NVCC="$(command -v nvcc || true)"
+if [[ -z "${NVCC}" ]]; then
+    for c in "${CUDA_ROOT}/bin/nvcc" /usr/local/cuda-*/bin/nvcc; do
+        [[ -x "$c" ]] && NVCC="$c" && break
+    done
+fi
+if [[ -z "${NVCC}" ]]; then
+    echo "❌ nvcc not found. Install the CUDA Toolkit compiler package or set CUDA_HOME." >&2
+    exit 1
+fi
+CUDA_ROOT="$(dirname "$(dirname "$NVCC")")"
+export PATH="${CUDA_ROOT}/bin:${PATH}"
+export CUDACXX="${NVCC}"
+echo "🔧 Using nvcc: ${NVCC} (CUDA root: ${CUDA_ROOT})"
+
 # Build in a throwaway temp dir so the repo stays clean
 BUILD_ROOT=$(mktemp -d)
 trap 'rm -rf "${BUILD_ROOT}"' EXIT
@@ -39,6 +58,7 @@ echo "⚙️ Configuring build..."
 cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DPARAKEET_GGML_CUDA=ON \
+    -DCMAKE_CUDA_COMPILER="${NVCC}" \
     -DPARAKEET_BUILD_CLI=ON \
     -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
     -DCMAKE_INSTALL_RPATH='$ORIGIN'
