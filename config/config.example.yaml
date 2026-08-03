@@ -9,7 +9,6 @@ zallama:
   port: 11435
   models_dir: "~/.zallama/models"   # model files AND registry.yaml live here
   logs_dir: "~/.zallama/logs"
-  webui: true
   log_level: "info"
   api_key: ""         # if set, required as Bearer token on /v1 and /api
   request_timeout: 600 # Seconds for non-streaming upstream proxy calls

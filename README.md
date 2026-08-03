@@ -55,7 +55,6 @@ Zallama is built around a **pluggable backend abstraction**: each model declares
 - **🎙️ Speech-to-Text (ASR):** Transcribe audio via `/v1/audio/transcriptions` (OpenAI-compatible) on the `parakeet-server` backend. Any input format (mp3/m4a/webm/flac/…) is auto-transcoded to WAV with `ffmpeg`. Multilingual models (e.g. Parakeet TDT v3, 25 European languages incl. French) supported.
 - **🔎 Built-in RAG:** Cross-encoder reranking at `/v1/rerank` plus **zvec**, an in-process HNSW vector store (the [`zvec`](https://zvec.org) library — no external DB server) with `/v1/zvec/*` ingest & semantic-search endpoints and a `zallama zvec` CLI.
 - **🧩 Pluggable Backends & Modalities:** Each model declares a `modality` and `backend`. A `Backend` abstraction isolates engine-specific logic, so new modalities (TTS, image generation) slot in as new backends. A modality guard returns a clear error if a model is used on an incompatible endpoint.
-- **🌐 Sleek Embedded Web UI:** Access model management, registration, loading/unloading, and streaming chat at `http://localhost:11435`.
 - **⚙️ Config-Driven Architecture:** Define global defaults and customize per-model parameters (context size, GPU layers offload, batching options) in simple YAML configurations.
 - **🔄 Dynamic Process Management:** Per-model startup locking, OS-checked port assignment, server health checking, an optional concurrency cap (`max_loaded_models`), and automatic LRU model eviction/unloading when idle.
 - **🧠 Memory-Aware Eviction:** Set a `mem_budget_gb` and Zallama evicts least-recently-used models to keep total declared/estimated memory within budget.
@@ -173,7 +172,7 @@ packages, and installs the selected archive.
 ```bash
 zallama serve
 ```
-*Starts the FastAPI controller and Web UI on `http://localhost:11435`.*
+*Starts the FastAPI controller on `http://localhost:11435`.*
 
 ### 2. Pull a Model from HuggingFace
 Accelerated high-speed model acquisition via `aria2c`:
@@ -213,8 +212,8 @@ zallama run llama3.2:3b
 
 Zallama can use GGUF files that you already downloaded or copied into the
 configured `models_dir`, but it does not auto-discover every file in that
-directory. A model must be registered before it appears in `zallama list`, the
-Web UI, or OpenAI-compatible `/v1/models`.
+directory. A model must be registered before it appears in `zallama list` or
+OpenAI-compatible `/v1/models`.
 
 First check where Zallama stores models:
 
@@ -674,12 +673,12 @@ systemctl status zallama
 
 Zallama defaults to **localhost-only** (`host: 127.0.0.1`) with no authentication, which is safe for single-user local use. If you expose it:
 
-- Set `host: "0.0.0.0"` **only together with** an `api_key`. With a key set, all `/v1` and `/api` calls require an `Authorization: Bearer <key>` header (the Web UI and health checks stay public).
+- Set `host: "0.0.0.0"` **only together with** an `api_key`. With a key set, all `/v1` and `/api` calls require an `Authorization: Bearer <key>` header (health checks and API docs stay public).
   ```bash
   curl http://localhost:11435/v1/models -H "Authorization: Bearer $YOUR_KEY"
   ```
 - Prefer running behind a reverse proxy (TLS termination, rate limiting) for any network-facing deployment.
-- CORS allows all origins for the bundled Web UI but does **not** send credentials.
+- CORS allows all origins but does **not** send credentials.
 
 ---
 

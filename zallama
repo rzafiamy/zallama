@@ -919,7 +919,6 @@ _CONFIG_KEY_HELP = {
     "zallama.port": "Daemon port",
     "zallama.models_dir": "Where models + registry.yaml live",
     "zallama.logs_dir": "Where per-model logs are written",
-    "zallama.webui": "Serve the bundled web UI",
     "zallama.log_level": "Logging verbosity (debug/info/warning/error)",
     "zallama.api_key": "Bearer token required on /v1 and /api (empty = open)",
     "zallama.request_timeout": "Non-streaming upstream proxy timeout (seconds)",

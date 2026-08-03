@@ -6,7 +6,6 @@ FastAPI application entry point:
   - Initializes ProcessManager and ModelRegistry
   - Registers routes
   - Starts idle sweep background task
-  - Serves embedded Web UI
 """
 from __future__ import annotations
 
@@ -19,10 +18,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 # Ensure server package is importable when run directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -140,14 +138,14 @@ def create_app(cfg: dict) -> FastAPI:
     )
 
     # Optional API-key auth. When zallama.api_key is set, require it as a Bearer
-    # token on the proxy/management surfaces. Public/local paths stay open so the
-    # bundled Web UI and health checks keep working.
+    # token on the proxy/management surfaces. Public/local paths stay open so
+    # health checks keep working.
     api_key = (cfg["zallama"].get("api_key") or "").strip()
     if api_key:
         from fastapi import Request
         from fastapi.responses import JSONResponse
 
-        public_prefixes = ("/health", "/ui", "/docs", "/redoc", "/openapi.json")
+        public_prefixes = ("/health", "/docs", "/redoc", "/openapi.json")
 
         @app.middleware("http")
         async def require_api_key(request: Request, call_next):
@@ -166,33 +164,8 @@ def create_app(cfg: dict) -> FastAPI:
     app.include_router(zvec_routes.router)
     app.include_router(model_routes.router)
 
-    # Embedded Web UI
-    webui_dir = Path(__file__).parent.parent / "webui"
-    if webui_dir.exists():
-        app.mount("/ui", StaticFiles(directory=str(webui_dir), html=True), name="webui")
-
-    # Serve the Web UI's split assets at the root too, so index.html's relative
-    # <link>/<script> references (styles.css, app.js) resolve when the page is
-    # opened at "/" (not just under the "/ui" static mount).
-    @app.get("/styles.css", include_in_schema=False)
-    async def webui_styles():
-        css = webui_dir / "styles.css"
-        if css.exists():
-            return Response(content=css.read_text(), media_type="text/css")
-        raise HTTPException(status_code=404)
-
-    @app.get("/app.js", include_in_schema=False)
-    async def webui_app_js():
-        js = webui_dir / "app.js"
-        if js.exists():
-            return Response(content=js.read_text(), media_type="application/javascript")
-        raise HTTPException(status_code=404)
-
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def root():
-        webui_index = webui_dir / "index.html"
-        if webui_index.exists():
-            return webui_index.read_text()
         return HTMLResponse(content="""
         <html><body style="font-family:sans-serif;padding:2rem;background:#0d1117;color:#e6edf3">
         <h1>🦙 Zallama</h1>

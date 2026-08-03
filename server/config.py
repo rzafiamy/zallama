@@ -24,7 +24,6 @@ DEFAULTS: dict[str, Any] = {
         "port": 11435,
         "models_dir": "~/.zallama/models",
         "logs_dir": "~/.zallama/logs",
-        "webui": True,
         "log_level": "info",
         "api_key": "",          # if set, required as Bearer token on /v1 and /api
         "request_timeout": 600, # seconds for non-streaming upstream proxy calls
