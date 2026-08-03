@@ -165,10 +165,15 @@ def create_app(cfg: dict) -> FastAPI:
 
         public_prefixes = ("/health",)
 
+        loopback_hosts = {"127.0.0.1", "::1"}
+
         @app.middleware("http")
         async def require_api_key(request: Request, call_next):
             path = request.url.path
             if path == "/" or path.startswith(public_prefixes):
+                return await call_next(request)
+            client = request.client
+            if client and client.host in loopback_hosts:
                 return await call_next(request)
             auth = request.headers.get("authorization", "")
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
