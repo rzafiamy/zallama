@@ -150,7 +150,7 @@ download_drive_file() {
     output="${cache_dir}/${filename}"
 
     if [[ ! -f "$output" ]]; then
-        echo "Downloading $filename..."
+        echo "Downloading $filename..." >&2
         python3 - "$file_id" "$output" <<'PY'
 import html
 import http.cookiejar
@@ -217,7 +217,7 @@ else:
 save_response(open_url(url))
 PY
     else
-        echo "Using cached download: $output"
+        echo "Using cached download: $output" >&2
     fi
     printf '%s\n' "$output"
 }
