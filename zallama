@@ -65,7 +65,32 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-ZALLAMA_HOST = os.environ.get("ZALLAMA_HOST", "http://localhost:11435")
+def _default_zallama_host() -> str:
+    """Base URL the CLI talks to, derived from config.yaml's zallama.host/port.
+
+    ZALLAMA_HOST (full URL, e.g. "http://host:port") still wins if set — it's
+    the CLI's own override, distinct from the daemon's ZALLAMA_HOST/ZALLAMA_PORT
+    env vars which only set host/port fields inside load_config().
+    """
+    env = os.environ.get("ZALLAMA_HOST")
+    if env:
+        return env
+    try:
+        root = Path(__file__).resolve().parent
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from server.config import load_config
+        cfg = load_config()["zallama"]
+        host = cfg["host"]
+        # A wildcard bind address isn't a valid address to connect *to*.
+        if host in ("0.0.0.0", "::"):
+            host = "127.0.0.1"
+        return f"http://{host}:{cfg['port']}"
+    except Exception:
+        return "http://localhost:11435"
+
+
+ZALLAMA_HOST = _default_zallama_host()
 VERSION = "1.0.0"
 
 # Project / developer metadata (shown by `zallama version`).
@@ -953,8 +978,8 @@ def _flatten_cfg(cfg: dict, prefix: str = "") -> list[tuple[str, object]]:
     return out
 
 
-def _config_write_zallama_keys(path: Path, updates: dict[str, str]) -> None:
-    """Set keys inside the top-level `zallama:` section of a config.yaml.
+def _config_write_section_keys(path: Path, section: str, updates: dict[str, str]) -> None:
+    """Set keys inside a top-level section (e.g. `zallama:`) of a config.yaml.
 
     Edits the file line-by-line so user comments and formatting are preserved
     (a YAML round-trip would drop them). Creates the file/section as needed.
@@ -963,18 +988,28 @@ def _config_write_zallama_keys(path: Path, updates: dict[str, str]) -> None:
 
     lines = path.read_text().splitlines() if path.exists() else []
 
-    # Locate the `zallama:` section and its extent (until the next top-level key)
-    start = next((i for i, l in enumerate(lines) if re.match(r"^zallama:\s*(#.*)?$", l)), None)
+    start = next((i for i, l in enumerate(lines)
+                  if re.match(rf"^{re.escape(section)}:\s*(#.*)?$", l)), None)
     if start is None:
         if lines and lines[-1].strip():
             lines.append("")
-        lines.append("zallama:")
+        lines.append(f"{section}:")
         start = len(lines) - 1
     end = next((i for i in range(start + 1, len(lines))
                 if lines[i].strip() and not lines[i][0] in " \t#"), len(lines))
 
     for key, value in updates.items():
-        rendered = f'  {key}: "{value}"'
+        if isinstance(value, bool):
+            literal = "true" if value else "false"
+        elif isinstance(value, str) and value.lower() in ("true", "false"):
+            literal = value.lower()
+        elif isinstance(value, str) and re.fullmatch(r"-?\d+", value):
+            literal = value
+        elif isinstance(value, (int, float)):
+            literal = str(value)
+        else:
+            literal = f'"{value}"'
+        rendered = f"  {key}: {literal}"
         pat = re.compile(rf"^(\s+){re.escape(key)}\s*:")
         idx = next((i for i in range(start + 1, end) if pat.match(lines[i])), None)
         if idx is not None:
@@ -1041,8 +1076,8 @@ def cmd_apikey(args: list[str]):
     action = rest[0] if rest else "rotate"
 
     if action == "clear":
-        _config_write_zallama_keys(
-            config_file, {"api_key_sha256": "", "api_key": "", "api_key_expires": ""})
+        _config_write_section_keys(
+            config_file, "zallama", {"api_key_sha256": "", "api_key": "", "api_key_expires": ""})
         _ok(f"API-key auth disabled in {config_file}")
     elif action in ("rotate", "hash"):
         if action == "hash":
@@ -1054,8 +1089,8 @@ def cmd_apikey(args: list[str]):
             key = _secrets.token_hex(32)
         expires = _parse_expiry(expires_spec)
         digest = hashlib.sha256(key.encode()).hexdigest()
-        _config_write_zallama_keys(
-            config_file,
+        _config_write_section_keys(
+            config_file, "zallama",
             {"api_key_sha256": digest, "api_key": "", "api_key_expires": expires})
         when = expires if expires else "never"
         _ok(f"API key hashed into {config_file} (expires: {when})")
@@ -1071,12 +1106,14 @@ def cmd_apikey(args: list[str]):
 
 
 def cmd_config(args: list[str]):
-    """Show the effective merged configuration and every available key.
+    """Show or edit the persisted configuration.
+
+    zallama config                    Show the effective merged configuration
+    zallama config set <key> <value>  Write a key (dotted path) into config.yaml
 
     Resolves config through the daemon's own load_config() (the single source of
-    truth, same as `zallama paths`), so it shows exactly what the daemon uses —
-    defaults merged with config.yaml and env overrides — and works even when the
-    daemon is down. Prints only; to change a value, edit config.yaml and restart.
+    truth, same as `zallama paths`), so display shows exactly what the daemon
+    uses — defaults merged with config.yaml and env overrides.
     """
     root = Path(__file__).resolve().parent
     sys.path.insert(0, str(root))
@@ -1087,6 +1124,24 @@ def cmd_config(args: list[str]):
     except Exception as e:
         _err(f"Could not load configuration: {e}")
         sys.exit(1)
+
+    if args and args[0] == "set":
+        if len(args) != 3:
+            _err("Usage: zallama config set <key> <value>  (e.g. zallama config set zallama.port 8080)")
+            sys.exit(1)
+        dotted, value = args[1], args[2]
+        section, _, key = dotted.partition(".")
+        if not key or section not in ("zallama", "llama_server", "rag") or key == "default_params":
+            _err(f"Unknown or read-only key '{dotted}'. Run `zallama config` to list settable keys.")
+            sys.exit(1)
+        if dotted not in _CONFIG_KEY_HELP and section != "llama_server":
+            _err(f"Unknown key '{dotted}'. Run `zallama config` to list settable keys.")
+            sys.exit(1)
+        target = config_file or (Path.home() / ".zallama" / "config.yaml")
+        _config_write_section_keys(target, section, {key: value})
+        _ok(f"Set {dotted} = {value} in {target}")
+        print(f"{F_DIM}  Restart the daemon to apply (config.yaml is read at startup).{RESET}")
+        return
 
     src = str(config_file) if config_file else "(none — using built-in defaults)"
     print(f"\n{BOLD}{F_BLUE} Effective Zallama Configuration{RESET}")
