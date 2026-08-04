@@ -18,7 +18,7 @@ and eviction that everything else uses.
 """
 from __future__ import annotations
 
-import uuid
+import hashlib
 
 import httpx
 import numpy as np
@@ -131,6 +131,10 @@ def _coll_json(c) -> dict:
 # ---------------------------------------------------------------------------
 # Documents
 # ---------------------------------------------------------------------------
+def _content_id(text: str) -> str:
+    """Deterministic id for documents added without an explicit 'id', so
+    re-adding identical text upserts in place instead of duplicating it."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 @router.post("/{collection}/upsert")
 async def upsert(collection: str, request: Request, pm=Depends(get_pm), registry=Depends(get_registry)):
     body = await request.json()
@@ -141,13 +145,13 @@ async def upsert(collection: str, request: Request, pm=Depends(get_pm), registry
     docs: list[Document] = []
     for d in raw:
         if isinstance(d, str):
-            docs.append(Document(doc_id=str(uuid.uuid4()), text=d))
+            docs.append(Document(doc_id=_content_id(d), text=d))
         elif isinstance(d, dict):
             text = d.get("text")
             if not text:
                 raise HTTPException(status_code=400, detail="each document needs 'text'")
             docs.append(Document(
-                doc_id=str(d.get("id") or uuid.uuid4()),
+                doc_id=str(d.get("id") or _content_id(text)),
                 text=text,
                 metadata=d.get("metadata") or {},
             ))
