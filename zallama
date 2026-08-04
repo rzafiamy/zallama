@@ -491,8 +491,20 @@ def cmd_add(args: list[str]):
         sys.exit(1)
         
     name, file_path = filtered_args[0], filtered_args[1]
-    desc = " ".join(filtered_args[2:]) if len(filtered_args) > 2 else ""
-    
+    extra = filtered_args[2:]
+
+    # A stray .gguf/.bin path here almost always means the user meant
+    # `--mmproj <path>` and forgot the flag — it would otherwise be silently
+    # swallowed into the free-text description, leaving the model registered
+    # with no multimodal projector and no indication anything is wrong.
+    suspect = [a for a in extra if a.lower().endswith((".gguf", ".bin"))]
+    if suspect:
+        _err(f"Argument looks like a model file, not a description: {suspect[0]}")
+        _info("If this is a vision projector, pass it as: --mmproj " + suspect[0])
+        sys.exit(1)
+
+    desc = " ".join(extra)
+
     if modality == "text" and backend == "llama-server":
         if "parakeet" in file_path.lower() or "parakeet" in name.lower():
             modality = "asr"
