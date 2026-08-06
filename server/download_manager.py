@@ -263,22 +263,34 @@ SHORTHANDS = {
             },
         },
     },
-    "zimage:1.0": {
-        "repo": "Tongyi-Labs/Z-Image",
-        "file": "zimage_v1_fp16.safetensors",
-        "description": "Z-Image 1.0 (Next-gen image synthesis model)",
+    # NOTE: Z-Image (Tongyi-MAI/Z-Image-Turbo) is published only as sharded
+    # diffusers-format safetensors — there is no single-file GGUF/checkpoint for
+    # stable-diffusion.cpp to load, so it has no shorthand yet. The previous
+    # "Tongyi-Labs/Z-Image" entry pointed at a repo that does not exist.
+    "qwen-image:20b": {
+        "repo": "city96/Qwen-Image-gguf",
+        "file": "qwen-image-Q4_K_S.gguf",
+        "description": "Qwen-Image 20B (MMDiT image generation, GGUF Q4_K_S)",
         "modality": "image",
         "backend": "sd-server",
-    },
-    "qwen-image:7b": {
-        "repo": "Qwen/Qwen-Image",
-        "file": "qwen_image_fp16.safetensors",
-        "description": "Qwen Image 7B (Multimodal image generation)",
-        "modality": "image",
-        "backend": "sd-server",
+        "params": {"steps": 20, "cfg_scale": 2.5, "sampler": "euler"},
+        "artifacts": {
+            # Qwen-Image conditions on Qwen2.5-VL rather than CLIP/T5, so the
+            # text encoder goes on --llm.
+            "llm": {
+                "repos": ["Comfy-Org/Qwen-Image_ComfyUI"],
+                "file": "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                "local": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            },
+            "vae": {
+                "repos": ["Comfy-Org/Qwen-Image_ComfyUI"],
+                "file": "split_files/vae/qwen_image_vae.safetensors",
+                "local": "qwen_image_vae.safetensors",
+            },
+        },
     },
     "sd:1.5": {
-        "repo": "runwayml/stable-diffusion-v1-5",
+        "repo": "stable-diffusion-v1-5/stable-diffusion-v1-5",
         "file": "v1-5-pruned-emaonly.safetensors",
         "description": "Stable Diffusion v1.5 (Classic Image Generation)",
         "modality": "image",
@@ -332,6 +344,12 @@ class DownloadTask:
         self.artifact_specs = artifact_specs or {}
         self.total_bytes = 0
         self.completed_bytes = 0
+        # Which file the byte counters currently describe. Companion artifacts
+        # (VAE / text encoders) are fetched after the weights and are often far
+        # larger than them, so progress is reported per-file and `stage` says
+        # which file that is — otherwise the bar sits at 100% for the whole
+        # artifact phase and looks like a stalled download.
+        self.stage: str | None = None
         self.status = "queued"  # queued, downloading, completed, failed
         self.error: str | None = None
         self.speed = 0.0  # bytes/second
@@ -369,6 +387,7 @@ class DownloadManager:
                 "repo": task.repo,
                 "filename": task.filename,
                 "status": task.status,
+                "stage": task.stage,
                 "total_bytes": task.total_bytes,
                 "completed_bytes": task.completed_bytes,
                 "percent": (task.completed_bytes / task.total_bytes * 100) if task.total_bytes > 0 else 0,
@@ -799,46 +818,79 @@ class DownloadManager:
         if not task.artifact_specs:
             return artifacts
 
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
-            for key, spec in task.artifact_specs.items():
-                if not isinstance(spec, dict):
-                    raise RuntimeError(f"Artifact '{key}' must declare repo and file")
-                filename = spec.get("file")
-                if not filename:
-                    raise RuntimeError(f"Artifact '{key}' is missing file")
-                local_name = spec.get("local") or filename
-                dest = self.models_dir / local_name
+        for key, spec in task.artifact_specs.items():
+            if not isinstance(spec, dict):
+                raise RuntimeError(f"Artifact '{key}' must declare repo and file")
+            filename = spec.get("file")
+            if not filename:
+                raise RuntimeError(f"Artifact '{key}' is missing file")
+            local_name = spec.get("local") or filename
+            dest = self.models_dir / local_name
 
-                if dest.exists() and dest.stat().st_size > 0:
-                    artifacts[key] = str(dest)
-                    logger.info(f"Artifact '{key}' already present: {dest}")
-                    continue
-
-                repos = spec.get("repos") or [spec.get("repo") or task.repo]
-                if isinstance(repos, str):
-                    repos = [repos]
-                temp = dest.with_suffix(dest.suffix + ".download")
-                last_status = "not attempted"
-                for repo in repos:
-                    url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
-                    logger.info(f"Downloading artifact '{key}' from {url}")
-                    async with client.stream("GET", url) as resp:
-                        if resp.status_code != 200:
-                            last_status = f"{repo} returned HTTP {resp.status_code}"
-                            continue
-                        with open(temp, "wb") as f:
-                            async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
-                                f.write(chunk)
-                    break
-                else:
-                    raise RuntimeError(
-                        f"Failed to download artifact '{key}' ({filename}): {last_status}"
-                    )
-                temp.rename(dest)
+            if dest.exists() and dest.stat().st_size > 0:
                 artifacts[key] = str(dest)
-                logger.info(f"Artifact '{key}' ready: {dest}")
+                logger.info(f"Artifact '{key}' already present: {dest}")
+                continue
 
+            repos = spec.get("repos") or [spec.get("repo") or task.repo]
+            if isinstance(repos, str):
+                repos = [repos]
+            temp = dest.with_suffix(dest.suffix + ".download")
+            last_status = "not attempted"
+            task.stage = f"artifact:{key}"
+            for repo in repos:
+                url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
+                logger.info(f"Downloading artifact '{key}' from {url}")
+                try:
+                    await self._download_artifact_file(task, url, temp)
+                except Exception as e:
+                    last_status = f"{repo}: {e}"
+                    logger.warning(f"Artifact '{key}' from {repo} failed: {e}")
+                    continue
+                break
+            else:
+                raise RuntimeError(
+                    f"Failed to download artifact '{key}' ({filename}): {last_status}"
+                )
+            temp.rename(dest)
+            artifacts[key] = str(dest)
+            logger.info(f"Artifact '{key}' ready: {dest}")
+
+        task.stage = None
         return artifacts
+
+    async def _download_artifact_file(self, task: DownloadTask, url: str, temp: Path,
+                                      attempts: int = 3) -> None:
+        """Fetch one companion artifact, with progress and retries.
+
+        Text encoders are large (t5xxl_fp16 is ~9.8 GB — bigger than most of the
+        diffusion weights they accompany). A single un-retried stream over that
+        much data is what stalls these pulls, so this mirrors the weights path:
+        range-parallel when the CDN allows it, retried on failure.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                total_bytes, range_ok = await self._check_range_support(url)
+                if range_ok and total_bytes > 10 * 1024 * 1024:
+                    await self._download_parallel(task, url, temp, total_bytes,
+                                                  num_connections=4)
+                else:
+                    await self._download_single(task, url, temp)
+                return
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"Artifact download attempt {attempt}/{attempts} failed for {url}: {e}"
+                )
+                if temp.exists():
+                    try:
+                        os.remove(temp)
+                    except Exception:
+                        pass
+                if attempt < attempts:
+                    await asyncio.sleep(2 * attempt)
+        raise last_error if last_error else RuntimeError("download failed")
 
     async def _check_range_support(self, url: str) -> tuple[int, bool]:
         """Check if target server supports HTTP Range requests and get content length."""

@@ -108,6 +108,11 @@ class Backend(Protocol):
     name: str
     binary_name: str
     modalities: set[str]
+    # Multiplier applied to the configured startup_timeout. Backends that load
+    # far more weight than a text model (diffusion stacks pull in a VAE and one
+    # or two text encoders on top of the diffusion weights) need longer before
+    # they answer their first request.
+    startup_timeout_factor: float = 1.0
 
     def build_args(
         self,
@@ -402,7 +407,14 @@ class SdServerBackend:
     name = "sd-server"
     binary_name = "sd-server"
     modalities = {IMAGE}
+    # A FLUX stack is ~17 GB across diffusion weights + t5xxl + clip_l + VAE;
+    # cold-cache load routinely runs past the default 60s.
+    startup_timeout_factor = 6.0
 
+    # Only flags sd-server actually accepts. `merged_params` carries the
+    # llama_server defaults (ctx_size, n_gpu_layers, …) for every backend, so
+    # anything not listed here is deliberately dropped rather than passed on —
+    # sd-server aborts on an unknown argument.
     _PARAM_MAP = {
         "threads": "--threads",
         "vae": "--vae",
@@ -411,6 +423,15 @@ class SdServerBackend:
         "clip_l": "--clip_l",
         "clip_g": "--clip_g",
         "t5xxl": "--t5xxl",
+        "llm": "--llm",
+        "vae_format": "--vae-format",
+        "steps": "--steps",
+        "cfg_scale": "--cfg-scale",
+        "sampler": "--sampling-method",
+        "scheduler": "--scheduler",
+        "width": "--width",
+        "height": "--height",
+        "seed": "--seed",
     }
 
     def build_args(
@@ -431,14 +452,20 @@ class SdServerBackend:
                 "--diffusion-model" if model_path.suffix.lower() == ".gguf" else "-m"
             )
 
+        # sd-server names its bind flags --listen-ip/--listen-port, not the
+        # --host/--port that llama-server uses. Passing the llama-server spelling
+        # makes it exit immediately with "unknown argument: --host".
         args = [
             binary,
             primary_flag, str(model_path),
-            "--host", "127.0.0.1",
-            "--port", str(port),
+            "--listen-ip", "127.0.0.1",
+            "--listen-port", str(port),
         ]
-        # Attach artifacts if specified (vae, taesd, control_net, etc.)
-        for art_key in ("vae", "taesd", "control_net", "clip_l", "clip_g", "t5xxl"):
+        # Attach artifacts if specified (vae, taesd, control_net, etc.). `llm` is
+        # the text encoder newer architectures use in place of clip/t5 (Qwen2.5-VL
+        # for qwen-image, Mistral-Small-3.2 for flux2).
+        for art_key in ("vae", "taesd", "control_net", "clip_l", "clip_g", "t5xxl",
+                        "llm", "llm_vision", "clip_vision"):
             if art_key in artifacts:
                 flag = f"--{art_key.replace('_', '-')}" if art_key in ("control_net",) else f"--{art_key}"
                 args += [flag, str(artifacts[art_key])]
@@ -449,7 +476,9 @@ class SdServerBackend:
         return args
 
     def health_path(self) -> str:
-        return "/health"
+        # sd-server has no /health endpoint; it serves /v1/models as soon as the
+        # weights are loaded, which is the same readiness signal.
+        return "/v1/models"
 
 
 # ---------------------------------------------------------------------------

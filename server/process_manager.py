@@ -482,7 +482,10 @@ class ProcessManager:
     async def _wait_healthy(self, inst: ModelInstance):
         """Poll the backend's health path until the server is ready."""
         health_url = f"{inst.base_url}{inst.backend.health_path()}"
-        deadline = time.time() + self._startup_timeout
+        timeout = self._startup_timeout * getattr(
+            inst.backend, "startup_timeout_factor", 1.0
+        )
+        deadline = time.time() + timeout
         async with httpx.AsyncClient(timeout=2.0) as client:
             while time.time() < deadline:
                 if not inst.is_alive():
@@ -501,7 +504,7 @@ class ProcessManager:
         await self._kill_instance(inst)
         raise TimeoutError(
             f"{inst.backend.name} for '{inst.name}' did not become healthy within "
-            f"{self._startup_timeout}s. Check logs: {inst.log_file}"
+            f"{timeout:.0f}s. Check logs: {inst.log_file}"
         )
 
     async def _kill_instance(self, inst: ModelInstance):
