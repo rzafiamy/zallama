@@ -169,11 +169,46 @@ SHORTHANDS = {
         "modality": "tts",
         "backend": "kokoro-server",
     },
-    # --- Image Generation (stable-diffusion.cpp) -----------------------------
+    # --- Image Generation (stable-diffusion.cpp / FLUX / Z-Image / Qwen-Image) ---
+    "flux:schnell": {
+        "repo": "city96/FLUX.1-schnell-gguf",
+        "file": "flux1-schnell-Q4_K_S.gguf",
+        "description": "FLUX.1 Schnell (Fast 4-step generation, GGUF Q4_K_S)",
+        "modality": "image",
+        "backend": "sd-server",
+    },
+    "flux:dev": {
+        "repo": "city96/FLUX.1-dev-gguf",
+        "file": "flux1-dev-Q4_K_S.gguf",
+        "description": "FLUX.1 Dev (High quality image generation, GGUF Q4_K_S)",
+        "modality": "image",
+        "backend": "sd-server",
+    },
+    "flux:klein": {
+        "repo": "city96/FLUX.1-schnell-gguf",
+        "file": "flux1-schnell-Q4_0.gguf",
+        "description": "FLUX.1 Klein (Compact 4-bit, fast generation, GGUF Q4_0)",
+        "modality": "image",
+        "backend": "sd-server",
+    },
+    "zimage:1.0": {
+        "repo": "Tongyi-Labs/Z-Image",
+        "file": "zimage_v1_fp16.safetensors",
+        "description": "Z-Image 1.0 (Next-gen image synthesis model)",
+        "modality": "image",
+        "backend": "sd-server",
+    },
+    "qwen-image:7b": {
+        "repo": "Qwen/Qwen-Image",
+        "file": "qwen_image_fp16.safetensors",
+        "description": "Qwen Image 7B (Multimodal image generation)",
+        "modality": "image",
+        "backend": "sd-server",
+    },
     "sd:1.5": {
         "repo": "runwayml/stable-diffusion-v1-5",
         "file": "v1-5-pruned-emaonly.safetensors",
-        "description": "Stable Diffusion v1.5 (Image Generation)",
+        "description": "Stable Diffusion v1.5 (Classic Image Generation)",
         "modality": "image",
         "backend": "sd-server",
     },
@@ -335,7 +370,7 @@ class DownloadManager:
         r_lower = repo.lower()
         if "parakeet" in r_lower:
             return cls._backend_for_modality("asr")
-        if "stable-diffusion" in r_lower or "sd-gguf" in r_lower or "sd.cpp" in r_lower or "sdxl" in r_lower:
+        if any(k in r_lower for k in ("stable-diffusion", "sd-gguf", "sd.cpp", "sdxl", "flux", "zimage", "z-image", "qwen-image", "qwen2-image")):
             return cls._backend_for_modality("image")
         return None, None
 
