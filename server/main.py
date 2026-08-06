@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse
 # Ensure server package is importable when run directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from server import __version__
 from server.config import load_config, resolve_binary
 from server.model_registry import ModelRegistry
 from server.process_manager import ProcessManager
@@ -120,7 +121,7 @@ def create_app(cfg: dict) -> FastAPI:
     app = FastAPI(
         title="Zallama",
         description="OpenAI-compatible local LLM server powered by llama.cpp",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",

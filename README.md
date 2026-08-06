@@ -557,6 +557,8 @@ The script builds with CUDA when `nvcc` is found and falls back to a CPU build o
 ```bash
 zallama pull sd:1.5        # Stable Diffusion v1.5
 zallama pull sdxl:turbo    # SDXL Turbo — few-step, near real-time
+zallama pull flux:klein    # FLUX Klein (Compact 4-bit, fast 4-step generation)
+zallama pull qwen-image:20b # Qwen-Image 20B (MMDiT image generation)
 ```
 Diffusion weights ship as `.safetensors` / `.ckpt` rather than GGUF, and the downloader accepts those extensions for image repos. Already have weights locally? Register them directly:
 ```bash

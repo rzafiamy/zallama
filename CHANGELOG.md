@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-06
+
+### Added
+- **Image generation backend (`sd-server`)**: integrated [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) as the `sd-server` backend powering the OpenAI-compatible `POST /v1/images/generations` endpoint and `zallama generate` CLI command. Added `./build-ggml-stable-diffusion.cpp.sh` build script.
+- **FLUX, Z-Image, and Qwen-Image model support in Download Manager**: expanded `zallama pull` and the download manager with model definitions, artifact handling (diffusion models, CLIP L / T5xxl text encoders, VAEs), and optimized defaults for FLUX models (`flux:klein`, `flux:klein-9b`), Z-Image (`z-image:turbo`), and Qwen-Image (`qwen-image:20b`).
+- **Deterministic document IDs in zvec**: updated document upsert in the `zvec` vector store to use deterministic SHA-256 hashes instead of random UUIDs.
+- **Enhanced model addition validation**: `cmd_add` now validates model file path arguments and provides descriptive error messages.
+
+### Fixed
+- **Image generation execution path**: resolved model parameter loading and process execution issues for `sd-server`.
+
 ## [1.2.0] - 2026-08-03
 
 ### Added
@@ -128,6 +139,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/rzafiamy/zallama/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/rzafiamy/zallama/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rzafiamy/zallama/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rzafiamy/zallama/releases/tag/v1.0.0

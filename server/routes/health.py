@@ -8,6 +8,7 @@ import time
 
 from fastapi import APIRouter, Depends
 
+from server import __version__
 from ..dependencies import get_pm, get_registry
 
 router = APIRouter()
@@ -25,7 +26,7 @@ async def api_health(pm=Depends(get_pm), registry=Depends(get_registry)):
     return {
         "status": "ok",
         "service": "zallama",
-        "version": "1.0.0",
+        "version": __version__,
         "time": time.time(),
         "platform": platform.platform(),
         "models_registered": len(models),
