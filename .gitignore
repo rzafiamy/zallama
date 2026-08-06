@@ -27,6 +27,9 @@ logs_dir/
 bin/
 llama.cpp/
 dist-*/
+prebuilt_packages/
+prebuilt_staging/
+pack_prebuilts.sh
 build/
 
 # Configuration overrides (prevent pushing credentials/local configurations)
