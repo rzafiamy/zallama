@@ -485,7 +485,7 @@ def cmd_add(args: list[str]):
     if len(filtered_args) < 2:
         _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--mmproj <path-to-mmproj.gguf>] [--modality <modality>] [--backend <backend>]")
         _info("Supported modalities: text, embedding, rerank, asr, tts, image")
-        _info("Supported backends: llama-server, embedding-server, rerank-server, parakeet-server, kokoro-server")
+        _info("Supported backends: llama-server, embedding-server, rerank-server, parakeet-server, kokoro-server, sd-server")
         _info("Vision example: zallama add qwen2.5-vl model.gguf --mmproj mmproj.gguf")
         _info("Tip: set --modality only; the matching backend is auto-selected.")
         sys.exit(1)
@@ -497,7 +497,7 @@ def cmd_add(args: list[str]):
     # `--mmproj <path>` and forgot the flag — it would otherwise be silently
     # swallowed into the free-text description, leaving the model registered
     # with no multimodal projector and no indication anything is wrong.
-    suspect = [a for a in extra if a.lower().endswith((".gguf", ".bin"))]
+    suspect = [a for a in extra if a.lower().endswith((".gguf", ".bin", ".safetensors", ".ckpt"))]
     if suspect:
         _err(f"Argument looks like a model file, not a description: {suspect[0]}")
         _info("If this is a vision projector, pass it as: --mmproj " + suspect[0])
@@ -509,6 +509,18 @@ def cmd_add(args: list[str]):
         if "parakeet" in file_path.lower() or "parakeet" in name.lower():
             modality = "asr"
             backend = "parakeet-server"
+        elif "kokoro" in file_path.lower() or "kokoro" in name.lower():
+            modality = "tts"
+            backend = "kokoro-server"
+        else:
+            # Match "sd"/"sdxl" as a *token*, not a substring: a plain `in` test
+            # would tag every model whose name merely contains "sd" (mistral-sdk,
+            # usd-…) as an image model.
+            haystack = f"{name.lower()} {file_path.lower()}"
+            sd_token = re.search(r"(?:^|[^a-z0-9])(sd|sdxl|sd15|sd3|stable[-_]?diffusion|flux)(?:[^a-z0-9]|$)", haystack)
+            if sd_token or file_path.lower().endswith((".safetensors", ".ckpt")):
+                modality = "image"
+                backend = "sd-server"
             
     abs_path = str(Path(file_path).expanduser().resolve())
     r = _api("POST", "/api/models/add", {
@@ -1223,6 +1235,11 @@ def cmd_run(args: list[str]):
             _info("To transcribe audio with this model, use:")
             _info(f"  zallama transcribe {model} <audio-file.wav>")
             sys.exit(1)
+        elif model_entry and model_entry.get("modality") == "image":
+            _err(f"Model '{model}' is an Image Generation model and cannot be used in interactive chat.")
+            _info("To generate images with this model, use:")
+            _info(f"  zallama generate {model} \"<prompt>\"")
+            sys.exit(1)
 
     # Width-aware Fluent 2 style banner header. The inner width adapts to the
     # terminal (capped) so a long model name never overflows or misaligns the box.
@@ -1482,13 +1499,116 @@ def _resolved_paths() -> dict:
         binary = resolve_binary(cfg)
     except Exception:
         binary = "(not found — build with bash build-ggml-llama.cpp.sh)"
+    sd_binary = "(not found — build with bash build-ggml-stable-diffusion.cpp.sh)"
+    bin_dir = models_dir.parent / "bin"
+    if (bin_dir / "sd-server").exists():
+        sd_binary = bin_dir / "sd-server"
+    elif (Path(__file__).resolve().parent / "bin" / "sd-server").exists():
+        sd_binary = Path(__file__).resolve().parent / "bin" / "sd-server"
+
     return {
         "config.yaml": _find_config_file() or "(none — using built-in defaults)",
         "models_dir": models_dir,
         "registry.yaml": models_dir / "registry.yaml",
         "logs_dir": Path(cfg["zallama"]["logs_dir"]),
         "llama-server": binary,
+        "sd-server": sd_binary,
     }
+
+
+def cmd_generate(args: list[str]):
+    """Generate an image using a diffusion model: zallama generate <model> "<prompt>" [--output out.png] [--size 512x512] [--steps 20]"""
+    if len(args) < 2:
+        _err("Usage: zallama generate <model-name> \"<prompt>\" [--output <file.png>] [--size 512x512] [--steps 20]")
+        _info("Example: zallama generate sd:1.5 \"a majestic mountain landscape at sunset\" --output mountain.png")
+        sys.exit(1)
+
+    model = args[0]
+    prompt = args[1]
+
+    output_path = "output.png"
+    size = "512x512"
+    # Left as None unless the user passes a flag: the daemon fills unset knobs
+    # from the model's registry `params`, and sending a CLI default here would
+    # silently override that per-model configuration.
+    steps = None
+    cfg_scale = None
+    negative_prompt = ""
+
+    i = 2
+    while i < len(args):
+        if args[i] == "--output" and i + 1 < len(args):
+            output_path = args[i+1]
+            i += 2
+        elif args[i] == "--size" and i + 1 < len(args):
+            size = args[i+1]
+            i += 2
+        elif args[i] == "--steps" and i + 1 < len(args):
+            try:
+                steps = int(args[i+1])
+            except ValueError:
+                pass
+            i += 2
+        elif args[i] == "--cfg-scale" and i + 1 < len(args):
+            try:
+                cfg_scale = float(args[i+1])
+            except ValueError:
+                pass
+            i += 2
+        elif args[i] == "--negative-prompt" and i + 1 < len(args):
+            negative_prompt = args[i+1]
+            i += 2
+        else:
+            i += 1
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "response_format": "b64_json",
+    }
+    if steps is not None:
+        payload["steps"] = steps
+    if cfg_scale is not None:
+        payload["cfg_scale"] = cfg_scale
+    if negative_prompt:
+        payload["negative_prompt"] = negative_prompt
+
+    print(_color(f"🎨 Generating image with '{model}'...", F_ORANGE), end="", flush=True)
+    r = _api("POST", "/v1/images/generations", payload)
+    if r.status_code != 200:
+        print()
+        try:
+            detail = r.json().get("detail", r.text)
+        except Exception:
+            detail = r.text
+        _err(f"Generation failed: {detail}")
+        sys.exit(1)
+
+    data = r.json()
+    items = data.get("data", [])
+    if not items:
+        print()
+        _err("No image data returned from server.")
+        sys.exit(1)
+
+    item = items[0]
+    import base64
+    if "b64_json" in item:
+        img_bytes = base64.b64decode(item["b64_json"])
+        out_p = Path(output_path).expanduser().resolve()
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_bytes(img_bytes)
+        print(_color(" Done!", F_TEAL))
+        _ok(f"Saved generated image to {out_p}")
+    elif "url" in item:
+        print(_color(" Done!", F_TEAL))
+        _ok(f"Image URL: {item['url']}")
+    else:
+        print(_color(" Done!", F_TEAL))
+        _info(f"Response: {data}")
+
 
 
 def cmd_paths(args: list[str]):
@@ -1845,7 +1965,7 @@ def _fmt_duration(secs: int) -> str:
 # the completer to offer model names at the right position.
 _MODEL_ARG_COMMANDS = {
     "set", "show", "calibrate", "remove", "rm", "run", "load", "unload",
-    "stop", "reload", "logs", "pull",
+    "stop", "reload", "logs", "pull", "generate", "gen",
 }
 
 
@@ -1928,6 +2048,8 @@ COMMANDS = {
     "rm": cmd_remove,
     "run": cmd_run,
     "pull": cmd_pull,
+    "generate": cmd_generate,
+    "gen": cmd_generate,
     "search": cmd_search,
     "ps": cmd_ps,
     "load": cmd_load,
@@ -1972,6 +2094,7 @@ def main():
             ("pull <name>", "Pull a model from HF/unsloth"),
             ("remove <name>", "Remove a model from registry"),
             ("run <name>", "Interactive chat with a model"),
+            ("generate <name> \"<prompt>\"", "Generate an image with a diffusion model"),
             ("ps", "Show running model processes"),
             ("load <name>", "Pre-load a model into memory"),
             ("unload <name>", "Stop a running model"),

@@ -16,7 +16,7 @@ Options:
                          Default: ${DEFAULT_DRIVE_URL}
   --bin-dir <dir>        Directory where selected package is extracted.
                          Default: ${DEFAULT_BIN_DIR}
-  --engine <name>        Filter by engine: llama.cpp, parakeet.cpp, kokoro.cpp.
+  --engine <name>        Filter by engine: llama.cpp, parakeet.cpp, kokoro.cpp, stable-diffusion.cpp.
   --list-only            Show compatible packages without installing.
   -h, --help             Show this help.
 

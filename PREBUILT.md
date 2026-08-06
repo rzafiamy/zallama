@@ -21,7 +21,7 @@ llama.cpp-b9873-linux-ubuntu24.04-cuda.tar.gz
 
 `engine`
 : Upstream engine project name. Current values are:
-  `llama.cpp`, `parakeet.cpp`, and `kokoro.cpp`.
+  `llama.cpp`, `parakeet.cpp`, `kokoro.cpp`, and `stable-diffusion.cpp`.
 
 `revision`
 : The upstream tag, branch, or commit identifier used to build the package.

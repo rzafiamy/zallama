@@ -79,3 +79,16 @@ models:
     params:
       ctx_size: 4096
       n_gpu_layers: 99
+
+  # --- Image Generation: stable-diffusion.cpp --------------------------------
+  # Served by sd-server (build with build-ggml-stable-diffusion.cpp.sh).
+  # Exposed at POST /v1/images/generations. Easiest path: `zallama pull sd:1.5`.
+  - name: sd:1.5
+    file: v1-5-pruned-emaonly.safetensors
+    modality: image
+    backend: sd-server
+    description: "Stable Diffusion v1.5 (image generation)"
+    params:
+      steps: 20
+      cfg_scale: 7.0
+

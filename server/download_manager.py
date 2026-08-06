@@ -169,6 +169,21 @@ SHORTHANDS = {
         "modality": "tts",
         "backend": "kokoro-server",
     },
+    # --- Image Generation (stable-diffusion.cpp) -----------------------------
+    "sd:1.5": {
+        "repo": "runwayml/stable-diffusion-v1-5",
+        "file": "v1-5-pruned-emaonly.safetensors",
+        "description": "Stable Diffusion v1.5 (Image Generation)",
+        "modality": "image",
+        "backend": "sd-server",
+    },
+    "sdxl:turbo": {
+        "repo": "stabilityai/sdxl-turbo",
+        "file": "sd_xl_turbo_1.0_fp16.safetensors",
+        "description": "SDXL Turbo 1.0 (Real-time Image Generation)",
+        "modality": "image",
+        "backend": "sd-server",
+    },
 }
 
 
@@ -255,7 +270,7 @@ class DownloadManager:
         return result
 
     async def _list_gguf_siblings(self, repo: str) -> list[str]:
-        """Return all .gguf filenames in a HuggingFace repo."""
+        """Return all .gguf, .safetensors, and .ckpt filenames in a HuggingFace repo."""
         url = f"https://huggingface.co/api/models/{repo}"
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url)
@@ -263,18 +278,22 @@ class DownloadManager:
                 raise RuntimeError(f"HuggingFace repository '{repo}' not found or inaccessible (HTTP {resp.status_code}).")
             data = resp.json()
             siblings = data.get("siblings", [])
-            return [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(".gguf")]
+            valid_exts = (".gguf", ".safetensors", ".ckpt")
+            ggufs = [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(".gguf")]
+            if ggufs:
+                return ggufs
+            return [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(valid_exts)]
 
     async def _auto_detect_gguf(self, repo: str) -> str:
         files = await self._list_gguf_siblings(repo)
         if not files:
-            raise RuntimeError(f"No GGUF files found in repository '{repo}'.")
+            raise RuntimeError(f"No GGUF or model files found in repository '{repo}'.")
 
         # Skip projector files — those are picked separately as the mmproj artifact.
         main_files = [f for f in files if not self._is_mmproj(f)] or files
 
         # Prefer standard medium quantizations first
-        pref_keywords = ["q4_k_m", "q4_0", "q4_k_s", "q4_1", "q5_k_m", "q5_0", "q8_0", "q3_k_m", "q3_k_s"]
+        pref_keywords = ["q4_k_m", "q4_0", "q4_k_s", "q4_1", "q5_k_m", "q5_0", "q8_0", "q3_k_m", "q3_k_s", "fp16", "v1-5"]
         for keyword in pref_keywords:
             for f in main_files:
                 if keyword in f.lower():
@@ -310,10 +329,14 @@ class DownloadManager:
         Shorthands declare these explicitly, but a raw `owner/repo/file.gguf`
         pull has no hint, so we'd otherwise default everything to llama-server
         text. parakeet.cpp ships its ASR GGUFs in `*parakeet*` repos, so route
-        those to the ASR backend. Returns (None, None) for plain text.
+        those to the ASR backend. Stable diffusion repos route to sd-server.
+        Returns (None, None) for plain text.
         """
-        if "parakeet" in repo.lower():
+        r_lower = repo.lower()
+        if "parakeet" in r_lower:
             return cls._backend_for_modality("asr")
+        if "stable-diffusion" in r_lower or "sd-gguf" in r_lower or "sd.cpp" in r_lower or "sdxl" in r_lower:
+            return cls._backend_for_modality("image")
         return None, None
 
     async def _detect_mmproj(self, repo: str) -> str | None:

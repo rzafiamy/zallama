@@ -14,8 +14,8 @@ as *new Backend subclasses* rather than as cross-cutting changes:
   - EmbeddingServerBackend→ embeddings (llama-server --embedding)
   - RerankServerBackend   → rerank     (llama-server --reranking)
   - ParakeetServerBackend → ASR        (parakeet-server)
-  - (future) TtsBackend       → TTS        (llama-tts / a tts server)
-  - (future) DiffusionBackend → image gen  (sd-server / llama-diffusion)
+  - KokoroServerBackend   → TTS        (kokoro-server)
+  - SdServerBackend       → image gen  (sd-server / stable-diffusion.cpp)
 
 Each backend declares:
   - binary_name:   the executable to look for (./bin/<name>, ~/.zallama/bin, PATH)
@@ -57,14 +57,14 @@ ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING}
 # this modality" map; the downloader and the model-management API both resolve
 # through default_backend_for() so a modality is wired to its backend in exactly
 # one place. TEXT maps to None so a text entry stays clean and uses the registry
-# default (llama-server). IMAGE has no backend yet (awaiting a diffusion backend).
+# default (llama-server).
 MODALITY_BACKEND: dict[str, str | None] = {
     TEXT: None,                       # llama-server default (also vision)
     EMBEDDING: "embedding-server",
     RERANK: "rerank-server",
     ASR: "parakeet-server",
     TTS: "kokoro-server",
-    IMAGE: None,                      # no backend implemented yet
+    IMAGE: "sd-server",
 }
 
 
@@ -390,6 +390,60 @@ class KokoroServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# sd-server backend (Image Generation / stable-diffusion.cpp)
+# ---------------------------------------------------------------------------
+class SdServerBackend:
+    """stable-diffusion.cpp server — OpenAI-compatible image generation.
+
+    Exposes POST /v1/images/generations (JSON in, JSON with b64_json/url out) and GET
+    /health. Build it with build-ggml-stable-diffusion.cpp.sh, which installs
+    `sd-server` into ./bin/.
+    """
+    name = "sd-server"
+    binary_name = "sd-server"
+    modalities = {IMAGE}
+
+    _PARAM_MAP = {
+        "threads": "--threads",
+        "vae": "--vae",
+        "taesd": "--taesd",
+        "control_net": "--control-net",
+        "clip_l": "--clip_l",
+        "clip_g": "--clip_g",
+        "t5xxl": "--t5xxl",
+    }
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [
+            binary,
+            "-m", str(model_path),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+        # Attach artifacts if specified (vae, taesd, control_net, etc.)
+        for art_key in ("vae", "taesd", "control_net", "clip_l", "clip_g", "t5xxl"):
+            if art_key in artifacts:
+                flag = f"--{art_key.replace('_', '-')}" if art_key in ("control_net",) else f"--{art_key}"
+                args += [flag, str(artifacts[art_key])]
+
+        for key, flag in self._PARAM_MAP.items():
+            if key in merged_params and key not in artifacts:
+                args += [flag, str(merged_params[key])]
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # Registry of backends
 # ---------------------------------------------------------------------------
 _BACKENDS: dict[str, Backend] = {
@@ -398,6 +452,7 @@ _BACKENDS: dict[str, Backend] = {
     RerankServerBackend.name: RerankServerBackend(),
     ParakeetServerBackend.name: ParakeetServerBackend(),
     KokoroServerBackend.name: KokoroServerBackend(),
+    SdServerBackend.name: SdServerBackend(),
 }
 
 DEFAULT_BACKEND = LlamaServerBackend.name

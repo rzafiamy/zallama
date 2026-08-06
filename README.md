@@ -43,6 +43,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Memory-Aware Eviction](#-memory-aware-eviction)
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
+- [Image Generation (Stable Diffusion)](#-image-generation-stable-diffusion)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
 - [RAG: Reranking & the zvec Vector Store](#-rag-reranking--the-zvec-vector-store)
 - [OpenAI API Integration](#-openai-api-integration)
@@ -64,6 +65,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🔌 **A real OpenAI `/v1` surface** | Chat, Completions, Embeddings — streaming included — so existing SDKs and tools just work. |
 | 👁️ **Vision** | Attach an `mmproj` projector and send images straight through `/v1/chat/completions`. |
 | 🎙️ **Speech-to-text** | `/v1/audio/transcriptions`, any input format auto-transcoded via `ffmpeg`, multilingual models supported. |
+| 🎨 **Image Generation** | `/v1/images/generations` powered by `sd-server` (stable-diffusion.cpp), plus `zallama generate` CLI. |
 | 🔎 **RAG, built in** | A reranker at `/v1/rerank` plus **zvec**, an embedded HNSW vector store — no external vector DB to run. |
 | 🧩 **Pluggable backends** | Each model declares a `modality` + `backend`; new engines slot in without touching the core. |
 | ⚙️ **Config, not code** | Context size, GPU offload, batching — all YAML, all per-model, all hot-reloadable. |
@@ -71,7 +73,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🧠 **Memory awareness** | Set a `mem_budget_gb` and Zallama evicts least-recently-used models to make room — automatically. |
 | 🔒 **Locked down by default** | Binds to `127.0.0.1`, optional Bearer-token auth, sane timeouts out of the box. |
 
-Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, …), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, and — by design — `image`); new modalities are added as new backends, not as changes scattered across the codebase.
+Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, `sd-server`), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, `image`); new modalities are added as new backends, not as changes scattered across the codebase.
 
 ---
 
@@ -99,9 +101,12 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 # kokoro.cpp (TTS / voice synthesis) — requires a release tag/branch name
 ./build-ggml-kokoro.cpp.sh v0.1.0
+
+# stable-diffusion.cpp (Image generation) — requires a release tag/branch name
+./build-ggml-stable-diffusion.cpp.sh master
 ```
 
-> All scripts default to a **CUDA** build. The parakeet script also copies the shared `libggml*.so` next to the binaries and sets their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime.
+> All scripts default to a **CUDA** build. The parakeet and stable-diffusion scripts also copy shared libraries next to the binaries and set their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime.
 >
 > `kokoro.cpp` v0.1.0 requires **CMake 3.29+**. Ubuntu 24.04's apt package is 3.28 — install a newer CMake and run the script with `CMAKE_BIN=/path/to/cmake`.
 
@@ -111,7 +116,7 @@ To skip building from source, prebuilt packages are available from the shared Go
 
 <https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing>
 
-Download the package matching your platform/accelerator stack, copy the binaries into `./bin/`, then run the installer. At minimum, Zallama needs `llama-server` in `./bin/` or on your `PATH`. For speech-to-text or text-to-speech, also copy `parakeet-server` or `kokoro-server`.
+Download the package matching your platform/accelerator stack, copy the binaries into `./bin/`, then run the installer. At minimum, Zallama needs `llama-server` in `./bin/` or on your `PATH`. For speech-to-text, text-to-speech, or image generation, also copy `parakeet-server`, `kokoro-server`, or `sd-server`.
 
 ### 3. Run the installer
 
@@ -299,9 +304,12 @@ add <name> <file>      Register a local .gguf model
                        --mmproj attaches a vision projector file
 set <name> <k>=<v>...  Configure parameters for a registered model
 pull <name> [--type T] Pull model from HF / Unsloth presets (uses aria2c).
-                       --type sets modality (text|embedding|rerank|asr|tts) for raw HF paths.
+                       --type sets modality (text|embedding|rerank|asr|tts|image) for raw HF paths.
 remove <name>          Remove a model from registry (alias: rm)
 run <name>             Interactive chat with a model (streams reasoning)
+generate <name> "<p>"  Generate an image with a diffusion model (alias: gen)
+                       --output out.png --size 512x512 --steps 20
+                       --cfg-scale 7.0 --negative-prompt "..."
 ps                     Show running model processes
 load <name>            Pre-load a model (start llama-server)
 unload <name>          Stop a running model (alias: stop)
@@ -535,11 +543,52 @@ curl http://localhost:11435/v1/audio/transcriptions \
 
 ---
 
+## 🎨 Image Generation (Stable Diffusion)
+
+Text-to-image runs on the **`sd-server`** backend ([stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)) and is exposed at the OpenAI-compatible `POST /v1/images/generations` endpoint.
+
+**1. Build the binary** (installs `sd-server` and the `sd` CLI into `./bin/`):
+```bash
+./build-ggml-stable-diffusion.cpp.sh master
+```
+The script builds with CUDA when `nvcc` is found and falls back to a CPU build otherwise.
+
+**2. Pull a model** (auto-registered as `modality: image`, `backend: sd-server`):
+```bash
+zallama pull sd:1.5        # Stable Diffusion v1.5
+zallama pull sdxl:turbo    # SDXL Turbo — few-step, near real-time
+```
+Diffusion weights ship as `.safetensors` / `.ckpt` rather than GGUF, and the downloader accepts those extensions for image repos. Already have weights locally? Register them directly:
+```bash
+zallama add sd15 /path/to/v1-5-pruned-emaonly.safetensors --modality image
+```
+
+**3. Generate** — from the CLI:
+```bash
+zallama generate sd:1.5 "a lighthouse at dawn, cinematic" --output dawn.png --size 512x512 --steps 20
+```
+or over HTTP:
+```bash
+curl http://localhost:11435/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model":"sd:1.5","prompt":"a lighthouse at dawn","size":"512x512","response_format":"b64_json"}'
+```
+
+Generation knobs (`steps`, `cfg_scale`, `sampler`, `negative_prompt`) can be set once per model and reused for every request:
+```bash
+zallama set sd:1.5 steps=25 cfg_scale=7.5
+```
+The daemon applies those registry values to any request that does not specify them. Auxiliary weights (`vae`, `taesd`, `control_net`, `clip_l`, `clip_g`, `t5xxl`) are passed to `sd-server` at launch when registered as artifacts on the model.
+
+> Image models are not chat models: `zallama run <name>` refuses them and points you at `zallama generate`.
+
+---
+
 ## 🧩 Backends & Modalities (Architecture)
 
 Zallama separates the **generic process lifecycle** (spawn, health-check, port assignment, LRU eviction, kill) from **engine-specific logic** (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a `Backend` abstraction in [`server/backends.py`](server/backends.py).
 
-This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`). Adding image generation means adding a new `Backend` subclass and the matching endpoint proxy — no changes to the process manager or registry schema. The `/v1/images/generations` endpoint is already mapped in the modality guard, awaiting its backend.
+This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation (`/v1/images/generations`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
 
 ---
 

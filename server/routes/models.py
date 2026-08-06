@@ -289,8 +289,13 @@ async def search_huggingface(q: str):
             
             data = resp.json()
             siblings = data.get("siblings", [])
-            # Filter files ending in .gguf
-            files = [s["rfilename"] for s in siblings if s.get("rfilename", "").endswith(".gguf")]
+            # Filter to loadable weight files. GGUF wins when the repo has any;
+            # diffusion repos ship .safetensors/.ckpt instead, and listing those
+            # only when there is no GGUF keeps text-model results unchanged.
+            names = [s.get("rfilename", "") for s in siblings]
+            files = [f for f in names if f.endswith(".gguf")]
+            if not files:
+                files = [f for f in names if f.endswith((".safetensors", ".ckpt"))]
             
             return {
                 "type": "file_list",

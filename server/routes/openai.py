@@ -9,6 +9,8 @@ Implements:
   POST /v1/embeddings
   POST /v1/rerank                 (cross-encoder reranking, llama-server --reranking)
   POST /v1/audio/transcriptions   (ASR — multipart upload, parakeet-server)
+  POST /v1/audio/speech           (TTS — JSON audio output, kokoro-server)
+  POST /v1/images/generations     (Image generation — JSON output, sd-server)
 """
 from __future__ import annotations
 
@@ -465,3 +467,54 @@ async def audio_speech(
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type"),
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/images/generations  (Image Generation via sd-server)
+# ---------------------------------------------------------------------------
+@router.post("/images/generations")
+async def images_generations(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Proxy an OpenAI-style image generation request to a diffusion backend (sd-server).
+
+    JSON in, JSON out: the client posts {model, prompt, n, size, response_format, ...}
+    and the backend returns OpenAI-formatted image generation response (b64_json or url).
+    """
+    body = await request.json()
+    model_name = _model_id_from_body(body)
+    inst = await _resolve_instance(
+        model_name, pm, registry, endpoint="images/generations"
+    )
+    inst.touch()
+
+    # Apply server-side defaults from registry params for generation knobs client omitted
+    try:
+        params = registry.get(model_name).get("params") or {}
+    except Exception:
+        params = {}
+    for key in ("steps", "cfg_scale", "sampler", "negative_prompt"):
+        if key in params and key not in body:
+            body[key] = params[key]
+
+    upstream_url = f"{inst.base_url}/v1/images/generations"
+    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+        try:
+            resp = await client.post(upstream_url, json=body)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"sd-server error: {e}")
+    # An upstream failure may come back as plain text (or an empty body), so
+    # don't assume JSON — surface whatever was returned rather than 500-ing on
+    # a decode error.
+    try:
+        content = resp.json()
+    except ValueError:
+        content = {"error": {"message": resp.text or "sd-server returned a non-JSON response",
+                             "type": "upstream_error"}}
+    return JSONResponse(
+        content=content,
+        status_code=resp.status_code,
+    )
+

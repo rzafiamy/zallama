@@ -49,7 +49,7 @@ if [ -n "${SUDO_USER:-}" ]; then
   chown -R "$SUDO_USER" "$VENV_DIR" 2>/dev/null || true
 fi
 
-# ── 3. Check llama-server binary ────────────────────────────────────────────
+# ── 3. Check engine binaries ────────────────────────────────────────────────
 if [ -f "$ZALLAMA_DIR/bin/llama-server" ]; then
   echo -e "${GREEN}✓${RESET} llama-server binary found at ./bin/llama-server"
 elif command -v llama-server &>/dev/null; then
@@ -59,6 +59,12 @@ else
   echo "   Build it with: bash build-ggml-llama.cpp.sh"
   echo "   Or install llama.cpp from: https://github.com/ggml-org/llama.cpp"
 fi
+
+for bin in parakeet-server kokoro-server sd-server; do
+  if [ -f "$ZALLAMA_DIR/bin/$bin" ] || command -v "$bin" &>/dev/null; then
+    echo -e "${GREEN}✓${RESET} $bin binary found"
+  fi
+done
 
 # ── 4. Make CLI executable ───────────────────────────────────────────────────
 chmod +x "$ZALLAMA_DIR/zallama"
