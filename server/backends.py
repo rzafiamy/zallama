@@ -422,9 +422,18 @@ class SdServerBackend:
         merged_params: dict,
         artifacts: dict[str, Path],
     ) -> list[str]:
+        primary_flag = str(merged_params.get("model_flag") or "").strip()
+        if not primary_flag:
+            # FLUX and other standalone GGUF diffusion weights are not full
+            # checkpoints; stable-diffusion.cpp expects them on the dedicated
+            # diffusion-model flag. Safetensors/ckpt files keep the legacy path.
+            primary_flag = (
+                "--diffusion-model" if model_path.suffix.lower() == ".gguf" else "-m"
+            )
+
         args = [
             binary,
-            "-m", str(model_path),
+            primary_flag, str(model_path),
             "--host", "127.0.0.1",
             "--port", str(port),
         ]

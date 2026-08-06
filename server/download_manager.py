@@ -176,6 +176,30 @@ SHORTHANDS = {
         "description": "FLUX.1 Schnell (Fast 4-step generation, GGUF Q4_K_S)",
         "modality": "image",
         "backend": "sd-server",
+        "params": {"steps": 4, "cfg_scale": 1.0, "sampler": "euler"},
+        "artifacts": {
+            "vae": {
+                "repos": [
+                    "flux-safetensors/flux-safetensors",
+                    "black-forest-labs/FLUX.1-dev",
+                ],
+                "file": "ae.safetensors",
+            },
+            "clip_l": {
+                "repos": [
+                    "comfyanonymous/flux_text_encoders",
+                    "flux-safetensors/flux-safetensors",
+                ],
+                "file": "clip_l.safetensors",
+            },
+            "t5xxl": {
+                "repos": [
+                    "comfyanonymous/flux_text_encoders",
+                    "flux-safetensors/flux-safetensors",
+                ],
+                "file": "t5xxl_fp16.safetensors",
+            },
+        },
     },
     "flux:dev": {
         "repo": "city96/FLUX.1-dev-gguf",
@@ -183,6 +207,30 @@ SHORTHANDS = {
         "description": "FLUX.1 Dev (High quality image generation, GGUF Q4_K_S)",
         "modality": "image",
         "backend": "sd-server",
+        "params": {"cfg_scale": 1.0, "sampler": "euler"},
+        "artifacts": {
+            "vae": {
+                "repos": [
+                    "flux-safetensors/flux-safetensors",
+                    "black-forest-labs/FLUX.1-dev",
+                ],
+                "file": "ae.safetensors",
+            },
+            "clip_l": {
+                "repos": [
+                    "comfyanonymous/flux_text_encoders",
+                    "flux-safetensors/flux-safetensors",
+                ],
+                "file": "clip_l.safetensors",
+            },
+            "t5xxl": {
+                "repos": [
+                    "comfyanonymous/flux_text_encoders",
+                    "flux-safetensors/flux-safetensors",
+                ],
+                "file": "t5xxl_fp16.safetensors",
+            },
+        },
     },
     "flux:klein": {
         "repo": "city96/FLUX.1-schnell-gguf",
@@ -190,6 +238,30 @@ SHORTHANDS = {
         "description": "FLUX Klein (Compact 4-bit, fast 4-step generation, GGUF Q4_0)",
         "modality": "image",
         "backend": "sd-server",
+        "params": {"steps": 4, "cfg_scale": 1.0, "sampler": "euler"},
+        "artifacts": {
+            "vae": {
+                "repos": [
+                    "flux-safetensors/flux-safetensors",
+                    "black-forest-labs/FLUX.1-dev",
+                ],
+                "file": "ae.safetensors",
+            },
+            "clip_l": {
+                "repos": [
+                    "comfyanonymous/flux_text_encoders",
+                    "flux-safetensors/flux-safetensors",
+                ],
+                "file": "clip_l.safetensors",
+            },
+            "t5xxl": {
+                "repos": [
+                    "comfyanonymous/flux_text_encoders",
+                    "flux-safetensors/flux-safetensors",
+                ],
+                "file": "t5xxl_fp16.safetensors",
+            },
+        },
     },
     "zimage:1.0": {
         "repo": "Tongyi-Labs/Z-Image",
@@ -226,7 +298,8 @@ class DownloadTask:
     def __init__(self, model_name: str, repo: str, filename: str, local_path: Path,
                  mmproj_filename: str | None = None,
                  modality: str | None = None, backend: str | None = None,
-                 multi_files: list[str] | None = None, dest_dir: Path | None = None):
+                 multi_files: list[str] | None = None, dest_dir: Path | None = None,
+                 artifact_specs: dict | None = None):
         self.model_name = model_name
         self.repo = repo
         self.filename = filename
@@ -256,6 +329,7 @@ class DownloadTask:
             local_path.parent / self._local_mmproj_name(model_name, mmproj_filename)
             if mmproj_filename else None
         )
+        self.artifact_specs = artifact_specs or {}
         self.total_bytes = 0
         self.completed_bytes = 0
         self.status = "queued"  # queued, downloading, completed, failed
@@ -413,6 +487,7 @@ class DownloadManager:
             backend: str | None = None
             multi_files: list[str] | None = None
             multi_dir: str | None = None
+            artifact_specs: dict | None = None
             model_name = model_name_or_url.strip()
 
             # Format check: hf://repo/path/to/file.gguf or repo/path/to/file.gguf
@@ -426,6 +501,7 @@ class DownloadManager:
                 repo = sh["repo"]
                 modality = sh.get("modality")
                 backend = sh.get("backend")
+                artifact_specs = sh.get("artifacts")
                 model_name = cleaned.lower()
                 # Multi-file shorthands (e.g. kokoro TTS) declare `files` + `dir`
                 # instead of a single `file`: a set of files downloaded into one
@@ -479,12 +555,14 @@ class DownloadManager:
                     model_name, repo, "", local_path,
                     modality=modality, backend=backend,
                     multi_files=multi_files, dest_dir=dest_dir,
+                    artifact_specs=artifact_specs,
                 )
             else:
                 local_path = self.models_dir / filename
                 task = DownloadTask(
                     model_name, repo, filename, local_path, mmproj_filename,
-                    modality=modality, backend=backend
+                    modality=modality, backend=backend,
+                    artifact_specs=artifact_specs,
                 )
             self._tasks[model_name] = task
 
@@ -495,6 +573,8 @@ class DownloadManager:
                 msg += f" ({len(multi_files)} files → {multi_dir}/)"
             elif mmproj_filename:
                 msg += f" (vision projector '{mmproj_filename}' included)"
+            if artifact_specs:
+                msg += f" ({len(artifact_specs)} artifact(s) included)"
             return model_name, msg
 
     async def _download_loop(self, task: DownloadTask):
@@ -532,6 +612,9 @@ class DownloadManager:
             if task.mmproj_filename and task.mmproj_path is not None:
                 await self._fetch_mmproj(task)
                 artifacts = {"mmproj": str(task.mmproj_path)}
+            extra_artifacts = await self._fetch_artifacts(task)
+            if extra_artifacts:
+                artifacts = {**(artifacts or {}), **extra_artifacts}
 
             task.status = "completed"
             task.speed = 0
@@ -577,6 +660,16 @@ class DownloadManager:
                        temp_path.parent / (temp_path.name + ".aria2")]
             if task.mmproj_path is not None:
                 cleanup.append(task.mmproj_path.with_suffix(task.mmproj_path.suffix + ".download"))
+            for spec in task.artifact_specs.values():
+                if not isinstance(spec, dict):
+                    continue
+                filename = spec.get("local") or spec.get("file")
+                if filename:
+                    cleanup.append(
+                        (self.models_dir / filename).with_suffix(
+                            Path(filename).suffix + ".download"
+                        )
+                    )
             for path in cleanup:
                 if path.exists():
                     try:
@@ -693,6 +786,59 @@ class DownloadManager:
                         f.write(chunk)
         temp.rename(dest)
         logger.info(f"Vision projector ready: {dest}")
+
+    async def _fetch_artifacts(self, task: DownloadTask) -> dict[str, str]:
+        """Download declared companion artifacts and return registry paths.
+
+        Image backends such as FLUX need a standalone diffusion GGUF plus text
+        encoders and a VAE from separate repos. Shorthands declare those here so
+        a pull creates a runnable registry entry instead of just fetching the
+        primary weights.
+        """
+        artifacts: dict[str, str] = {}
+        if not task.artifact_specs:
+            return artifacts
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            for key, spec in task.artifact_specs.items():
+                if not isinstance(spec, dict):
+                    raise RuntimeError(f"Artifact '{key}' must declare repo and file")
+                filename = spec.get("file")
+                if not filename:
+                    raise RuntimeError(f"Artifact '{key}' is missing file")
+                local_name = spec.get("local") or filename
+                dest = self.models_dir / local_name
+
+                if dest.exists() and dest.stat().st_size > 0:
+                    artifacts[key] = str(dest)
+                    logger.info(f"Artifact '{key}' already present: {dest}")
+                    continue
+
+                repos = spec.get("repos") or [spec.get("repo") or task.repo]
+                if isinstance(repos, str):
+                    repos = [repos]
+                temp = dest.with_suffix(dest.suffix + ".download")
+                last_status = "not attempted"
+                for repo in repos:
+                    url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
+                    logger.info(f"Downloading artifact '{key}' from {url}")
+                    async with client.stream("GET", url) as resp:
+                        if resp.status_code != 200:
+                            last_status = f"{repo} returned HTTP {resp.status_code}"
+                            continue
+                        with open(temp, "wb") as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
+                                f.write(chunk)
+                    break
+                else:
+                    raise RuntimeError(
+                        f"Failed to download artifact '{key}' ({filename}): {last_status}"
+                    )
+                temp.rename(dest)
+                artifacts[key] = str(dest)
+                logger.info(f"Artifact '{key}' ready: {dest}")
+
+        return artifacts
 
     async def _check_range_support(self, url: str) -> tuple[int, bool]:
         """Check if target server supports HTTP Range requests and get content length."""
