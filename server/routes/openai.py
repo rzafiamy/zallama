@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import time
@@ -100,17 +101,44 @@ def _is_wav(data: bytes) -> bool:
     return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE"
 
 
+# Long silences make parakeet's TDT decoder skip past the speech that follows
+# them: measured against tdt-0.6b-v3-q8_0, a clip whose words are separated by
+# 1.2 s of silence transcribes in full, 1.6 s loses words, and 2.0 s returns an
+# empty string. Real dictation is full of 2 s thinking pauses, so we cap silence
+# at ~0.8 s (comfortably under the 1.3 s cliff) before handing audio upstream.
+# Set ZALLAMA_ASR_SILENCE_CAP=0 to disable, or to another value in seconds.
+_SILENCE_CAP_SEC = float(os.environ.get("ZALLAMA_ASR_SILENCE_CAP", "0.8"))
+
+
+def _silence_filter() -> list[str]:
+    """ffmpeg -af arguments that clamp long silences, or [] when disabled."""
+    if _SILENCE_CAP_SEC <= 0:
+        return []
+    return ["-af", (
+        "silenceremove="
+        "stop_periods=-1"
+        f":stop_duration={_SILENCE_CAP_SEC}"
+        ":stop_threshold=-40dB"
+        ":detection=peak"
+    )]
+
+
 async def _to_wav(data: bytes) -> bytes:
     """Transcode arbitrary audio to 16 kHz mono PCM WAV via ffmpeg.
 
     parakeet-server's example server decodes WAV only, but clients (and the
     OpenAI API) routinely send mp3/m4a/webm/flac. We normalize on the proxy so
-    any format works, matching OpenAI's behaviour. Already-WAV input is passed
-    through untouched. ffmpeg reads stdin and writes stdout (pipe:0 / pipe:1).
+    any format works, matching OpenAI's behaviour. ffmpeg reads stdin and writes
+    stdout (pipe:0 / pipe:1).
+
+    WAV input still goes through ffmpeg so it gets the silence clamp too (see
+    _SILENCE_CAP_SEC); it is only passed through untouched when ffmpeg is
+    missing, which keeps WAV-only deployments working as before.
     """
-    if _is_wav(data):
-        return data
-    if shutil.which("ffmpeg") is None:
+    have_ffmpeg = shutil.which("ffmpeg") is not None
+    if not have_ffmpeg:
+        if _is_wav(data):
+            return data
         raise HTTPException(
             status_code=415,
             detail="Audio is not WAV and ffmpeg is not installed to convert it. "
@@ -119,6 +147,7 @@ async def _to_wav(data: bytes) -> bytes:
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
         "-i", "pipe:0",
+        *_silence_filter(),
         "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
