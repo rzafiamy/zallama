@@ -114,10 +114,15 @@ def _silence_filter() -> list[str]:
     """ffmpeg -af arguments that clamp long silences, or [] when disabled."""
     if _SILENCE_CAP_SEC <= 0:
         return []
+    # stop_silence is what actually caps: without it silenceremove deletes the
+    # detected silence outright, which glues sentences together and throws off
+    # punctuation. Keeping _SILENCE_CAP_SEC of every pause preserves the speech
+    # rhythm while staying under the decoder's ~1.3 s cliff.
     return ["-af", (
         "silenceremove="
         "stop_periods=-1"
         f":stop_duration={_SILENCE_CAP_SEC}"
+        f":stop_silence={_SILENCE_CAP_SEC}"
         ":stop_threshold=-40dB"
         ":detection=peak"
     )]
