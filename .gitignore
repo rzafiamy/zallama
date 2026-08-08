@@ -36,4 +36,7 @@ build/
 config/config.yaml
 models/registry.yaml
 
+# Default landing spot for `zallama generate` when --output is omitted
+/output.png
+
 dist.zip
