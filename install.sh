@@ -66,6 +66,18 @@ for bin in parakeet-server kokoro-server sd-server; do
   fi
 done
 
+# kokoro-server dlopen()s libespeak-ng for grapheme-to-phoneme. Without it, it
+# silently falls back to a bundled autoregressive ByT5 model that costs ~50 ms
+# per phoneme — synthesis is ~2.5x slower. Warn rather than fail: TTS still works.
+if [ -f "$ZALLAMA_DIR/bin/kokoro-server" ] || command -v kokoro-server &>/dev/null; then
+  if ldconfig -p 2>/dev/null | grep -q "libespeak-ng.so.1"; then
+    echo -e "${GREEN}✓${RESET} libespeak-ng found (fast kokoro phonemizer)"
+  else
+    echo -e "⚠  libespeak-ng not found — kokoro TTS will be ~2.5x slower."
+    echo "   Install it with: sudo apt install -y libespeak-ng1 espeak-ng-data libpcaudio0 libsonic0"
+  fi
+fi
+
 # ── 4. Make CLI executable ───────────────────────────────────────────────────
 chmod +x "$ZALLAMA_DIR/zallama"
 echo -e "${GREEN}✓${RESET} zallama CLI is executable"

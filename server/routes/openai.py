@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
 from ..backends import ENDPOINT_MODALITY
+from ..tts_lang import voice_for_text
 from ..model_registry import ModelRegistry
 
 router = APIRouter(prefix="/v1")
@@ -484,9 +485,24 @@ async def audio_speech(
         params = registry.get(model_name).get("params") or {}
     except Exception:
         params = {}
-    for key in ("voice", "speed"):
-        if key in params and key not in body:
-            body[key] = params[key]
+    if "speed" in params and "speed" not in body:
+        body["speed"] = params["speed"]
+
+    # `voice` gets one step more than the other knobs. kokoro has no language
+    # argument — it phonemizes according to the voice's prefix — so answering a
+    # French request with the default English voice reads French text with
+    # English sounds. When (and only when) the request names no voice, guess the
+    # language from the text and pick that language's voice. Precedence is
+    # request voice > detected language > registry default > kokoro's own
+    # default, so a caller that asks for a voice always gets it, and the
+    # registry default still covers text we can't place.
+    voice = body.get("voice")
+    if not (isinstance(voice, str) and voice.strip()):
+        chosen = voice_for_text(body.get("input") or "", fallback=params.get("voice"))
+        if chosen:
+            body["voice"] = chosen
+        else:
+            body.pop("voice", None)
 
     upstream_url = f"{inst.base_url}/v1/audio/speech"
     async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:

@@ -45,6 +45,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Fitting Your Models on One GPU](docs/vram-planning.md)
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
+- [Text-to-Speech (TTS)](#-text-to-speech-tts)
 - [Image Generation (Stable Diffusion)](#-image-generation-stable-diffusion)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
 - [RAG: Reranking & the zvec Vector Store](#-rag-reranking--the-zvec-vector-store)
@@ -102,7 +103,7 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 ./build-ggml-parakeet.cpp.sh master
 
 # kokoro.cpp (TTS / voice synthesis) — requires a release tag/branch name
-./build-ggml-kokoro.cpp.sh v0.1.0
+./build-ggml-kokoro.cpp.sh v0.3.0
 
 # stable-diffusion.cpp (Image generation) — requires a release tag/branch name
 ./build-ggml-stable-diffusion.cpp.sh master
@@ -110,7 +111,11 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 > All scripts default to a **CUDA** build. The parakeet and stable-diffusion scripts also copy shared libraries next to the binaries and set their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime.
 >
-> `kokoro.cpp` v0.1.0 requires **CMake 3.29+**. Ubuntu 24.04's apt package is 3.28 — install a newer CMake and run the script with `CMAKE_BIN=/path/to/cmake`.
+> `kokoro.cpp` requires **CMake 3.29+**. Ubuntu 24.04's apt package is 3.28 — install a newer CMake and run the script with `CMAKE_BIN=/path/to/cmake`.
+>
+> `kokoro.cpp` v0.2.0+ picks up **espeak-ng** at runtime (`dlopen`) for grapheme-to-phoneme and is ~2.5x faster with it than with the bundled ByT5 phonemizer. The build script installs it; on a machine that only *runs* the binary, install it yourself:
+> `sudo apt install -y libespeak-ng1 espeak-ng-data libpcaudio0 libsonic0`.
+> `kokoro-server` logs which phonemizer it selected at startup (`phonemizer: espeak-ng` vs `phonemizer: ByT5 (bundled)`).
 
 ### Optional: use prebuilt packages
 
@@ -677,6 +682,55 @@ curl http://localhost:11435/v1/audio/transcriptions \
 > **Language support is a property of the model, not Zallama.** `ctc-0.6b` / `tdt-0.6b-v2` are **English-only**; for French and other languages use the multilingual **[Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)** (25 European languages, automatic language detection).
 >
 > **`ffmpeg`** is only needed for non-WAV uploads. Without it, WAV uploads still work and other formats return a clear `415`.
+
+---
+
+## 🗣️ Text-to-Speech (TTS)
+
+Speech synthesis runs on the **`kokoro-server`** backend ([kokoro.cpp](https://github.com/rzafiamy/kokoro.cpp)) and is exposed at the OpenAI-compatible `POST /v1/audio/speech` endpoint.
+
+**1. Build the binary** (installs `kokoro-server` and `kokoro-cli` into `./bin/`):
+```bash
+./build-ggml-kokoro.cpp.sh v0.3.0
+```
+
+**2. Pull a model** (auto-registered as `modality: tts`, `backend: kokoro-server`):
+```bash
+zallama pull kokoro:82m     # Kokoro-82M, 54 voices across 8 languages
+```
+
+**3. Synthesize** — the response is a WAV stream:
+```bash
+curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kokoro:82m","input":"Bonjour, comment allez-vous ?"}' \
+  -o speech.wav
+```
+
+### Voice selection
+
+Kokoro takes no language argument — it phonemizes according to the **voice prefix** (`ff_siwis` → French, `af_heart` → American English, `if_sara` → Italian, …). Sending French text with an English voice therefore reads it with English sounds.
+
+So when a request names **no** voice, Zallama guesses the language from the text and picks that language's voice ([`server/tts_lang.py`](server/tts_lang.py)). Precedence:
+
+| | |
+|---|---|
+| 1. `voice` in the request | always wins — auto-selection never overrides an explicit choice |
+| 2. detected language | `fr` → `ff_siwis`, `en` → `af_heart`, plus `es`/`it`/`pt`/`hi`/`ja`/`zh` |
+| 3. the model's registry `voice` param | used when the language can't be determined |
+| 4. kokoro's own default | when no registry default is set either |
+
+Detection is a small built-in heuristic, not a language identifier: CJK and Devanagari are settled by script, the Latin languages by function-word frequency. It deliberately answers "unknown" for very short inputs — `"Merci"` and `"Mercy"` are not distinguishable in five letters — and falls through to your registry default there. Pin `voice` in the request whenever you need a guaranteed result.
+
+```bash
+# Explicit voice — no detection, no surprises
+curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kokoro:82m","input":"Bonjour !","voice":"ff_siwis"}' \
+  -o speech.wav
+```
+
+> Install **espeak-ng** (see [Installation](#2-build-the-inference-engines)) — without it kokoro falls back to a bundled phonemizer that is ~2.5x slower.
 
 ---
 

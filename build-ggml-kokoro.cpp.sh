@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-BRANCH_OR_TAG="${1:-v0.1.0}"
+BRANCH_OR_TAG="${1:-v0.3.0}"
 
 echo "🗣️  Building kokoro.cpp for branch/tag: ${BRANCH_OR_TAG}"
 
@@ -17,6 +17,13 @@ echo "🗣️  Building kokoro.cpp for branch/tag: ${BRANCH_OR_TAG}"
 apt update -y
 # kokoro.cpp needs a C++20 toolchain + CMake; FetchContent pulls the rest.
 apt install -y git cmake build-essential
+# espeak-ng is a *runtime* dependency, not a build one: kokoro.cpp dlopen()s
+# libespeak-ng.so.1 and uses it for grapheme-to-phoneme instead of the bundled
+# ByT5 model, which is autoregressive without a KV cache (~50 ms per phoneme).
+# Without it synthesis is ~2.5x slower. Installed here so a machine that builds
+# kokoro also runs it at full speed; libpcaudio0/libsonic0 are libespeak-ng's
+# own shared deps and the dlopen fails silently without them.
+apt install -y libespeak-ng1 espeak-ng-data libpcaudio0 libsonic0
 
 WORKDIR=$(pwd)
 BIN_DIR="${WORKDIR}/bin"
