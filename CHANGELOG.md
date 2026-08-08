@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-09
+
+### Fixed
+- **TTS was reading French with English sounds.** kokoro takes no language argument — it
+  phonemizes according to the *voice prefix* (`ff_siwis` → `fr-FR`, `af_heart` → `en-US`). The
+  registry default `voice: af_heart` was applied to every request that omitted `voice`, so French
+  input was phonemized as English: the same French sentence yields 6.29 s of audio through
+  `af_heart` against 5.21 s through `ff_siwis`, the difference being English phonemes spelled out
+  over French words. When a request names no voice, Zallama now infers the language from the text
+  and picks that language's voice (`server/tts_lang.py`). Precedence is **request voice → detected
+  language → registry `voice` param → kokoro's own default**, so an explicit voice is never
+  overridden and the registry default still covers text that can't be placed.
+- **TTS was ~2.5x slower than it had to be, silently.** kokoro loads libespeak-ng through
+  `dlopen` for grapheme-to-phoneme and falls back — with no error — to a bundled ByT5 model that
+  is autoregressive with no KV cache, ~50 ms per generated phoneme. espeak-ng was never listed as
+  a dependency, so the slow path was the only path. `build-ggml-kokoro.cpp.sh` now installs it,
+  and `install.sh` warns when `kokoro-server` is present without it. Note that the packages
+  `libpcaudio0` / `libsonic0` are needed too: they are libespeak-ng's own shared dependencies and
+  the `dlopen` fails silently without them.
+
+### Changed
+- **kokoro.cpp pinned to v0.3.0** (was v0.1.0). Measured on an i9-14900K, 1248 characters of
+  English:
+
+  | Build | audio produced | wall | × realtime | CPU |
+  |---|---:|---:|---:|---:|
+  | v0.1.0 | 22.9 s *(truncated)* | 65.8 s | 0.35× | 1619 s |
+  | v0.3.0 + espeak-ng | 85.9 s | 12.5 s | **6.9×** | **58 s** |
+
+  v0.1.0 also truncated long input, emitting 22.9 s of audio where v0.3.0 emits 85.9 s from the
+  same text, so the throughput gain is larger than the wall-clock column alone suggests. v0.3.0
+  additionally caps ONNX Runtime's thread pools (`--threads`, default `min(cores, 8)`): the old
+  defaults sized the intra-op pool to the logical core count and spun between operators, burning
+  331 s of CPU where 58 s does the same work — which matters when llama-server shares the box.
+
+### Documented
+- **A Text-to-Speech section in the README**, which had none despite sections for ASR and image
+  generation: endpoint usage, the voice-selection precedence table, and the espeak-ng requirement.
+  The installation section now also records that kokoro needs CMake 3.29+ and picks espeak-ng up
+  at runtime.
+
 ## [1.5.1] - 2026-08-08
 
 ### Fixed
@@ -230,7 +271,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/rzafiamy/zallama/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/rzafiamy/zallama/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/rzafiamy/zallama/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/rzafiamy/zallama/compare/v1.3.0...v1.4.0
