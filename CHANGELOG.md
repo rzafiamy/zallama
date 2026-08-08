@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-08
+
+### Added
+- **`zallama bench` — performance benchmarking across parameter sweeps**: measures prefill
+  tok/s, decode tok/s, time-to-first-token, load time and VRAM for text models, and can sweep
+  any llama-server parameter (`--sweep ctx_size=4096,16384,65536`, `--sweep reasoning=on,off`,
+  repeat for a grid). Each combination is applied to the registry and the model restarted so it
+  actually takes effect; the original params are restored when the run ends, including on Ctrl-C.
+  Prefill/decode rates come from llama.cpp's own `timings` block (carried in the final SSE chunk),
+  TTFT is measured client-side. Also supports prompt-size and concurrency sweeps
+  (`-p 512,8192 -c 1,4`), repeated runs reported as mean ± stdev, `--all` to compare every
+  registered text model, and `--out` export to `.json` / `.csv` / `.md`.
+- **`zallama bench --compare a.json b.json`**: puts several exports side by side to compare
+  machines (GPU vs GPU) on identical workloads. JSON exports now carry the machine that produced
+  them — GPU model, VRAM, driver, CPU, host, and the llama.cpp build stamped into every response
+  — and `--label NAME` names a run. Only points with identical model, swept params, prompt size,
+  max-tokens and concurrency are compared; unmatched points are reported, and differing llama.cpp
+  builds raise a warning. `--metric` selects which tables to print.
+- **New sweepable llama-server params**: `batch_size`, `ubatch_size`, `cache_type_k` and
+  `cache_type_v` are now recognized in a model's `params` (mapped to `--batch-size`,
+  `--ubatch-size`, `--cache-type-k`, `--cache-type-v`).
+
+### Fixed
+- **VRAM is now labelled GiB, not GB, in `zallama bench`**: the value has always been
+  `nvidia-smi` MiB / 1024, which is how a 24 GiB card gets mistaken for a 24 GB one.
+- **`zallama set` no longer un-pins a pinned model**: `POST /api/models/add` accepts and
+  preserves `pinned`, and `GET /api/models` reports it, so editing params on a pinned model
+  keeps it pinned.
+- **Long silences no longer truncate ASR transcriptions**: parakeet's TDT decoder skips past
+  the speech following a long pause — 1.2 s transcribes in full, 1.6 s loses words, and 2.0 s
+  returns an empty string. Audio sent to `/v1/audio/transcriptions` now passes through an
+  ffmpeg `silenceremove` filter that clamps every pause to `ZALLAMA_ASR_SILENCE_CAP` seconds
+  (default `0.8`; set `0` to disable). WAV input goes through the filter too, and is only
+  passed through untouched when ffmpeg is unavailable. The filter keeps `stop_silence` at the
+  cap rather than deleting pauses outright, which preserves speech rhythm and punctuation.
+
 ## [1.3.0] - 2026-08-06
 
 ### Added
@@ -139,7 +175,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/rzafiamy/zallama/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/rzafiamy/zallama/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rzafiamy/zallama/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rzafiamy/zallama/compare/v1.0.0...v1.1.0
