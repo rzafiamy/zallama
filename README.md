@@ -719,6 +719,12 @@ zallama set sd:1.5 steps=25 cfg_scale=7.5
 ```
 The daemon applies those registry values to any request that does not specify them. Auxiliary weights (`vae`, `taesd`, `control_net`, `clip_l`, `clip_g`, `t5xxl`) are passed to `sd-server` at launch when registered as artifacts on the model.
 
+**Large images and VRAM.** The VAE decode buffer grows with the square of the image size and is allocated *after* the whole stack is resident, so a generation can sample all its steps and then die at the final decode — a FLUX 1024×1024 decode asks for ~6.6 GB on top of ~16 GB of weights, which does not fit on a 24 GB card. Set `vae_tiling` to decode the latent in patches instead, which cuts that buffer to a few hundred MB for no visible seam:
+```bash
+zallama set flux:klein vae_tiling=true diffusion_fa=true
+```
+The other memory switches are `fa` (flash attention everywhere), `diffusion_fa` (diffusion model only), `vae_conv_direct` / `diffusion_conv_direct`, `offload_to_cpu` (weights live in RAM, streamed into VRAM per graph), and `backend` for per-component placement (e.g. `backend=te=cpu`). Tile geometry is tunable with `vae_tile_size` and `vae_tile_overlap`.
+
 > Image models are not chat models: `zallama run <name>` refuses them and points you at `zallama generate`.
 
 ---

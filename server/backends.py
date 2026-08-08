@@ -447,6 +447,30 @@ class SdServerBackend:
         "width": "--width",
         "height": "--height",
         "seed": "--seed",
+        # VAE tiling geometry — only meaningful with vae_tiling below.
+        "vae_tile_size": "--vae-tile-size",
+        "vae_tile_overlap": "--vae-tile-overlap",
+        # Per-component device placement, e.g. "te=cpu" or "vae=cuda0,diffusion=cpu".
+        # The modern replacement for the deprecated --clip-on-cpu/--vae-on-cpu.
+        "backend": "--backend",
+        "params_backend": "--params-backend",
+    }
+
+    # Boolean flags: present-if-truthy.
+    _FLAG_MAP = {
+        # The VAE decode compute buffer scales with the square of the image
+        # size and is allocated *after* the whole stack is already resident in
+        # VRAM. A FLUX 1024x1024 decode asks for ~6.6GB on top of ~16GB of
+        # weights, which does not fit in 24GB and fails the generation at the
+        # very last step. Tiling decodes the latent in patches instead, which
+        # cuts that buffer to a few hundred MB.
+        "vae_tiling": "--vae-tiling",
+        "fa": "--fa",
+        "diffusion_fa": "--diffusion-fa",
+        "diffusion_conv_direct": "--diffusion-conv-direct",
+        "vae_conv_direct": "--vae-conv-direct",
+        # Keep weights in RAM and stream them into VRAM per graph.
+        "offload_to_cpu": "--offload-to-cpu",
     }
 
     def build_args(
@@ -488,6 +512,10 @@ class SdServerBackend:
         for key, flag in self._PARAM_MAP.items():
             if key in merged_params and key not in artifacts:
                 args += [flag, str(merged_params[key])]
+
+        for key, flag in self._FLAG_MAP.items():
+            if merged_params.get(key):
+                args.append(flag)
         return args
 
     def health_path(self) -> str:

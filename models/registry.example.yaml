@@ -127,4 +127,9 @@ models:
     params:
       steps: 20
       cfg_scale: 7.0
+      # Decode the VAE in tiles. The decode buffer scales with the square of the
+      # image size and is allocated once the weights are already resident, so
+      # without this a large generation can sample every step and then fail at
+      # the final decode with a cudaMalloc OOM. Costs nothing visible.
+      vae_tiling: true
 
