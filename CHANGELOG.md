@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-08
+
+### Fixed
+- **Image generation no longer dies at the final VAE decode**: `SdServerBackend` mapped only
+  value-taking flags, so no boolean `sd-server` option was reachable from the registry — including
+  `--vae-tiling`. The VAE decode buffer grows with the square of the image size and is allocated
+  *after* the whole stack is resident in VRAM: a FLUX 1024×1024 decode asks for 6.66 GB on top of
+  15.94 GB of weights, overflowing a 24 GB card and failing the request after every sampling step
+  had already succeeded (`cudaMalloc failed: out of memory` → `decode_first_stage failed`). The
+  backend now has a `_FLAG_MAP` alongside its `_PARAM_MAP`, and `vae_tiling` decodes the latent in
+  patches for a few hundred MB instead.
+
+### Added
+- **Memory switches for `sd-server`**: `vae_tiling`, `fa`, `diffusion_fa`, `diffusion_conv_direct`,
+  `vae_conv_direct` and `offload_to_cpu` (weights held in RAM, streamed into VRAM per graph), plus
+  the value params `vae_tile_size`, `vae_tile_overlap`, and `backend` / `params_backend` for
+  per-component device placement (`te=cpu`, `vae=cuda0,diffusion=cpu`) — the supported replacement
+  for the deprecated `--clip-on-cpu` / `--vae-on-cpu`. Documented in the README's image section,
+  with `vae_tiling` enabled on the example image model.
+
 ## [1.5.0] - 2026-08-08
 
 ### Added
@@ -210,7 +230,9 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/rzafiamy/zallama/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/rzafiamy/zallama/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/rzafiamy/zallama/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/rzafiamy/zallama/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rzafiamy/zallama/compare/v1.1.0...v1.2.0
