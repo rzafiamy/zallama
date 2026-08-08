@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-08
+
+### Added
+- **`n_cpu_moe` param — fit a MoE model that would otherwise not load**: maps to llama-server's
+  `--n-cpu-moe N`, keeping the expert weights of the first N layers in system RAM while attention
+  and the KV cache stay on the GPU. It is the finest-grained VRAM knob for Mixture-of-Experts
+  models, and unlike the alternatives it costs neither context nor vision. Measured on
+  Qwen3.6-35B-A3B (RTX 4090, ctx 131072, mmproj loaded): `N=0` → 23.44 GiB / 178 tok/s,
+  `N=4` → 21.77 GiB / 138 tok/s, `N=8` → 19.96 GiB / 113 tok/s — roughly 0.4 GiB freed and 8% of
+  generation speed lost per offloaded layer. No effect on dense models.
+- **`scripts/measure_vram.py` — measure what a model really costs**: builds each model's command
+  line through Zallama's own `backend.build_args()`, launches it outside the daemon on a free
+  port, waits for `/health`, reads the per-PID VRAM from `nvidia-smi`, and shuts it down.
+  `--write` records the result as `mem_gb` in `registry.yaml`, editing only those lines so
+  comments and key order survive. Special-cases `sd-server` (which allocates nothing until it
+  generates, so a real 512×512 generation is triggered) and skips CPU-only `kokoro-server`.
+- **`docs/vram-planning.md` — capacity planning guide**: how the scheduler decides what stays
+  resident, why the built-in cost estimate is unreliable, how to measure, and the five levers for
+  making a model fit (KV quantization, `ctx_size`, `n_cpu_moe`, `mmproj`, `n_gpu_layers`) with
+  measured trade-offs for each, a worked example and a checklist.
+
+### Documented
+- **`pinned` is now documented**: the flag shipped earlier but appeared in no reference. The
+  README gains a section covering what it is for (small always-on ASR/TTS backends: ~780 ms of
+  reload per call becomes ~80 ms) and its two non-obvious behaviours — pinned models still count
+  against `max_loaded_models`, and when everything loaded is pinned the incoming model is admitted
+  **over budget** rather than evicting a warm pinned instance. Also added to
+  `registry.example.yaml` and the registry reference.
+- **`mem_budget_gb` now carries its precondition**: the fallback estimate (`gguf_size × 1.2`)
+  ignores the KV cache, the artifacts (`mmproj`, `t5xxl`, `clip_l`, VAE) and the compute buffers,
+  and is routinely wrong by more than 100% *in both directions* — a 4B model at `ctx_size:
+  262144` measures 12.9 GiB against an estimated 4.2. Enabling a budget on such values evicts
+  models that would have fit and admits models that then OOM, so `config.example.yaml`, the README
+  and the guide now say to measure first.
+
 ## [1.4.0] - 2026-08-08
 
 ### Added
