@@ -20,7 +20,16 @@ llama_server:
   port_start: 8100    # backend instances use ports 8100, 8101, ...
   startup_timeout: 60 # Seconds to wait for a backend's /health
   idle_timeout: 300   # Unload model after N seconds of inactivity (0 = never)
+  # Both caps below count EVERY loaded model, all backends together — including
+  # models marked `pinned: true` in registry.yaml, which are never evicted. Size
+  # the count as (pinned services) + (big models resident at once): with one
+  # pinned TTS and max_loaded_models: 1 the only slot is permanently taken and
+  # every other model reloads on each alternation.
   max_loaded_models: 0 # Max concurrently loaded models; evicts LRU (0 = unlimited)
+  # Only meaningful once every entry carries a MEASURED mem_gb — the fallback
+  # estimate (gguf size x 1.2) ignores the KV cache and artifacts and is often
+  # off by 100%+. Measure with `python3 scripts/measure_vram.py --write`, then
+  # set this a little under your card's usable VRAM. See docs/vram-planning.md.
   mem_budget_gb: 0     # Memory budget (GB); evicts LRU to fit a model's mem_gb (0 = unlimited)
   mem_init_gb: 2       # Fallback per-model cost when mem_gb is undeclared & file size unknown
 

@@ -42,6 +42,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Configuration](#️-configuration)
 - [Benchmarking](#-benchmarking-zallama-bench)
 - [Memory-Aware Eviction](#-memory-aware-eviction)
+- [Fitting Your Models on One GPU](docs/vram-planning.md)
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
 - [Image Generation (Stable Diffusion)](#-image-generation-stable-diffusion)
@@ -475,7 +476,10 @@ Each entry may declare:
 - **`modality`** — `text` (default), `embedding`, `rerank`, `asr`, `tts`, or the planned `image`. Determines which endpoints the model may serve; requests to a mismatched endpoint return a clear `400`. (Legacy embedding models registered as `text` with `params: embedding: true` are still treated as `embedding` at runtime.)
 - **`backend`** — which engine runs the model (default `llama-server`). New backends resolve their own binary from `./bin/<name>`, `~/.zallama/bin/<name>`, or `PATH`.
 - **`artifacts`** — extra files beyond the primary GGUF (e.g. `mmproj` for vision, and — for future backends — vocoders, etc.). Paths are absolute or relative to `models_dir`.
-- **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size.
+- **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size — an estimate that is frequently off by 100% or more, so [measure it](docs/vram-planning.md#measuring-what-a-model-actually-costs).
+- **`pinned`** — `true` keeps the model loaded for the daemon's lifetime: pre-warmed at startup, exempt from both idle sweep and eviction. Intended for small always-on services (ASR, TTS), not for large models.
+
+Useful `params` for making a model fit on a busy GPU — `cache_type_k`/`cache_type_v` (quantize the KV cache), `ctx_size`, `n_cpu_moe` (keep the expert weights of the first N layers in system RAM, MoE models only) and `n_gpu_layers` — are covered with measured trade-offs in [Fitting Your Models on One GPU](docs/vram-planning.md#making-a-model-fit).
 
 ---
 
@@ -595,6 +599,28 @@ Each model's cost is taken from its declared `mem_gb`; if undeclared, it's estim
 ```bash
 zallama set qwen3.5-4b-q4_k_m mem_gb=4
 ```
+
+> **Measure it, don't guess it.** The `size × 1.2` fallback ignores the KV cache, the artifacts (`mmproj`, and the text encoders of image models) and the compute buffers. Real-world errors exceed 100% in **both** directions — a 4B model at a long context measured 12.9 GB against an estimate of 4.2 GB. A budget built on those estimates evicts models that would have fit *and* admits models that then OOM, so measure before enabling `mem_budget_gb`:
+>
+> ```bash
+> python3 scripts/measure_vram.py --write   # run it on an idle GPU
+> ```
+
+### Keeping a model resident: `pinned`
+
+A model with `pinned: true` in its registry entry is **pre-loaded when the daemon starts and never evicted**. It exists for small, latency-sensitive backends that would otherwise be evicted by every chat request and reloaded on the next call — ASR and TTS in particular, where a ~1 GB model turns a 780 ms round trip into an 80 ms one.
+
+```yaml
+- name: tdt-0.6b-v3-q8_0
+  modality: asr
+  backend: parakeet-server
+  mem_gb: 1.3
+  pinned: true
+```
+
+Two things to know. Pinned models **still count against `max_loaded_models`**, so size that cap as *(pinned services) + (concurrent big models)* — with one pinned TTS and `max_loaded_models: 1`, the only slot is permanently taken and every other model thrashes. And when the cap is reached but everything loaded is pinned, Zallama logs a warning and admits the incoming model **over budget** rather than killing a warm pinned instance.
+
+Pinning a small model can make your largest one unloadable. **[Fitting Your Models on One GPU](docs/vram-planning.md)** works through that arithmetic and the levers — KV quantization, `ctx_size`, MoE expert offload (`n_cpu_moe`), `mmproj` — with measured numbers for each.
 
 Inspect current usage and headroom any time with `zallama ps` (or `GET /api/ps`), which reports per-model memory and the budget:
 

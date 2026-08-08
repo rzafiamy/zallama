@@ -159,6 +159,14 @@ class LlamaServerBackend:
         # activates it; spec_draft_n_max tunes lookahead (2 is a good start).
         "spec_type": "--spec-type",
         "spec_draft_n_max": "--spec-draft-n-max",
+        # MoE expert offload: keep the expert weights of the first N layers in
+        # system RAM instead of VRAM, leaving attention and the KV cache on the
+        # GPU. This is the finest-grained VRAM knob for MoE models — it buys
+        # room without touching ctx_size or dropping the mmproj. Measured on
+        # Qwen3.6-35B-A3B (RTX 4090, ctx 131072): N=0 -> 23.44GB / 178 tok/s,
+        # N=4 -> 21.77GB / 138 tok/s, N=8 -> 19.96GB / 113 tok/s. Roughly
+        # 0.4GB freed and 8% of generation speed lost per layer offloaded.
+        "n_cpu_moe": "--n-cpu-moe",
     }
     # Boolean flags: present-if-truthy.
     _FLAG_MAP = {
