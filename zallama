@@ -9,6 +9,7 @@ Commands:
   add <name> <file>  Register a local .gguf model (--mmproj for vision)
   remove <name>   Remove a model from registry
   run <name>      Interactive chat with a model
+  bench <name>    Benchmark tokens/sec across parameter sweeps
   ps              Show running model processes
   load <name>     Pre-load a model (start llama-server)
   unload <name>   Stop a running model
@@ -49,8 +50,10 @@ _reexec_into_venv()
 
 import json
 import re
+import statistics
 import time
 import readline
+from itertools import product
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -344,6 +347,30 @@ def _print_framed(md: str, label: str, label_color: str) -> None:
         print(f"{' ' * margin}{gutter} {line}" if line else f"{' ' * margin}{gutter}")
 
 
+def _parse_param_value(val: str):
+    """Coerce a CLI `key=value` string into the type registry.yaml should hold.
+
+    Shared by `zallama set` and `zallama bench --sweep` so both interpret
+    `ctx_size=8192`, `flash_attn=true` and `reasoning=off` identically. Returns
+    None for the explicit unset words ("none"/"null"); callers treat that as
+    "delete this key".
+    """
+    low = val.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("none", "null"):
+        return None
+    try:
+        return int(val)
+    except ValueError:
+        try:
+            return float(val)
+        except ValueError:
+            return val
+
+
 # ---------------------------------------------------------------------------
 # API helpers
 # ---------------------------------------------------------------------------
@@ -593,21 +620,7 @@ def cmd_set(args: list[str]):
             backend_explicit = True
             continue
 
-        # Convert val to appropriate type
-        if val.lower() == "true":
-            parsed_val = True
-        elif val.lower() == "false":
-            parsed_val = False
-        elif val.lower() in ("none", "null"):
-            parsed_val = None
-        else:
-            try:
-                parsed_val = int(val)
-            except ValueError:
-                try:
-                    parsed_val = float(val)
-                except ValueError:
-                    parsed_val = val
+        parsed_val = _parse_param_value(val)
 
         if parsed_val is None:
             params.pop(key, None)
@@ -636,6 +649,7 @@ def cmd_set(args: list[str]):
         "backend": backend,
         "artifacts": model_entry.get("artifacts", {}),
         "mem_gb": model_entry.get("mem_gb", 0),
+        "pinned": model_entry.get("pinned", False),
     }
 
     r = _api("POST", "/api/models/add", payload)
@@ -901,6 +915,902 @@ def cmd_calibrate(args: list[str]):
     print(f"\n{BOLD}  To apply (dry-run only — nothing was changed):{RESET}")
     print(f"    {_color(f'zallama set {model_name} ctx_size={max_ctx} mem_gb={est_mem_gb}', CYAN)}")
     print(f"\n{F_DIM}  Then `zallama reload {model_name}` (or it applies on next load).{RESET}\n")
+
+
+# ---------------------------------------------------------------------------
+# bench — tokens/sec across parameter sweeps
+# ---------------------------------------------------------------------------
+
+# Prompts are padded to a target size with real prose. One word repeated N times
+# tokenizes 3-4x denser than natural text, so "2048 tokens of context" built
+# that way would not resemble the workload anyone actually runs.
+_BENCH_FILLER = (
+    "The harbour master kept a careful ledger of every vessel that entered the "
+    "bay, noting its tonnage, its flag, the cargo in its hold and the weather it "
+    "had sailed through to arrive. Over thirty winters that ledger became the "
+    "only continuous record of trade along the coast, and captains who had lost "
+    "their own papers would come ashore to copy their history back out of it. "
+)
+
+
+def _bench_prompt(target_tokens: int, nonce: str) -> str:
+    """Build a prompt of roughly `target_tokens` tokens, prefixed with `nonce`.
+
+    English GGUF tokenizers sit near 0.75 words per token, which is close
+    enough — every reported prompt size is the exact `prompt_n` llama.cpp
+    counted, never this estimate. The nonce leads on purpose: llama-server
+    reuses the KV cache of a shared prefix, so a run-unique first token is what
+    forces the full prefill we are here to measure.
+    """
+    words = _BENCH_FILLER.split()
+    wanted = max(1, int(target_tokens * 0.75))
+    padding: list[str] = []
+    while len(padding) < wanted:
+        padding.extend(words)
+    return f"{nonce}{' '.join(padding[:wanted])}\n\nContinue the passage above."
+
+
+def _bench_request(model: str, prompt: str, max_tokens: int, temp: float,
+                   ignore_eos: bool, timeout: float) -> dict:
+    """Run one streamed chat completion; return its metrics or {'error': ...}.
+
+    Streaming is what makes time-to-first-token observable, and llama.cpp puts
+    its own `timings` block in the final SSE chunk — so a single streamed call
+    yields client-side latency *and* server-side prefill/decode rates.
+    """
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temp,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if ignore_eos:
+        # Pinning generation to exactly max_tokens means decode rates compare
+        # identical amounts of work, instead of whatever length each parameter
+        # combination happened to stop at.
+        body["ignore_eos"] = True
+
+    url = f"{ZALLAMA_HOST}/v1/chat/completions"
+    t0 = time.perf_counter()
+    ttft_ms = None
+    timings: dict = {}
+    usage: dict = {}
+    build = None
+    try:
+        with requests.post(url, json=body, stream=True, timeout=timeout) as r:
+            if r.status_code != 200:
+                return {"error": f"HTTP {r.status_code}: {r.text[:160]}"}
+            for line in r.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                payload = line[6:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(payload)
+                except ValueError:
+                    continue
+                if ttft_ms is None:
+                    for choice in obj.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        # Thinking models emit reasoning_content first; that is
+                        # still the model's first token.
+                        if delta.get("content") or delta.get("reasoning_content"):
+                            ttft_ms = (time.perf_counter() - t0) * 1000
+                            break
+                if obj.get("timings"):
+                    timings = obj["timings"]
+                if obj.get("usage"):
+                    usage = obj["usage"]
+                if build is None:
+                    build = obj.get("system_fingerprint")
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)[:160]}
+
+    wall = time.perf_counter() - t0
+    gen = timings.get("predicted_n") or usage.get("completion_tokens") or 0
+    return {
+        "wall_s": wall,
+        "ttft_ms": ttft_ms,
+        # llama.cpp stamps its own build into every response; two exports built
+        # by different llama.cpp versions are not comparable and this is what
+        # makes that visible.
+        "engine_build": build,
+        "prompt_tokens": timings.get("prompt_n") or usage.get("prompt_tokens") or 0,
+        "gen_tokens": gen,
+        "cached_tokens": timings.get("cache_n", 0),
+        # prefill/decode come off llama.cpp's own clock, so they exclude the HTTP
+        # and proxy overhead that e2e_tps below deliberately includes.
+        "prefill_tps": timings.get("prompt_per_second"),
+        "decode_tps": timings.get("predicted_per_second"),
+        "e2e_tps": (gen / wall) if wall > 0 else None,
+    }
+
+
+def _bench_batch(model: str, target_tokens: int, max_tokens: int, temp: float,
+                 ignore_eos: bool, timeout: float, concurrency: int,
+                 reuse_cache: bool, tag: str) -> tuple[list[dict], float]:
+    """Fire `concurrency` requests at once; return their results + batch wall."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    prompts = [
+        _bench_prompt(target_tokens,
+                      "" if reuse_cache else f"[{tag}/{i} {time.time_ns():x}] ")
+        for i in range(concurrency)
+    ]
+
+    def run(p: str) -> dict:
+        return _bench_request(model, p, max_tokens, temp, ignore_eos, timeout)
+
+    t0 = time.perf_counter()
+    if concurrency == 1:
+        results = [run(prompts[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            results = list(pool.map(run, prompts))
+    return results, time.perf_counter() - t0
+
+
+def _bench_set_params(entry: dict, params: dict) -> bool:
+    """Rewrite one model's `params`, leaving every other registry field intact."""
+    payload = {
+        "name": entry["name"],
+        "file": entry["file"],
+        "description": entry.get("description", ""),
+        "aliases": entry.get("aliases", []),
+        "params": params,
+        "modality": entry.get("modality", "text"),
+        "backend": entry.get("backend", "llama-server"),
+        "artifacts": entry.get("artifacts", {}),
+        "mem_gb": entry.get("mem_gb", 0),
+        "pinned": entry.get("pinned", False),
+    }
+    return _api("POST", "/api/models/add", payload).status_code == 200
+
+
+def _bench_reload(name: str) -> tuple[float | None, str | None]:
+    """Unload then load `name`; return (load seconds, error message).
+
+    Always unloading first is what makes a sweep honest: `load` on a running
+    model returns the existing instance, which would still be serving the
+    previous combination's parameters.
+    """
+    _api("POST", f"/api/models/{name}/unload")
+    t0 = time.perf_counter()
+    r = _api("POST", f"/api/models/{name}/load")
+    load_s = time.perf_counter() - t0
+    if r.status_code != 200:
+        try:
+            detail = r.json().get("detail", r.text)
+        except ValueError:
+            detail = r.text
+        return None, str(detail)[:160]
+    return load_s, None
+
+
+def _bench_vram(name: str) -> float | None:
+    """VRAM held by the running instance, when the GPU can be queried."""
+    r = _api("GET", "/api/ps")
+    if r.status_code != 200:
+        return None
+    for proc in r.json().get("processes", []):
+        if proc.get("name") == name:
+            return proc.get("vram_gb")
+    return None
+
+
+def _bench_fmt_value(val) -> str:
+    return "true" if val is True else "false" if val is False else str(val)
+
+
+def _bench_stat(values: list, fmt: str = "{:.1f}") -> str:
+    """Mean of the samples, with the standard deviation when there are several."""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return _color("—", F_DIM)
+    mean = statistics.fmean(vals)
+    if len(vals) < 2:
+        return fmt.format(mean)
+    return f"{fmt.format(mean)}{_color(' ±' + fmt.format(statistics.stdev(vals)), F_DIM)}"
+
+
+def _bench_int_list(flag: str, raw: str | None) -> list[int]:
+    """Parse a `--flag 512,2048` comma list of positive integers."""
+    if not raw:
+        _err(f"{flag} expects a value (e.g. {flag} 512,2048)")
+        sys.exit(1)
+    try:
+        vals = [int(v.strip()) for v in raw.split(",") if v.strip()]
+    except ValueError:
+        _err(f"{flag} expects integers, got '{raw}'")
+        sys.exit(1)
+    if not vals or any(v <= 0 for v in vals):
+        _err(f"{flag} expects positive integers, got '{raw}'")
+        sys.exit(1)
+    return vals
+
+
+_BENCH_FIELDS = [
+    "label", "gpu", "model", "params", "prompt_tokens_target", "prompt_tokens",
+    "max_tokens", "concurrency", "runs", "load_s", "vram_gib", "ttft_ms",
+    "prefill_tps", "decode_tps", "decode_tps_stdev", "throughput_tps",
+    "gen_tokens", "cached_tokens", "engine_build", "error",
+]
+
+
+def _bench_environment() -> dict:
+    """Identify the machine, so two exports can be compared honestly.
+
+    A tokens/sec number means nothing without the GPU, the driver and the
+    llama.cpp build that produced it — `bench --compare` refuses to pretend
+    otherwise, and this is what it reads.
+    """
+    import platform
+    import shutil
+    import subprocess
+
+    env: dict = {
+        "host": platform.node(),
+        "platform": platform.platform(),
+        "zallama_version": VERSION,
+        "cpu": None,
+        "gpus": [],
+        "driver": None,
+    }
+    try:
+        with open("/proc/cpuinfo") as fh:
+            for line in fh:
+                if line.startswith("model name"):
+                    env["cpu"] = line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
+                 "--format=csv,noheader,nounits"],
+                text=True, timeout=5)
+            for line in out.strip().splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) == 3:
+                    env["gpus"].append({
+                        "name": parts[0],
+                        # nvidia-smi reports MiB; VRAM is a GiB quantity and
+                        # calling it GB is how 24 GiB cards get mistaken for 24 GB.
+                        "vram_gib": round(float(parts[1]) / 1024, 1),
+                    })
+                    env["driver"] = parts[2]
+        except Exception:
+            pass
+    return env
+
+
+def _bench_gpu_name(env: dict) -> str:
+    gpus = env.get("gpus") or []
+    return gpus[0]["name"] if gpus else "CPU"
+
+
+def _bench_default_label(env: dict) -> str:
+    """A short name for this machine — the GPU is what people actually compare."""
+    if env.get("gpus"):
+        name = _bench_gpu_name(env)
+        return name.replace("NVIDIA ", "").replace("GeForce ", "").replace(" ", "-")
+    return env.get("host") or "local"
+
+
+def _bench_export(path: str, records: list[dict], label: str, env: dict) -> None:
+    """Write results to .json, .csv or .md — the extension picks the format."""
+    import csv
+
+    out = Path(path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    suffix = out.suffix.lower()
+
+    if suffix == ".json":
+        out.write_text(json.dumps(
+            {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+             "zallama_version": VERSION,
+             "label": label,
+             "environment": env,
+             "results": records},
+            indent=2))
+        return
+
+    def flat(rec: dict) -> dict:
+        row = {k: rec.get(k) for k in _BENCH_FIELDS}
+        row["params"] = " ".join(
+            f"{k}={_bench_fmt_value(v)}" for k, v in (rec.get("params") or {}).items())
+        return row
+
+    if suffix == ".csv":
+        with out.open("w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=_BENCH_FIELDS)
+            writer.writeheader()
+            for rec in records:
+                writer.writerow(flat(rec))
+        return
+
+    # Markdown (the default for any other extension) — pasteable into an issue.
+    def cell(v) -> str:
+        if v is None:
+            return ""
+        return f"{v:.1f}" if isinstance(v, float) else str(v)
+
+    lines = [
+        f"# zallama bench — {time.strftime('%Y-%m-%d %H:%M')}",
+        "",
+        "| " + " | ".join(_BENCH_FIELDS) + " |",
+        "|" + "|".join("---" for _ in _BENCH_FIELDS) + "|",
+    ]
+    lines += ["| " + " | ".join(cell(flat(r)[f]) for f in _BENCH_FIELDS) + " |"
+              for r in records]
+    out.write_text("\n".join(lines) + "\n")
+
+
+# Which direction is "better" for each comparable metric, and how to print it.
+_BENCH_METRICS = {
+    "prefill_tps": ("PREFILL t/s", "higher", "{:.0f}"),
+    "decode_tps": ("DECODE t/s", "higher", "{:.1f}"),
+    "throughput_tps": ("TOTAL t/s", "higher", "{:.1f}"),
+    "ttft_ms": ("TTFT ms", "lower", "{:.0f}"),
+    "load_s": ("LOAD s", "lower", "{:.1f}"),
+    "vram_gib": ("VRAM GiB", "lower", "{:.1f}"),
+    "gen_tokens": ("GEN tokens", "lower", "{:.0f}"),
+}
+
+
+def _bench_point_key(rec: dict) -> str:
+    """The workload identity a point must share to be comparable across runs."""
+    bits = [rec.get("model", "?")]
+    params = " ".join(f"{k}={_bench_fmt_value(v)}"
+                      for k, v in (rec.get("params") or {}).items())
+    if params:
+        bits.append(params)
+    bits.append(f"prompt {rec.get('prompt_tokens_target')}")
+    bits.append(f"gen {rec.get('max_tokens')}")
+    if (rec.get("concurrency") or 1) > 1:
+        bits.append(f"conc {rec['concurrency']}")
+    return " · ".join(bits)
+
+
+def cmd_bench_compare(paths: list[str], metrics: list[str]):
+    """Put several bench exports side by side: zallama bench --compare a.json b.json
+
+    The first file is the baseline; every other column shows its delta against
+    it. Only points with identical model, params and workload are compared —
+    anything unmatched is listed rather than silently dropped.
+    """
+    if len(paths) < 2:
+        _err("--compare needs at least two .json exports.")
+        _info("Produce them with: zallama bench <model> ... --out <machine>.json")
+        sys.exit(1)
+
+    runs: list[dict] = []
+    for path in paths:
+        file = Path(path).expanduser()
+        if not file.is_file():
+            _err(f"No such file: {path}"); sys.exit(1)
+        try:
+            data = json.loads(file.read_text())
+        except ValueError as e:
+            _err(f"{path} is not valid JSON ({e}).")
+            _info("--compare reads .json exports only; .csv/.md drop the machine info.")
+            sys.exit(1)
+        results = data.get("results")
+        if results is None:
+            _err(f"{path} has no 'results' — is it a zallama bench export?")
+            sys.exit(1)
+        env = data.get("environment", {})
+        runs.append({
+            "label": data.get("label") or file.stem,
+            "env": env,
+            "points": {_bench_point_key(r): r
+                       for r in results if r.get("decode_tps")},
+        })
+
+    print(f"\n{BOLD}{F_BLUE} Machines{RESET}")
+    _print_table(
+        ["LABEL", "GPU", "VRAM GiB", "DRIVER", "CPU", "POINTS"],
+        [[run["label"],
+          _bench_gpu_name(run["env"]),
+          (f"{run['env']['gpus'][0]['vram_gib']:.1f}"
+           if run["env"].get("gpus") else "—"),
+          run["env"].get("driver") or "—",
+          (run["env"].get("cpu") or "—")[:28],
+          str(len(run["points"]))] for run in runs])
+
+    builds = {b for run in runs for r in run["points"].values()
+              if (b := r.get("engine_build"))}
+    if len(builds) > 1:
+        _info(f"llama.cpp builds differ across these exports ({', '.join(sorted(builds))}) "
+              f"— part of any gap below may be the engine, not the hardware.")
+
+    baseline = runs[0]
+    shared = [k for k in baseline["points"]
+              if all(k in run["points"] for run in runs[1:])]
+    if not shared:
+        _err("No workload point is present in every export.")
+        _info("Points only compare when model, swept params, prompt size, "
+              "max-tokens and concurrency all match.")
+        return
+
+    for metric in metrics:
+        title, better, fmt = _BENCH_METRICS[metric]
+        if not any(run["points"][k].get(metric) is not None
+                   for k in shared for run in runs):
+            continue
+        headers = ["POINT", f"{runs[0]['label']} (base)"]
+        aligns = ["left", "right"]
+        for run in runs[1:]:
+            headers.append(run["label"]); aligns.append("right")
+
+        rows = []
+        for key in shared:
+            base_val = baseline["points"][key].get(metric)
+            row = [key, fmt.format(base_val) if base_val is not None else "—"]
+            for run in runs[1:]:
+                val = run["points"][key].get(metric)
+                if val is None or not base_val:
+                    row.append("—")
+                    continue
+                pct = (val - base_val) / base_val * 100
+                gain = pct > 0 if better == "higher" else pct < 0
+                color = F_TEAL if gain else F_RED
+                if abs(pct) < 1:
+                    color = F_GRAY
+                row.append(f"{fmt.format(val)} "
+                           f"{_color(f'({pct:+.0f}%)', color)}")
+            rows.append(row)
+
+        print(f"\n{BOLD}{F_BLUE} {title}{RESET}"
+              f"{F_DIM}  ({better} is better, % vs {runs[0]['label']}){RESET}")
+        _print_table(headers, rows, aligns)
+
+    for run in runs:
+        missing = [k for k in run["points"] if k not in shared]
+        if missing:
+            print(f"\n{F_DIM}  {run['label']}: {len(missing)} point(s) with no "
+                  f"counterpart elsewhere — not compared.{RESET}")
+    print()
+
+
+_BENCH_USAGE = f"""{BOLD}Usage:{RESET} zallama bench <model> [<model> ...] [options]
+
+Measures tokens/sec for text models, optionally sweeping llama-server
+parameters. Each combination is applied to the registry, the model is restarted
+so it takes effect, and the original parameters are restored at the end.
+
+{BOLD}Sweeps{RESET}
+  --sweep <key>=<v1>,<v2>   Sweep any registry param; repeat for a grid.
+                            e.g. ctx_size, reasoning, n_gpu_layers, threads,
+                            batch_size, ubatch_size, flash_attn, parallel,
+                            cache_type_k, cache_type_v, spec_type
+
+{BOLD}Workload{RESET}
+  -p, --prompt-tokens N[,N] Prompt sizes to send      (default 512)
+  -n, --max-tokens N        Tokens to generate        (default 128)
+  -c, --concurrency N[,N]   Simultaneous requests     (default 1)
+  -r, --runs N              Measured runs per point   (default 3)
+      --warmup N            Discarded runs per point  (default 1)
+      --temp F              Sampling temperature      (default 0.0)
+      --natural             Let the model stop on its own (default: generate
+                            exactly --max-tokens via ignore_eos)
+      --reuse-cache         Don't defeat the prompt cache — measures the warm
+                            prefill path instead of a cold one
+
+{BOLD}Selection & output{RESET}
+      --all                 Bench every registered text model
+  -o, --out FILE            Write results (.json / .csv / .md)
+      --label NAME          Name this machine in the export (default: its GPU)
+      --keep                Leave the last swept params in the registry
+      --dry-run             Print the matrix and exit
+      --timeout S           Per-request timeout       (default 600)
+
+{BOLD}Examples{RESET}
+  zallama bench Qwen3.5-4B-Q6_K
+  zallama bench Qwen3.5-4B-Q6_K --sweep ctx_size=4096,16384,65536
+  zallama bench Qwen3.5-4B-Q6_K --sweep reasoning=on,off -p 512,8192
+  zallama bench Qwen3.5-4B-Q6_K --sweep n_gpu_layers=0,20,99 -o bench.md
+  zallama bench --all -c 1,4 --runs 5 -o results.json
+
+{BOLD}Comparing machines{RESET}
+  zallama bench --compare a.json b.json [...] [--metric decode_tps,ttft_ms]
+
+  Run the same command on each machine, exporting to .json, then compare. Only
+  points with identical model, params and workload are put side by side; the
+  first file is the baseline. Metrics: {", ".join(_BENCH_METRICS)}.
+
+  # on each box
+  zallama bench my-model --sweep ctx_size=32768 --sweep reasoning=on,off \\
+      -p 32000 -n 256 --out $(hostname).json
+  zallama bench --compare rtx4090.json rtx3090.json
+"""
+
+
+def cmd_bench(args: list[str]):
+    """Benchmark tokens/sec across parameter sweeps: zallama bench <model> ..."""
+    if not args or args[0] in ("-h", "--help"):
+        print(_BENCH_USAGE)
+        sys.exit(0 if args else 1)
+
+    models: list[str] = []
+    sweeps: list[tuple[str, list]] = []
+    prompt_sizes = [512]
+    concurrencies = [1]
+    max_tokens, runs, warmup = 128, 3, 1
+    temp, timeout = 0.0, 600.0
+    out_path: str | None = None
+    label: str | None = None
+    metrics = ["prefill_tps", "decode_tps", "ttft_ms"]
+    compare = False
+    keep = natural = reuse_cache = dry_run = bench_all = False
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        val = args[i + 1] if i + 1 < len(args) else None
+        if arg in ("--sweep", "-s"):
+            if not val or "=" not in val:
+                _err("--sweep expects <param>=<v1>,<v2>[,...]")
+                sys.exit(1)
+            key, raw = val.split("=", 1)
+            values = [_parse_param_value(v.strip()) for v in raw.split(",") if v.strip()]
+            if not values:
+                _err(f"--sweep {key} has no values")
+                sys.exit(1)
+            sweeps.append((key.strip(), values))
+            i += 2
+        elif arg in ("--prompt-tokens", "-p"):
+            prompt_sizes = _bench_int_list(arg, val); i += 2
+        elif arg in ("--concurrency", "-c"):
+            concurrencies = _bench_int_list(arg, val); i += 2
+        elif arg in ("--max-tokens", "-n"):
+            max_tokens = _bench_int_list(arg, val)[0]; i += 2
+        elif arg in ("--runs", "-r"):
+            runs = _bench_int_list(arg, val)[0]; i += 2
+        elif arg == "--warmup":
+            if val is None:
+                _err("--warmup expects a value"); sys.exit(1)
+            warmup = max(0, int(val)); i += 2
+        elif arg == "--temp":
+            if val is None:
+                _err("--temp expects a value"); sys.exit(1)
+            temp = float(val); i += 2
+        elif arg == "--timeout":
+            if val is None:
+                _err("--timeout expects a value"); sys.exit(1)
+            timeout = float(val); i += 2
+        elif arg in ("--out", "-o"):
+            if val is None:
+                _err("--out expects a file path"); sys.exit(1)
+            out_path = val; i += 2
+        elif arg == "--label":
+            if val is None:
+                _err("--label expects a name"); sys.exit(1)
+            label = val; i += 2
+        elif arg == "--metric":
+            if val is None:
+                _err("--metric expects a name"); sys.exit(1)
+            metrics = [m.strip() for m in val.split(",") if m.strip()]
+            unknown = [m for m in metrics if m not in _BENCH_METRICS]
+            if unknown:
+                _err(f"Unknown metric(s): {', '.join(unknown)}")
+                _info(f"Available: {', '.join(_BENCH_METRICS)}")
+                sys.exit(1)
+            i += 2
+        elif arg == "--compare":
+            compare = True; i += 1
+        elif arg == "--natural":
+            natural = True; i += 1
+        elif arg == "--reuse-cache":
+            reuse_cache = True; i += 1
+        elif arg == "--keep":
+            keep = True; i += 1
+        elif arg == "--dry-run":
+            dry_run = True; i += 1
+        elif arg == "--all":
+            bench_all = True; i += 1
+        elif arg.startswith("-"):
+            _err(f"Unknown option: {arg}")
+            _info("Run 'zallama bench --help' for usage.")
+            sys.exit(1)
+        else:
+            models.append(arg); i += 1
+
+    if compare:
+        # Reading exports needs no daemon, no model and no registry writes.
+        cmd_bench_compare(models, metrics)
+        return
+
+    if not models and not bench_all:
+        _err("Name at least one model, or pass --all.")
+        sys.exit(1)
+
+    r = _api("GET", "/api/models")
+    if r.status_code != 200:
+        _err(f"Failed to fetch models: {r.text}")
+        sys.exit(1)
+    catalog = r.json().get("models", [])
+
+    targets: list[dict] = []
+    if bench_all:
+        targets = [m for m in catalog
+                   if m.get("modality", "text") == "text" and m.get("file_ok")]
+        if not targets:
+            _err("No registered text models with a readable file.")
+            sys.exit(1)
+    for name in models:
+        entry = next((m for m in catalog
+                      if m["name"] == name or name in m.get("aliases", [])), None)
+        if not entry:
+            _err(f"Model '{name}' not found in registry.")
+            sys.exit(1)
+        if entry.get("modality", "text") != "text":
+            _err(f"'{name}' has modality '{entry.get('modality')}'; bench measures "
+                 f"text generation only.")
+            sys.exit(1)
+        if not entry.get("file_ok"):
+            _err(f"Model file is missing: {entry.get('file')}")
+            sys.exit(1)
+        if not any(t["name"] == entry["name"] for t in targets):
+            targets.append(entry)
+
+    sweep_keys = [k for k, _ in sweeps]
+    combos = list(product(*[v for _, v in sweeps])) if sweeps else [()]
+    workloads = list(product(prompt_sizes, concurrencies))
+    total_points = len(targets) * len(combos) * len(workloads)
+    total_reqs = total_points * (runs + warmup) * max(concurrencies)
+
+    env = _bench_environment()
+    label = label or _bench_default_label(env)
+    print(f"\n{BOLD}{F_BLUE} Benchmark plan{RESET}")
+    plan = [
+        ["Machine", f"{label}  ({_bench_gpu_name(env)})"],
+        ["Models", ", ".join(t["name"] for t in targets)],
+        ["Restarts (param combos)", f"{len(targets) * len(combos)}"],
+        ["Measured points", f"{total_points}"],
+        ["Requests (incl. warmup)", f"~{total_reqs}"],
+        ["Prompt sizes", ", ".join(str(p) for p in prompt_sizes)],
+        ["Generate", f"{max_tokens} tokens"
+                     f"{' (natural stop)' if natural else ' (fixed, ignore_eos)'}"],
+        ["Concurrency", ", ".join(str(c) for c in concurrencies)],
+        ["Runs / warmup", f"{runs} / {warmup}"],
+        ["Prompt cache", "reused" if reuse_cache else "defeated (cold prefill)"],
+    ]
+    for key, values in sweeps:
+        plan.append([f"Sweep {key}", ", ".join(_bench_fmt_value(v) for v in values)])
+    _print_table(["FIELD", "VALUE"], plan)
+
+    if dry_run:
+        print(f"\n{F_DIM}  Dry run — nothing was changed or measured.{RESET}\n")
+        return
+
+    if sweeps and not keep:
+        print(f"\n{F_DIM}  Registry params are restored when the run ends "
+              f"(including on Ctrl-C).{RESET}")
+    print()
+
+    records: list[dict] = []
+    originals: dict[str, tuple[dict, dict]] = {}   # name -> (entry, params)
+    ignore_eos = not natural
+
+    try:
+        for entry in targets:
+            name = entry["name"]
+            base_params = dict(entry.get("params", {}))
+            originals[name] = (entry, base_params)
+
+            for combo in combos:
+                overrides = dict(zip(sweep_keys, combo))
+                combo_label = " ".join(f"{k}={_bench_fmt_value(v)}"
+                                       for k, v in overrides.items())
+
+                if overrides:
+                    params = dict(base_params)
+                    for key, val in overrides.items():
+                        if val is None:
+                            params.pop(key, None)
+                        else:
+                            params[key] = val
+                    if not _bench_set_params(entry, params):
+                        _err(f"Could not apply {combo_label} to '{name}' — skipped.")
+                        continue
+
+                head = (f"{name}"
+                        f"{('  ' + _color(combo_label, F_PURPLE)) if combo_label else ''}")
+                print(f"  {_color('▸', F_BLUE)} {head}")
+                print(f"    {_color('loading…', F_DIM)}", end="", flush=True)
+                load_s, load_err = _bench_reload(name)
+                if load_err:
+                    print(f"\r    {_color('✗ ' + load_err, RED)}{' ' * 12}")
+                    records.append({
+                        "model": name, "params": overrides, "error": load_err,
+                        "max_tokens": max_tokens, "runs": runs,
+                    })
+                    continue
+                vram = _bench_vram(name)
+                print(f"\r    {_color(f'loaded in {load_s:.1f}s', F_DIM)}"
+                      f"{_color(f' · {vram:.1f} GiB VRAM', F_DIM) if vram else ''}"
+                      f"{' ' * 12}")
+
+                for ptokens, conc in workloads:
+                    print(f"    {_color(f'prompt {ptokens} · conc {conc} …', F_DIM)}",
+                          end="", flush=True)
+                    for w in range(warmup):
+                        _bench_batch(name, ptokens, max_tokens, temp, ignore_eos,
+                                     timeout, conc, reuse_cache, f"warm{w}")
+
+                    samples: list[dict] = []
+                    batch_tps: list[float] = []
+                    errors: list[str] = []
+                    for run_idx in range(runs):
+                        results, batch_wall = _bench_batch(
+                            name, ptokens, max_tokens, temp, ignore_eos, timeout,
+                            conc, reuse_cache, f"run{run_idx}")
+                        ok = [x for x in results if "error" not in x]
+                        errors += [x["error"] for x in results if "error" in x]
+                        samples += ok
+                        if ok and batch_wall > 0:
+                            batch_tps.append(sum(x["gen_tokens"] for x in ok) / batch_wall)
+
+                    if not samples:
+                        msg = errors[0] if errors else "no successful runs"
+                        print(f"\r    {_color('✗ ' + msg, RED)}{' ' * 20}")
+                        records.append({
+                            "model": name, "params": overrides, "error": msg,
+                            "prompt_tokens_target": ptokens, "concurrency": conc,
+                            "max_tokens": max_tokens, "runs": runs,
+                            "load_s": round(load_s, 2), "vram_gib": vram,
+                        })
+                        continue
+
+                    decodes = [s["decode_tps"] for s in samples if s["decode_tps"]]
+                    record = {
+                        "model": name,
+                        "params": overrides,
+                        "prompt_tokens_target": ptokens,
+                        "prompt_tokens": samples[0]["prompt_tokens"],
+                        "max_tokens": max_tokens,
+                        "concurrency": conc,
+                        "runs": runs,
+                        "load_s": round(load_s, 2),
+                        "vram_gib": round(vram, 2) if vram else None,
+                        "ttft_ms": _bench_mean([s["ttft_ms"] for s in samples]),
+                        "prefill_tps": _bench_mean([s["prefill_tps"] for s in samples]),
+                        "decode_tps": _bench_mean(decodes),
+                        "decode_tps_stdev": (round(statistics.stdev(decodes), 2)
+                                             if len(decodes) > 1 else None),
+                        "throughput_tps": _bench_mean(batch_tps),
+                        "gen_tokens": samples[0]["gen_tokens"],
+                        # Max, not first: a cache hit on any run is what explains
+                        # a prefill rate that looks impossibly good.
+                        "cached_tokens": max(s["cached_tokens"] for s in samples),
+                        "engine_build": samples[0].get("engine_build"),
+                        "error": "; ".join(dict.fromkeys(errors))[:160] or None,
+                        # Kept out of the export schema: only the terminal table
+                        # shows spread, and it needs the raw samples for that.
+                        "_samples": samples,
+                        "_batch_tps": batch_tps,
+                    }
+                    records.append(record)
+                    decode = record["decode_tps"] or 0.0
+                    print(f"\r    {_color(f'prompt {ptokens} · conc {conc}', F_DIM)}"
+                          f"  {_color(f'{decode:.1f} tok/s', F_TEAL)}"
+                          f"{_color(' decode', F_DIM)}{' ' * 12}")
+                print()
+    except KeyboardInterrupt:
+        print(f"\n{_color('  Interrupted — restoring registry params…', YELLOW)}")
+    finally:
+        if keep:
+            _info("--keep: the last swept params were left in the registry.")
+        else:
+            for name, (entry, params) in originals.items():
+                _bench_set_params(entry, params)
+                # The instance still runs with bench params; drop it so the next
+                # load picks up what was just restored.
+                _api("POST", f"/api/models/{name}/unload")
+
+    measured = [r for r in records if r.get("decode_tps")]
+    if not measured:
+        _err("No successful measurements.")
+        return
+
+    _bench_report(measured, sweep_keys)
+
+    if out_path:
+        gpu = _bench_gpu_name(env)
+        for rec in records:
+            rec.pop("_samples", None)
+            rec.pop("_batch_tps", None)
+            rec["label"] = label
+            rec["gpu"] = gpu
+        _bench_export(out_path, records, label, env)
+        _ok(f"Results written to {out_path}")
+
+
+def _bench_mean(values: list) -> float | None:
+    vals = [v for v in values if v is not None]
+    return round(statistics.fmean(vals), 2) if vals else None
+
+
+def _bench_report(records: list[dict], sweep_keys: list[str]):
+    """Print the results table plus the fastest combination per model."""
+    multi_model = len({r["model"] for r in records}) > 1
+    has_vram = any(r.get("vram_gib") for r in records)
+    show_conc = any(r["concurrency"] > 1 for r in records)
+
+    headers, aligns = [], []
+    if multi_model:
+        headers.append("MODEL"); aligns.append("left")
+    if sweep_keys:
+        headers.append("PARAMS"); aligns.append("left")
+    headers += ["PROMPT", "GEN"]; aligns += ["right", "right"]
+    if show_conc:
+        headers.append("CONC"); aligns.append("right")
+    headers += ["LOAD s"]; aligns += ["right"]
+    if has_vram:
+        headers.append("VRAM GiB"); aligns.append("right")
+    headers += ["TTFT ms", "PREFILL t/s", "DECODE t/s"]
+    aligns += ["right", "right", "right"]
+    if show_conc:
+        headers.append("TOTAL t/s"); aligns.append("right")
+
+    rows = []
+    for rec in records:
+        row = []
+        if multi_model:
+            row.append(rec["model"])
+        if sweep_keys:
+            row.append(_color(" ".join(f"{k}={_bench_fmt_value(v)}"
+                                       for k, v in rec["params"].items()), F_PURPLE))
+        row += [str(rec["prompt_tokens"]), str(rec["gen_tokens"])]
+        if show_conc:
+            row.append(str(rec["concurrency"]))
+        row.append(f"{rec['load_s']:.1f}")
+        if has_vram:
+            row.append(f"{rec['vram_gib']:.1f}" if rec.get("vram_gib") else "—")
+        row += [
+            _bench_stat([s["ttft_ms"] for s in rec["_samples"]], "{:.0f}"),
+            _bench_stat([s["prefill_tps"] for s in rec["_samples"]], "{:.0f}"),
+            _color(_bench_stat([s["decode_tps"] for s in rec["_samples"]]), F_TEAL),
+        ]
+        if show_conc:
+            row.append(_bench_stat(rec["_batch_tps"]))
+        rows.append(row)
+
+    print(f"\n{BOLD}{F_BLUE} Results{RESET}"
+          f"{F_DIM}  (mean ± stdev across runs){RESET}")
+    _print_table(headers, rows, aligns)
+    notes = ["PREFILL = prompt processing, DECODE = generation — both off "
+             "llama.cpp's own clock.",
+             "TTFT is measured at this client, so it includes queueing and "
+             "proxy overhead."]
+    if any(r.get("cached_tokens") for r in records):
+        notes.append("Some prompts hit llama-server's KV cache, so PREFILL there "
+                     "measures cached reuse, not real prompt processing.")
+    if show_conc:
+        notes.append("TOTAL = every request's tokens over the batch's wall time "
+                     "(prefill included).")
+        notes.append("Concurrency above the model's `parallel` slots just "
+                     "queues — sweep parallel to raise it.")
+    print("\n" + "\n".join(f"{F_DIM}  {n}{RESET}" for n in notes))
+
+    for model in dict.fromkeys(r["model"] for r in records):
+        mine = [r for r in records if r["model"] == model]
+        best = max(mine, key=lambda r: r["decode_tps"])
+        if len(mine) < 2:
+            continue
+        label = " ".join(f"{k}={_bench_fmt_value(v)}" for k, v in best["params"].items())
+        detail = f"{label}, " if label else ""
+        where = detail + f"prompt {best['prompt_tokens']}"
+        rate = f"{best['decode_tps']:.1f} tok/s"
+        print(f"  {_color('★', F_ORANGE)} {BOLD}{model}{RESET} fastest at "
+              f"{_color(where, F_PURPLE)} → {_color(rate, F_TEAL)} decode")
+    print()
 
 
 def cmd_show(args: list[str]):
@@ -1965,7 +2875,7 @@ def _fmt_duration(secs: int) -> str:
 # Commands whose first positional argument is a registered model name. Used by
 # the completer to offer model names at the right position.
 _MODEL_ARG_COMMANDS = {
-    "set", "show", "calibrate", "remove", "rm", "run", "load", "unload",
+    "set", "show", "calibrate", "bench", "remove", "rm", "run", "load", "unload",
     "stop", "reload", "logs", "pull", "generate", "gen",
 }
 
@@ -2043,6 +2953,7 @@ COMMANDS = {
     "set": cmd_set,
     "show": cmd_show,
     "calibrate": cmd_calibrate,
+    "bench": cmd_bench,
     "config": cmd_config,
     "apikey": cmd_apikey,
     "remove": cmd_remove,
@@ -2090,6 +3001,7 @@ def main():
             ("set <name> <k>=<v> ...", "Configure parameters for a registered model"),
             ("show <name>", "Show a model's full configuration"),
             ("calibrate <name>", "Recommend max ctx_size + mem_gb from your VRAM (dry-run)"),
+            ("bench <name>", "Measure tokens/sec, sweeping params like ctx_size"),
             ("config", "Show effective config + every available setting"),
             ("search <query>", "Search HuggingFace GGUF models"),
             ("pull <name>", "Pull a model from HF/unsloth"),

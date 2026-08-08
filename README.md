@@ -40,6 +40,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Using Models You Already Have](#-using-models-you-already-have)
 - [CLI Reference](#️-cli-reference)
 - [Configuration](#️-configuration)
+- [Benchmarking](#-benchmarking-zallama-bench)
 - [Memory-Aware Eviction](#-memory-aware-eviction)
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
@@ -314,6 +315,9 @@ ps                     Show running model processes
 load <name>            Pre-load a model (start llama-server)
 unload <name>          Stop a running model (alias: stop)
 reload <name>          Restart a running model to apply registry param changes
+calibrate <name>       Recommend max ctx_size + mem_gb from your VRAM (dry-run)
+bench <name>           Measure tokens/sec, sweeping params like ctx_size
+                       --sweep k=v1,v2 --prompt-tokens N --concurrency N --out f
 logs <name>            Tail logs for a model
 health                 Show daemon health status
 version                Show version info
@@ -472,6 +476,113 @@ Each entry may declare:
 - **`backend`** — which engine runs the model (default `llama-server`). New backends resolve their own binary from `./bin/<name>`, `~/.zallama/bin/<name>`, or `PATH`.
 - **`artifacts`** — extra files beyond the primary GGUF (e.g. `mmproj` for vision, and — for future backends — vocoders, etc.). Paths are absolute or relative to `models_dir`.
 - **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size.
+
+---
+
+## 📊 Benchmarking (`zallama bench`)
+
+`zallama calibrate` tells you what *fits*. `zallama bench` tells you what it *costs* — in tokens/sec, VRAM, and latency — for any combination of parameters you care to compare.
+
+```bash
+zallama bench qwen3.5-4b-q4_k_m
+```
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│ PROMPT │ GEN │ LOAD s │ VRAM GB │ TTFT ms │ PREFILL t/s │ DECODE t/s  │
+├────────┼─────┼────────┼─────────┼─────────┼─────────────┼─────────────┤
+│    469 │ 128 │    1.5 │     4.8 │  118 ±2 │    8925 ±20 │  179.8 ±0.2 │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+Three numbers, three different questions:
+
+| | |
+|---|---|
+| **PREFILL t/s** | How fast it *reads*. Dominates long-prompt / RAG workloads. Tuned by `batch_size`, `ubatch_size`, `n_gpu_layers`. |
+| **DECODE t/s** | How fast it *writes*. The number people mean by "tokens/sec". Tuned by quantization, `n_gpu_layers`, `flash_attn`. |
+| **TTFT ms** | How fast it *answers*. What an interactive user actually feels. |
+
+`LOAD s` and `VRAM GB` come along for free — which is how you find out that doubling `ctx_size` cost you 400 MB of VRAM and bought nothing.
+
+### Sweeping parameters
+
+`--sweep <param>=<v1>,<v2>` is repeatable and builds a full grid. Each combination is written to the registry, the model is **restarted** so llama-server actually launches with it, and your original parameters are **restored when the run ends** — including on Ctrl-C.
+
+```bash
+# Does a bigger context slow generation down? What does it cost in VRAM?
+zallama bench qwen3.5-4b-q4_k_m --sweep ctx_size=4096,16384,65536
+
+# What does thinking cost, at short and long prompts?
+zallama bench qwen3.5-4b-q4_k_m --sweep reasoning=on,off -p 512,8192
+
+# Find the offload cliff on a small GPU
+zallama bench qwen3.5-9b-q4_k_m --sweep n_gpu_layers=0,20,40,99
+
+# Quantized KV cache: how much ctx does the VRAM buy back?
+zallama bench qwen3.5-4b-q4_k_m --sweep cache_type_k=f16,q8_0,q4_0
+
+# Compare models head to head, and keep the numbers
+zallama bench --all --runs 5 --out bench.md
+```
+
+Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`.
+
+### Options
+
+| Flag | Default | |
+|---|---|---|
+| `-p, --prompt-tokens N[,N]` | `512` | Prompt sizes to send |
+| `-n, --max-tokens N` | `128` | Tokens to generate per request |
+| `-c, --concurrency N[,N]` | `1` | Simultaneous requests — adds a **TOTAL t/s** throughput column |
+| `-r, --runs N` | `3` | Measured runs per point (reported as mean ± stdev) |
+| `--warmup N` | `1` | Discarded runs per point |
+| `--natural` | off | Let the model stop on its own; by default `ignore_eos` pins every run to exactly `--max-tokens` so rates compare identical work |
+| `--reuse-cache` | off | Measure the *warm* prefill path; by default each prompt is uniquely prefixed so llama-server can't reuse its KV cache |
+| `--all` | | Bench every registered text model |
+| `-o, --out FILE` | | Write `.json`, `.csv` or `.md` — format from the extension |
+| `--label NAME` | GPU name | Names this machine in the export |
+| `--keep` | off | Leave the last swept params in the registry |
+| `--dry-run` | | Print the matrix and exit |
+
+### Comparing two machines
+
+A tokens/sec number means nothing without the GPU, driver and llama.cpp build behind it, so every `.json` export carries them. Run the same command on each box, then compare:
+
+```bash
+# on each machine — identical workload, one file each
+zallama bench Qwen3.6-35B-A3B-UD-Q4_K_M \
+  --sweep ctx_size=32768 --sweep reasoning=on,off \
+  -p 32000 -n 256 --runs 3 --out $(hostname).json
+
+zallama bench --compare rtx4090.json rtx3090.json
+```
+
+```
+ Machines
+│ LABEL   │ GPU                     │ VRAM GiB │ DRIVER     │ CPU                │ POINTS │
+│ rtx4090 │ NVIDIA GeForce RTX 4090 │ 24.0     │ 570.172.08 │ Core(TM) i9-14900K │ 2      │
+│ rtx3090 │ NVIDIA GeForce RTX 3090 │ 24.0     │ 570.172.08 │ Core(TM) i9-14900K │ 2      │
+
+ DECODE t/s  (higher is better, % vs rtx4090)
+│ POINT                                     │ rtx4090 (base) │ rtx3090      │
+│ …· reasoning=on · prompt 32000 · gen 256  │          182.2 │ 113.0 (-38%) │
+│ …· reasoning=off · prompt 32000 · gen 256 │          181.6 │ 112.6 (-38%) │
+```
+
+The first file is the baseline; every other column shows its delta. **Only points with identical model, swept params, prompt size, max-tokens and concurrency are put side by side** — anything unmatched is reported, never silently averaged in. If the exports came from different llama.cpp builds, you get a warning, because part of the gap is then the engine rather than the hardware.
+
+`--metric` picks which tables to print: `prefill_tps`, `decode_tps`, `throughput_tps`, `ttft_ms`, `load_s`, `vram_gib`, `gen_tokens` (default: the first two plus `ttft_ms`).
+
+> Comparing two GPUs **in the same box** needs the daemon pinned to one of them: set `CUDA_VISIBLE_DEVICES=0` in the service environment, restart, bench, then repeat with `=1`.
+
+> **On `reasoning=on/off`:** it will not move decode tok/s — the chat template changes, the arithmetic doesn't. What it changes is *how many tokens* the model emits before answering. To measure that cost, add `--natural` and compare the `gen_tokens` metric; with the default fixed-length generation both rows are identical by construction.
+
+### Reading the results
+
+- **PREFILL / DECODE come off llama.cpp's own clock** (its `timings` block), so they measure the engine, not your network. **TTFT and TOTAL are measured at the client** and include queueing and proxy overhead — which is what you want when the question is "how does this feel".
+- A combination that **fails to load** (a `ctx_size` that won't fit, say) is reported inline and skipped; the sweep carries on and the failure is recorded in the export with its error.
+- `--concurrency` above the model's `parallel` slots just queues. Sweep them together — `--sweep parallel=1,4 -c 4` — to see what batching actually buys.
 
 ---
 

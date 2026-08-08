@@ -82,6 +82,7 @@ class AddModelRequest(BaseModel):
     backend: str = "llama-server"
     artifacts: dict = {}        # e.g. {"mmproj": "/path/to/clip.gguf"} for vision
     mem_gb: float = 0           # declared memory cost; 0 = infer/fallback
+    pinned: bool = False        # keep loaded (prewarmed, never idle-evicted)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ async def list_models(registry=Depends(get_registry), pm=Depends(get_pm)):
             "backend": m.get("backend", "llama-server"),
             "artifacts": m.get("artifacts", {}),
             "mem_gb": m.get("mem_gb", 0),
+            "pinned": bool(m.get("pinned", False)),
             "running": name in running_map,
             "port": running_map.get(name, {}).get("port"),
         })
@@ -145,6 +147,7 @@ async def add_model(req: AddModelRequest, registry=Depends(get_registry)):
         artifacts=req.artifacts or None,
         aliases=req.aliases or None,
         mem_gb=req.mem_gb or None,
+        pinned=req.pinned,
     )
     return {"status": "added", "model": entry}
 

@@ -147,6 +147,13 @@ class LlamaServerBackend:
         "n_gpu_layers": "--n-gpu-layers",
         "threads": "--threads",
         "parallel": "--parallel",
+        # Batch sizes dominate prefill throughput; KV cache types trade quality
+        # for the VRAM that decides how large a ctx_size fits. Both are the
+        # knobs `zallama bench --sweep` is most often pointed at.
+        "batch_size": "--batch-size",
+        "ubatch_size": "--ubatch-size",
+        "cache_type_k": "--cache-type-k",
+        "cache_type_v": "--cache-type-v",
         # MTP / speculative decoding. Requires an MTP GGUF variant whose draft
         # head is baked in (e.g. unsloth *-MTP-GGUF). spec_type "draft-mtp"
         # activates it; spec_draft_n_max tunes lookahead (2 is a good start).
