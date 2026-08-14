@@ -80,7 +80,14 @@ class ModelRegistry:
         self._mtime = mtime
 
     def list_models(self) -> list[dict]:
-        """Return deduplicated list of model entries."""
+        """Return deduplicated list of model entries.
+
+        Reloads first, exactly like get(): without it a hand-edited
+        registry.yaml stays invisible to `zallama list/show/ps` (which read
+        /api/models) until some inference request happens to call get(), which
+        makes a manual edit look like it didn't take.
+        """
+        self.reload()  # cheap: mtime-gated, only re-parses on change
         seen = set()
         result = []
         for entry in self._models.values():

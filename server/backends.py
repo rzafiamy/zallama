@@ -159,6 +159,17 @@ class LlamaServerBackend:
         # activates it; spec_draft_n_max tunes lookahead (2 is a good start).
         "spec_type": "--spec-type",
         "spec_draft_n_max": "--spec-draft-n-max",
+        # Reasoning effort handed to the chat template. Thinking models that
+        # default to a high effort (Qwen3.8 templates start at "xhigh") spend
+        # most of their wall-clock inside <think>, so dropping this to "medium"
+        # or "low" saves more real time than any decoding knob. Values the
+        # template understands, typically: minimal|low|medium|high|xhigh|max.
+        "reasoning_effort": "--reasoning-effort",
+        # Vision: floor on the number of tokens an image is encoded into.
+        # llama.cpp warns that Qwen-VL models need >= 1024 for grounding tasks
+        # to stay accurate; raising it costs prefill, not VRAM.
+        "image_min_tokens": "--image-min-tokens",
+        "image_max_tokens": "--image-max-tokens",
         # MoE expert offload: keep the expert weights of the first N layers in
         # system RAM instead of VRAM, leaving attention and the KV cache on the
         # GPU. This is the finest-grained VRAM knob for MoE models — it buys

@@ -43,6 +43,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Benchmarking](#-benchmarking-zallama-bench)
 - [Memory-Aware Eviction](#-memory-aware-eviction)
 - [Fitting Your Models on One GPU](docs/vram-planning.md)
+- [Doubling Decode Speed with MTP](docs/mtp-speculative-decoding.md)
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
 - [Text-to-Speech (TTS)](#-text-to-speech-tts)
@@ -486,6 +487,8 @@ Each entry may declare:
 
 Useful `params` for making a model fit on a busy GPU — `cache_type_k`/`cache_type_v` (quantize the KV cache), `ctx_size`, `n_cpu_moe` (keep the expert weights of the first N layers in system RAM, MoE models only) and `n_gpu_layers` — are covered with measured trade-offs in [Fitting Your Models on One GPU](docs/vram-planning.md#making-a-model-fit).
 
+If your GGUF carries a baked-in MTP head — llama.cpp logs its tensors as `unused tensor blk.N.nextn.* -- ignoring` until you switch it on — `spec_type: draft-mtp` roughly doubles decode speed for about 1 GiB of VRAM. See [Doubling Decode Speed with MTP](docs/mtp-speculative-decoding.md).
+
 ---
 
 ## 📊 Benchmarking (`zallama bench`)
@@ -535,7 +538,7 @@ zallama bench qwen3.5-4b-q4_k_m --sweep cache_type_k=f16,q8_0,q4_0
 zallama bench --all --runs 5 --out bench.md
 ```
 
-Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`.
+Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `reasoning_effort`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`, `image_min_tokens`, `image_max_tokens`.
 
 ### Options
 
@@ -604,6 +607,8 @@ Each model's cost is taken from its declared `mem_gb`; if undeclared, it's estim
 ```bash
 zallama set qwen3.5-4b-q4_k_m mem_gb=4
 ```
+
+For a starting number without loading anything, `zallama calibrate <model>` reads the GGUF's own dimensions — counting only the layers that actually hold a KV cache, which on hybrid and sliding-window architectures is a fraction of the block count — and reports the largest `ctx_size` that still fits alongside the weights, the artifacts and a compute reserve. It writes nothing; it prints the `zallama set` line.
 
 > **Measure it, don't guess it.** The `size × 1.2` fallback ignores the KV cache, the artifacts (`mmproj`, and the text encoders of image models) and the compute buffers. Real-world errors exceed 100% in **both** directions — a 4B model at a long context measured 12.9 GB against an estimate of 4.2 GB. A budget built on those estimates evicts models that would have fit *and* admits models that then OOM, so measure before enabling `mem_budget_gb`:
 >

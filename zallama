@@ -95,7 +95,7 @@ def _default_zallama_host() -> str:
 
 ZALLAMA_HOST = _default_zallama_host()
 _VERSION_FILE = Path(__file__).resolve().parent / "version.txt"
-VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.is_file() else "1.6.0"
+VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.is_file() else "1.7.0"
 
 # Project / developer metadata (shown by `zallama version`).
 DESCRIPTION = "OpenAI-compatible local LLM server powered by llama.cpp"
@@ -573,7 +573,10 @@ def cmd_set(args: list[str]):
         _info("  zallama set llama3.2:1b n_gpu_layers=99")
         _info("  zallama set my-reranker modality=rerank    # backend auto-selected")
         _info("  zallama set my-embed modality=embedding    # serve /v1/embeddings")
-        _info("Special keys: modality (text|embedding|rerank|asr|tts|image), backend.")
+        _info("  zallama set qwen3.5-4b-q4_k_m mem_gb=13.2 pinned=true")
+        _info("Special keys (entry-level, not llama-server params): modality "
+              "(text|embedding|rerank|asr|tts|image), backend, mem_gb, pinned, "
+              "description.")
         sys.exit(1)
 
     model_name = args[0]
@@ -603,6 +606,16 @@ def cmd_set(args: list[str]):
     modality = model_entry.get("modality", "text")
     backend = model_entry.get("backend", "llama-server")
     backend_explicit = False
+    # Entry-level fields that sit beside `params`, not inside it. They have to
+    # be pulled out of the kv loop the same way: the memory budget reads
+    # entry["mem_gb"] and the lifecycle reads entry["pinned"], so a value left
+    # in params is silently ignored — and `zallama calibrate` ends by telling
+    # you to run `zallama set <model> mem_gb=...`.
+    entry_fields = {
+        "mem_gb": model_entry.get("mem_gb", 0),
+        "pinned": model_entry.get("pinned", False),
+        "description": model_entry.get("description", ""),
+    }
 
     for kv in kv_args:
         if "=" not in kv:
@@ -622,7 +635,13 @@ def cmd_set(args: list[str]):
 
         parsed_val = _parse_param_value(val)
 
-        if parsed_val is None:
+        if key in entry_fields:
+            entry_fields[key] = (
+                type(entry_fields[key])() if parsed_val is None else parsed_val)
+            # Heal entries written by older versions, which stashed these in
+            # params where nothing ever read them.
+            params.pop(key, None)
+        elif parsed_val is None:
             params.pop(key, None)
         else:
             params[key] = parsed_val
@@ -640,7 +659,7 @@ def cmd_set(args: list[str]):
     payload = {
         "name": model_entry["name"],
         "file": model_entry["file"],
-        "description": model_entry["description"],
+        "description": entry_fields["description"],
         "aliases": model_entry["aliases"],
         "params": params,
         # Preserve / update modality & backend (+ extra artifacts like a vision
@@ -648,14 +667,18 @@ def cmd_set(args: list[str]):
         "modality": modality,
         "backend": backend,
         "artifacts": model_entry.get("artifacts", {}),
-        "mem_gb": model_entry.get("mem_gb", 0),
-        "pinned": model_entry.get("pinned", False),
+        "mem_gb": entry_fields["mem_gb"],
+        "pinned": entry_fields["pinned"],
     }
 
     r = _api("POST", "/api/models/add", payload)
     if r.status_code == 200:
+        extra = "".join(
+            f" {k}={entry_fields[k]}" for k in ("mem_gb", "pinned")
+            if entry_fields[k] != model_entry.get(
+                k, 0 if k == "mem_gb" else False))
         _ok(f"Updated '{model_entry['name']}' "
-            f"(modality={modality}, backend={backend}) params={params}")
+            f"(modality={modality}, backend={backend}) params={params}{extra}")
     else:
         _err(f"Failed to update model: {r.json().get('detail', r.text)}")
 
@@ -681,9 +704,10 @@ def _read_gguf_metadata(path: Path) -> dict:
     """Parse the key/value metadata from a GGUF file header.
 
     Reads only the header (not the tensor data), so it is fast even on
-    multi-GB files. Returns a flat {key: value} dict for the scalar string/int
-    keys we need to size a KV-cache (block_count, attention.head_count[_kv],
-    embedding_length, context_length). Supports GGUF v2/v3.
+    multi-GB files. Returns a flat {key: value} dict of the scalars we need to
+    size a KV-cache (block_count, attention.head_count[_kv], key/value_length,
+    embedding_length, context_length) plus any short numeric array such as
+    attention.sliding_window_pattern. Supports GGUF v2/v3.
     """
     import struct
 
@@ -725,6 +749,20 @@ def _read_gguf_metadata(path: Path) -> dict:
             else:
                 read_scalar(tid)
 
+        def read_array():
+            # Keep short numeric/bool arrays — gemma's per-layer
+            # `attention.sliding_window_pattern` is one, and which layers slide
+            # decides the KV cache size. Skip the rest: the tokenizer's token
+            # and merge lists run to hundreds of thousands of entries and are
+            # useless here.
+            elem_tid = struct.unpack("<I", f.read(4))[0]
+            count = struct.unpack("<Q", f.read(8))[0]
+            if elem_tid == STRING or elem_tid == ARRAY or count > 1024:
+                for _ in range(count):
+                    skip_value(elem_tid)
+                return None
+            return [read_scalar(elem_tid) for _ in range(count)]
+
         meta: dict = {}
         for _ in range(kv_count):
             key = read_str()
@@ -732,7 +770,9 @@ def _read_gguf_metadata(path: Path) -> dict:
             if tid == STRING:
                 meta[key] = read_str()
             elif tid == ARRAY:
-                skip_value(ARRAY)  # arrays aren't needed for sizing
+                arr = read_array()
+                if arr is not None:
+                    meta[key] = arr
             else:
                 meta[key] = read_scalar(tid)
         meta["_gguf_version"] = version
@@ -762,20 +802,76 @@ def _gguf_arch_dims(meta: dict) -> dict | None:
     train_ctx = g("context_length")
     if not (n_layer and n_embd and n_head and n_head_kv):
         return None
-    head_dim = n_embd // n_head
+    n_layer = int(n_layer)
+    # head_dim is n_embd/n_head only when the attention projections aren't
+    # widened. Models that decouple them (Qwen3.x: key_length/value_length 256
+    # against n_embd/n_head = 213) publish the real per-head K and V widths, and
+    # those are what the cache is sized from.
+    k_dim = int(g("attention.key_length") or (n_embd // n_head))
+    v_dim = int(g("attention.value_length") or (n_embd // n_head))
+
+    # Not every block holds a KV cache. Hybrid architectures interleave linear /
+    # SSM layers with full attention and only the latter cache anything —
+    # Qwen3.x publishes `full_attention_interval: 4`, i.e. 1 attention layer in
+    # 4, so assuming n_layer here overestimates the cache 4x. A trailing MTP
+    # ("nextn") block is counted in block_count but is a separate prediction
+    # head; it is a full-attention layer and does get a cache once
+    # --spec-type draft-mtp loads it.
+    n_nextn = int(g("nextn_predict_layers") or 0)
+    interval = int(g("full_attention_interval") or 0)
+    n_dense = n_layer - n_nextn
+    n_kv_layer = (n_dense // interval + n_nextn) if interval > 1 else n_layer
+
+    # The other way a layer escapes the per-token cost: sliding-window
+    # attention. Gemma publishes a per-layer bool pattern (True = SWA) and
+    # separate, narrower SWA head widths; an SWA layer's cache is capped at the
+    # window, so it is a constant, not a term in bytes-per-token. Note this
+    # still overestimates architectures that *share* one KV cache across several
+    # layers (gemma4's `shared_kv_layers`) — erring toward less context.
+    swa_pattern = g("attention.sliding_window_pattern")
+    swa_window = int(g("attention.sliding_window") or 0)
+    n_swa_layer = 0
+    if isinstance(swa_pattern, list) and swa_window > 0:
+        n_swa_layer = sum(1 for is_swa in swa_pattern if is_swa)
+        n_kv_layer = len(swa_pattern) - n_swa_layer + n_nextn
+
     return {
         "arch": arch,
-        "n_layer": int(n_layer),
+        "n_layer": n_layer,
+        "n_kv_layer": int(n_kv_layer),
+        "n_swa_layer": int(n_swa_layer),
+        "swa_window": swa_window,
+        "k_dim_swa": int(g("attention.key_length_swa") or k_dim),
+        "v_dim_swa": int(g("attention.value_length_swa") or v_dim),
         "n_embd": int(n_embd),
         "n_head": int(n_head),
         "n_head_kv": int(n_head_kv),
-        "head_dim": int(head_dim),
+        "k_dim": k_dim,
+        "v_dim": v_dim,
+        "head_dim": k_dim,  # back-compat alias for callers that just print it
         "train_ctx": int(train_ctx) if train_ctx else None,
     }
 
 
+# Bytes per element of each KV-cache type llama.cpp accepts for
+# --cache-type-k/v. The quantized blocks are 32 elements plus scales: q8_0 is
+# 34 bytes per 32, q4_0 18, and so on.
+_KV_TYPE_BYTES = {
+    "f32": 4.0, "f16": 2.0, "bf16": 2.0,
+    "q8_0": 34 / 32, "q5_1": 24 / 32, "q5_0": 22 / 32,
+    "q4_1": 20 / 32, "q4_0": 18 / 32, "iq4_nl": 18 / 32,
+}
+
+
 def _query_total_vram_gb() -> float | None:
-    """Total VRAM (GB) of GPU 0 via nvidia-smi, or None if unavailable."""
+    """Total VRAM of GPU 0 in GiB via nvidia-smi, or None if unavailable.
+
+    GiB is the unit the rest of the system speaks: nvidia-smi reports MiB,
+    `zallama ps` shows GiB, and the measured mem_gb values in registry.yaml came
+    from those readings. cmd_calibrate converts file sizes to GiB to match —
+    dividing by 1e9 there while comparing against this would inflate every model
+    by 7.4%.
+    """
     import shutil
     import subprocess
 
@@ -839,7 +935,7 @@ def cmd_calibrate(args: list[str]):
         _info("Calibration currently supports NVIDIA GPUs only.")
         sys.exit(1)
 
-    file_gb = entry.get("file_size", 0) / 1e9
+    file_gb = entry.get("file_size", 0) / 2**30
     model_path = Path(entry["file"])
 
     # 3. GGUF architecture.
@@ -855,45 +951,90 @@ def cmd_calibrate(args: list[str]):
     #    an 8GB laptop GPU where a few hundred MB are always taken by the DE.
     usable = total_vram * 0.88
     # Weights resident in VRAM ~= on-disk GGUF size (n_gpu_layers=99 => all on
-    # GPU). A small compute reserve scales with model size.
-    compute_reserve = max(0.4, file_gb * 0.10)
-    kv_budget_gb = usable - file_gb - compute_reserve
+    # GPU). Artifacts land on the GPU too: a vision mmproj is often ~1 GB, and
+    # leaving it out of the budget is a straight 1 GB overshoot.
+    artifacts_gb = 0.0
+    for path in (entry.get("artifacts") or {}).values():
+        try:
+            artifacts_gb += Path(path).stat().st_size / 2**30
+        except OSError:
+            pass
+    weights_gb = file_gb + artifacts_gb
+    # A small compute reserve scales with model size. It also absorbs the
+    # constant-size recurrent state of hybrid (SSM) layers, which is per-slot
+    # rather than per-token and stays in the low hundreds of MB.
+    compute_reserve = max(0.4, weights_gb * 0.10)
+    kv_budget_gb = usable - weights_gb - compute_reserve
 
-    cur_ctx = entry.get("params", {}).get("ctx_size", 4096)
+    cur_params = entry.get("params", {})
+    cur_ctx = cur_params.get("ctx_size", 4096)
+    # Size against the cache types the model is actually configured with — a
+    # q8_0 cache is 1.06 bytes/element against f16's 2, which nearly doubles the
+    # context that fits.
+    kv_k = str(cur_params.get("cache_type_k", "f16")).lower()
+    kv_v = str(cur_params.get("cache_type_v", "f16")).lower()
+    k_bytes = _KV_TYPE_BYTES.get(kv_k, 2.0)
+    v_bytes = _KV_TYPE_BYTES.get(kv_v, 2.0)
+
+    swa_gb = 0.0
+    if dims and dims["n_swa_layer"]:
+        # Sliding-window layers cost the same whatever ctx_size is: their cache
+        # holds the window plus a batch, not the context. Charge it once, up
+        # front, so it doesn't distort the per-token budget.
+        swa_gb = (dims["n_swa_layer"] * dims["n_head_kv"]
+                  * (dims["k_dim_swa"] * k_bytes + dims["v_dim_swa"] * v_bytes)
+                  * (dims["swa_window"] + 2048)) / 2**30
+        kv_budget_gb -= swa_gb
 
     if dims and kv_budget_gb > 0:
-        # KV-cache bytes per token = 2 (K+V) * n_layer * n_head_kv * head_dim *
-        # bytes_per_elem. llama.cpp defaults to f16 KV (2 bytes).
-        bytes_per_tok = 2 * dims["n_layer"] * dims["n_head_kv"] * dims["head_dim"] * 2
-        max_ctx = int((kv_budget_gb * 1e9) / bytes_per_tok)
+        # KV-cache bytes per token = n_kv_layer * n_head_kv * (K width * K bytes
+        # + V width * V bytes). Only the layers that actually cache the full
+        # context count, and K/V can differ in both width and quantization.
+        bytes_per_tok = dims["n_kv_layer"] * dims["n_head_kv"] * (
+            dims["k_dim"] * k_bytes + dims["v_dim"] * v_bytes)
+        max_ctx = int((kv_budget_gb * 2**30) / bytes_per_tok)
         # Round down to a multiple of 1024 and clamp to the model's trained ctx.
         max_ctx = (max_ctx // 1024) * 1024
         if dims["train_ctx"]:
             max_ctx = min(max_ctx, dims["train_ctx"])
         max_ctx = max(max_ctx, 1024)
-        kv_at_ctx = bytes_per_tok * max_ctx / 1e9
-        est_mem_gb = round(file_gb + kv_at_ctx + compute_reserve, 1)
+        kv_at_ctx = bytes_per_tok * max_ctx / 2**30
+        est_mem_gb = round(weights_gb + kv_at_ctx + swa_gb + compute_reserve, 1)
         method = "GGUF KV-cache model"
     else:
         # Fallback: no arch dims — recommend a conservative ctx and estimate
         # mem from file size only.
-        max_ctx = 4096 if file_gb < usable * 0.6 else 2048
-        est_mem_gb = round(file_gb * 1.2 + compute_reserve, 1)
+        max_ctx = 4096 if weights_gb < usable * 0.6 else 2048
+        est_mem_gb = round(weights_gb * 1.2 + compute_reserve, 1)
         method = "size-only estimate (GGUF dims unavailable)"
 
     # 5. Report. Print only — never write.
     print(f"\n{BOLD}{F_BLUE} Calibration for '{model_name}'{RESET}")
     rows = [
-        ["GPU VRAM (total)", f"{total_vram:.1f} GB"],
-        ["Usable (88%)", f"{usable:.1f} GB"],
-        ["Model weights (file)", f"{file_gb:.1f} GB"],
-        ["Compute reserve", f"{compute_reserve:.1f} GB"],
-        ["KV-cache budget", f"{max(kv_budget_gb, 0):.1f} GB"],
+        ["GPU VRAM (total)", f"{total_vram:.1f} GiB"],
+        ["Usable (88%)", f"{usable:.1f} GiB"],
+        ["Model weights (file)", f"{file_gb:.1f} GiB"],
     ]
+    if artifacts_gb:
+        rows.append(["Artifacts (mmproj, …)", f"{artifacts_gb:.1f} GiB"])
+    rows += [
+        ["Compute reserve", f"{compute_reserve:.1f} GiB"],
+        ["KV-cache budget", f"{max(kv_budget_gb, 0):.1f} GiB"],
+    ]
+    if swa_gb:
+        rows.append(["Sliding-window cache",
+                     f"{swa_gb:.1f} GiB • {dims['n_swa_layer']} layers "
+                     f"× {dims['swa_window']} tokens"])
     if dims:
+        attn = f"{dims['n_layer']}L"
+        if dims["n_kv_layer"] != dims["n_layer"]:
+            attn += f" ({dims['n_kv_layer']} with KV)"
         rows.append(["Architecture",
-                     f"{dims['arch']} • {dims['n_layer']}L • "
-                     f"{dims['n_head_kv']} KV-heads • head_dim {dims['head_dim']}"])
+                     f"{dims['arch']} • {attn} • "
+                     f"{dims['n_head_kv']} KV-heads • head_dim {dims['k_dim']}"])
+        rows.append(["KV cache type", f"K {kv_k} / V {kv_v}"
+                                      f" • {bytes_per_tok / 1024:.0f} KiB/token"
+                     if kv_budget_gb > 0 else f"K {kv_k} / V {kv_v}"])
         if dims["train_ctx"]:
             rows.append(["Trained ctx", f"{dims['train_ctx']}"])
     rows += [
@@ -904,13 +1045,18 @@ def cmd_calibrate(args: list[str]):
          _color(str(est_mem_gb), F_TEAL + BOLD)],
     ]
     _print_table(["FIELD", "VALUE"], rows)
-    print(f"\n{F_DIM}  Method: {method}. KV-cache assumes f16 ("
-          f"halve mem with a quantized KV cache).{RESET}")
+    print(f"\n{F_DIM}  Method: {method}, sized against this model's current "
+          f"cache_type_k/v.{RESET}")
+    if dims and kv_k == "f16" and kv_v == "f16":
+        _info("A q8_0 KV cache is ~1.9x smaller for a marginal quality cost: "
+              f"zallama set {model_name} cache_type_k=q8_0 cache_type_v=q8_0")
 
     if kv_budget_gb <= 0:
-        _err(f"Weights ({file_gb:.1f} GB) + reserve exceed usable VRAM "
-             f"({usable:.1f} GB). This model may not fit fully on GPU; "
-             f"lower n_gpu_layers or use a smaller quant.")
+        _err(f"Weights ({weights_gb:.1f} GiB) + reserve exceed usable VRAM "
+             f"({usable:.1f} GiB). This model may not fit fully on GPU; "
+             f"lower n_gpu_layers, keep the expert weights of the first N "
+             f"layers in RAM with n_cpu_moe (MoE models), or use a smaller "
+             f"quant. See docs/vram-planning.md.")
 
     print(f"\n{BOLD}  To apply (dry-run only — nothing was changed):{RESET}")
     print(f"    {_color(f'zallama set {model_name} ctx_size={max_ctx} mem_gb={est_mem_gb}', CYAN)}")

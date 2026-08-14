@@ -5,7 +5,43 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.7.0] - 2026-08-15
+
+### Fixed
+- **`zallama calibrate` under-sized the context by 6x on hybrid architectures.** It assumed every
+  block holds a KV cache and derived `head_dim` from `n_embd / n_head`. Neither holds on models
+  that interleave linear/SSM layers with full attention: Qwen3.8-27B publishes
+  `full_attention_interval: 4` (16 of its 64 blocks cache anything) and decoupled
+  `attention.key_length` / `value_length` of 256 against an `n_embd / n_head` of 213. The
+  recommendation for that model was `ctx_size=10240` where 65536 fits and was measured at 20.3 GiB.
+  Calibration now counts only the caching layers (plus the MTP `nextn` block, which does get a
+  cache once `--spec-type draft-mtp` loads it), reads the real K and V widths, adds the artifacts
+  (a vision mmproj is ~1 GB of VRAM the budget ignored), and sizes against the model's configured
+  `cache_type_k`/`cache_type_v` instead of always assuming f16. The report shows the per-token cost
+  it derived, and the whole calculation is now in GiB — it mixed GiB from `nvidia-smi` with
+  decimal-GB file sizes, shrinking every budget by a further 7.4%.
+- **`zallama set <model> mem_gb=...` wrote the value where nothing reads it.** `mem_gb` landed
+  inside `params`; the memory budget reads it from the entry level, so the declared cost was
+  silently ignored and the model kept being scheduled on the `file_size * 1.2` estimate — while
+  `zallama calibrate` ended by telling you to run exactly that command. `mem_gb`, `pinned` and
+  `description` are now recognised as entry-level fields (like `modality` and `backend`), are
+  reported when they change, and a stale copy left in `params` by an older version is cleaned up
+  on the next `set`.
+- **`zallama list` / `show` / `ps` served stale data after a manual registry edit.**
+  `ModelRegistry.list_models()` never reloaded, unlike `get()`, so a hand-edited `registry.yaml`
+  stayed invisible until some inference request happened to go through `get()`.
+
+### Added
+- `reasoning_effort` model param (`--reasoning-effort`). Thinking models whose chat template
+  defaults to a high effort — Qwen3.8's starts at `xhigh` — spend most of their wall-clock inside
+  `<think>`, where dropping the effort saves more real time than any decoding knob.
+- `image_min_tokens` / `image_max_tokens` model params. llama.cpp warns at load that Qwen-VL
+  models need at least 1024 image tokens for grounding tasks to stay accurate; there was no way to
+  set it from the registry.
+- [Doubling Decode Speed with a Baked-In MTP Head](docs/mtp-speculative-decoding.md): how to spot
+  an unused `nextn` head in a GGUF, what `spec_type: draft-mtp` costs and returns, why
+  `spec_draft_n_max` peaks at 3, and why `zallama bench`'s default workload is too noisy to
+  settle that question on its own.
 
 ## [1.6.0] - 2026-08-09
 
