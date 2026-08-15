@@ -5,6 +5,25 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-08-15
+
+### Added
+- `evict_group` per-model registry key and matching `ProcessManager` support: LRU eviction is
+  now scoped to a group instead of picking any non-pinned instance. Every modality gets a
+  sensible default (`text`/`image` → `primary`, `asr`/`embedding`/`rerank`/`tts` → `services`),
+  so loading a small ASR/embedding model never bumps a large, slow-to-reload text/image model
+  out of its slot, and vice versa — the two groups trade victims only within themselves. Set
+  `evict_group` explicitly to move an entry into an unrelated group, or to `""`/`null` to opt out
+  and restore the old any-non-pinned-victim behavior. See
+  [CONFIG.md](CONFIG.md#evict_group--scoping-lru-eviction) and
+  [docs/vram-planning.md](docs/vram-planning.md) for a worked two-small-services example.
+
+### Known gaps
+- `pinned` is read off the running instance's snapshot of its registry entry, not a fresh
+  lookup — hand-editing `pinned` in `registry.yaml` for an already-running model has no effect
+  on eviction until it's reloaded (`zallama reload` / `unload` + `load`). Documented in
+  [docs/vram-planning.md](docs/vram-planning.md); not fixed yet.
+
 ## [1.9.0] - 2026-08-15
 
 ### Added

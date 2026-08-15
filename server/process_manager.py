@@ -25,7 +25,7 @@ from pathlib import Path
 
 import httpx
 
-from .backends import Backend, get_backend
+from .backends import ASR, EMBEDDING, IMAGE, RERANK, TEXT, TTS, Backend, get_backend
 from .config import resolve_binary
 
 logger = logging.getLogger("zallama.process_manager")
@@ -114,6 +114,43 @@ class ProcessManager:
         """
         return bool(entry.get("pinned"))
 
+    # A model with no explicit `evict_group` in registry.yaml falls back to
+    # this default, keyed by modality. text/image are large and slow to
+    # reload, so they get their own group ("primary") that only they can
+    # evict from; asr/embedding/rerank are small services that trade a
+    # shared slot with each other ("services") without ever reaching into
+    # "primary". tts defaults into "services" too, though in practice it's
+    # almost always `pinned`, which exempts it from eviction entirely.
+    _DEFAULT_EVICT_GROUP = {
+        TEXT: "primary",
+        IMAGE: "primary",
+        ASR: "services",
+        EMBEDDING: "services",
+        RERANK: "services",
+        TTS: "services",
+    }
+
+    @classmethod
+    def _evict_group(cls, entry: dict) -> str | None:
+        """Eviction group for an entry: explicit `evict_group`, else a
+        modality-based default (see `_DEFAULT_EVICT_GROUP`).
+
+        Entries sharing a group can evict each other but never reach outside
+        the group — e.g. asr/embedding trade a shared slot without ever
+        evicting a text/image model. Set `evict_group` explicitly to opt out
+        of the default (e.g. group a specific model with "primary" even
+        though its modality would default elsewhere) or to invent a new,
+        unrelated group.
+        """
+        if "evict_group" in entry:
+            # Explicitly set (including "" or null): honor it as-is, even to
+            # opt out of the modality default (empty/null -> no group, the
+            # old any-non-pinned-victim behavior).
+            g = entry.get("evict_group")
+            return str(g) if g else None
+        modality = (entry.get("modality") or TEXT).strip().lower()
+        return cls._DEFAULT_EVICT_GROUP.get(modality)
+
     async def get_or_start(self, model_name: str, entry: dict, model_path: Path) -> ModelInstance:
         """Return running instance for model, starting it if necessary.
 
@@ -152,7 +189,7 @@ class ProcessManager:
                 # happen without it.
                 async with self._admission_lock:
                     async with self._global_lock:
-                        evicted = self._make_room_locked(incoming_cost)
+                        evicted = self._make_room_locked(incoming_cost, entry)
                     for victim in evicted:
                         await self._kill_instance(victim)
                     inst = await self._spawn(model_name, entry, model_path, incoming_cost)
@@ -355,15 +392,23 @@ class ProcessManager:
                 continue
         return round(total, 2) if matched else None
 
-    def _make_room_locked(self, incoming_cost: float) -> list[ModelInstance]:
+    def _make_room_locked(self, incoming_cost: float, entry: dict) -> list[ModelInstance]:
         """Evict LRU instances until an incoming model fits both budgets.
 
         Caller holds the global lock. Count budget: keep loaded count below
         max_loaded. Memory budget: keep loaded + incoming within mem_budget_gb.
         Eviction always targets the least-recently-used instance first. Victims
         are removed here but killed by the caller after releasing the lock.
+
+        If the incoming entry declares `evict_group`, eviction is restricted to
+        other loaded instances in that same group — e.g. an asr/embedding pair
+        sharing a group can trade a slot back and forth without ever reaching
+        into a text/image model's group. Ungrouped entries keep the old
+        behavior of evicting (and being evicted by) anything non-pinned.
         """
         evicted: list[ModelInstance] = []
+        incoming_group = self._evict_group(entry)
+
         def over_count() -> bool:
             return self._max_loaded > 0 and len(self._instances) >= self._max_loaded
 
@@ -379,15 +424,23 @@ class ProcessManager:
             # let the incoming model exceed the budget rather than killing a
             # warm-pinned instance.
             for name, inst in self._instances.items():
-                if not self._is_pinned(inst.entry):
-                    return name
+                if self._is_pinned(inst.entry):
+                    continue
+                if incoming_group is not None and self._evict_group(inst.entry) != incoming_group:
+                    continue
+                return name
             return None
 
         while self._instances and (over_count() or over_mem()):
             victim_name = next_victim()
             if victim_name is None:
+                reason = (
+                    f"all loaded models are pinned or outside group '{incoming_group}'"
+                    if incoming_group is not None
+                    else "all loaded models are pinned"
+                )
                 logger.warning(
-                    "Capacity reached but all loaded models are pinned — "
+                    f"Capacity reached but {reason} — "
                     f"admitting incoming {incoming_cost:.1f}GB over budget."
                 )
                 break

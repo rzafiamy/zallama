@@ -54,6 +54,19 @@ Capacity reached but all loaded models are pinned — admitting incoming 23.4GB 
 The budget is a scheduling hint, not a hard gate. It will not save you from an
 OOM — that is what accurate `mem_gb` values are for.
 
+### Editing `pinned` on a model that's already running does nothing yet
+
+`_make_room_locked()` checks `inst.entry["pinned"]` on the **already-running
+instance**, not a fresh registry lookup — that entry is a snapshot taken when
+the instance was started. Flip `pinned: true → false` (or vice versa) in
+`registry.yaml` and the live process keeps behaving on the old value until you
+`zallama reload <name>` (or `unload` + `load`) it. Symptom: you unpin a model
+to let it share an LRU slot with another, but the *other* model — not the one
+you unpinned — keeps getting evicted instead, because eviction skips anything
+whose live snapshot still says `pinned: true`. Same family of bug as
+`list_models()` serving stale data after a hand-edit — see `zallama set`'s
+`mem_gb` placement bug in the tuning log.
+
 ### What `pinned` is for
 
 Pinning trades memory held for the process lifetime against a cold load you
@@ -277,6 +290,33 @@ largest with 0.89 GB to spare. Transcription latency drops from ~780 ms
 (reload + inference) to ~80 ms, because the ASR model never leaves the GPU.
 
 ---
+
+### Variant: two small services that don't both need to be instant
+
+Adding a third small service (an embedding model, for RAG) doesn't always mean
+pinning all three. `Qwen3-Embedding-0.6B-Q8_0`, measured the same way, costs
+**2.19 GB** — file size is 0.64 GB, but the KV cache and compute buffer at
+`ctx_size: 8192` triple it. Pinning it alongside an already-pinned ASR model
+next to a 21 GB text model doesn't fit: 21.0 + 1.3 + 2.3 = 24.6 GB, over a
+24.09 GB card.
+
+If ASR and embedding calls aren't both latency-critical in the same instant
+(e.g. transcribe-then-generate, or embed-at-ingestion-time rather than
+per-turn), leave **both unpinned** instead of pinning either. They then share
+one LRU slot and evict each other on demand — cold-load penalty only on
+whichever one wasn't just used — while the large text model keeps its own
+slot. `max_loaded_models` doesn't need to grow to fit a third always-on
+service; it's still `pinned services + concurrent big models`, just with ASR
+and embedding no longer counted as pinned.
+
+The failure mode to watch for: if your app calls ASR, embedding, *and* text
+generation once per turn, and only 2 non-pinned slots exist, all three compete
+and the text model gets evicted and cold-reloaded every turn. That only shows
+up under truly interleaved per-turn usage — watch `zallama ps`'s `UPTIME`
+column on the text model; if it never exceeds a few seconds, that's the
+thrash. The fix then is to give the text model its own reserved slot (pin it,
+or raise `max_loaded_models` and accept the larger VRAM footprint), not to
+re-pin ASR or embedding.
 
 ## Checklist
 

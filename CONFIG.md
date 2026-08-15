@@ -12,6 +12,7 @@ models:
     artifacts: {}          # optional, e.g. mmproj
     mem_gb: 12.0            # optional, declared VRAM cost for the LRU budget
     pinned: false           # optional, pre-load at startup, exempt from eviction
+    evict_group: ""          # optional, overrides the modality-based default eviction group
     aliases: []              # optional, alternate model names
     description: ""          # optional
     params: {}                # backend-specific — see tables below
@@ -51,6 +52,43 @@ back to it when the request omits the field. For `kokoro-server` and
 `sd-server`, whose CLI has no such per-field defaulting, the proxy in
 `server/routes/openai.py` applies the registry value into the request body
 itself when the client didn't set it.
+
+## `evict_group` — scoping LRU eviction
+
+When a model needs to load and capacity (`max_loaded_models` /
+`mem_budget_gb`) is tight, Zallama evicts the least-recently-used *non-pinned*
+instance that shares the incoming model's **eviction group** — never one
+outside it. Every modality has a built-in default group, so this works with
+no config at all:
+
+| modality | default `evict_group` |
+|---|---|
+| `text`, `image` | `primary` |
+| `asr`, `embedding`, `rerank`, `tts` | `services` |
+
+In other words: a large, slow-to-reload text or image model only ever gets
+evicted to make room for *another* text/image model — never bumped just
+because a small ASR or embedding request came in. Conversely, ASR and
+embedding trade a single shared slot back and forth between themselves
+without ever reaching into the text/image model's slot.
+
+Set `evict_group` explicitly on an entry to override the default — put a
+specific model in its own group, opt it out of grouping entirely (an empty
+string falls through to "no restriction," the old any-non-pinned-victim
+behavior), or invent an unrelated group name:
+
+```yaml
+- name: tdt-0.6b-v3-q8_0        # asr — no evict_group needed, defaults to "services"
+- name: Qwen3-Embedding-0.6B-Q8_0  # embedding — defaults to "services"
+- name: Qwen3.8-27B-Q4_K_M      # text — defaults to "primary"
+- name: flux:klein              # image — defaults to "primary"
+```
+
+If capacity is tight and no same-group victim is loaded, Zallama does **not**
+fall back to evicting across groups — it logs a warning and admits the
+incoming model over budget instead, the same fallback used when every loaded
+model is pinned. See
+[docs/vram-planning.md](docs/vram-planning.md) for a full worked example.
 
 ---
 
