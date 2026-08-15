@@ -178,6 +178,17 @@ class LlamaServerBackend:
         # N=4 -> 21.77GB / 138 tok/s, N=8 -> 19.96GB / 113 tok/s. Roughly
         # 0.4GB freed and 8% of generation speed lost per layer offloaded.
         "n_cpu_moe": "--n-cpu-moe",
+        # Sampling defaults. These become server-side CLI defaults; llama-server
+        # gives priority to whatever a chat request specifies inline and only
+        # falls back to these when a field is absent from the request body — so
+        # the effective priority is request > registry params > config
+        # default_params > llama.cpp's own built-in default.
+        "temperature": "--temperature",
+        "top_p": "--top-p",
+        "top_k": "--top-k",
+        "min_p": "--min-p",
+        "presence_penalty": "--presence-penalty",
+        "repeat_penalty": "--repeat-penalty",
     }
     # Boolean flags: present-if-truthy.
     _FLAG_MAP = {

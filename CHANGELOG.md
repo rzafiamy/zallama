@@ -5,6 +5,22 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-08-15
+
+### Added
+- `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty` and `repeat_penalty` model params,
+  each mapped to the matching `llama-server` CLI flag. Previously these were silently dropped —
+  `_PARAM_MAP` had no entry for any of them — so a registered value never reached the model and
+  every model ran on llama.cpp's own hardcoded sampling defaults regardless of what its model card
+  recommended. Because `llama-server` only falls back to its CLI default when a chat request
+  omits the field, this gets registry-level sampling defaults with the priority chain
+  `request body > registry params > config default_params > llama.cpp's built-in default` for
+  free, with no proxy-side merge logic needed.
+- [CONFIG.md](CONFIG.md): a full reference of every `params` key each backend/modality accepts
+  (`text`/`embedding`/`rerank` on `llama-server`, `asr` on `parakeet-server`, `tts` on
+  `kokoro-server`, `image` on `sd-server`), which ones are CLI launch flags vs. request-body-only
+  defaults, and the merge/priority chain between `config.yaml`, `registry.yaml`, and the request.
+
 ## [1.7.0] - 2026-08-15
 
 ### Fixed
