@@ -797,8 +797,17 @@ def _gguf_arch_dims(meta: dict) -> dict | None:
     n_layer = g("block_count")
     n_embd = g("embedding_length")
     n_head = g("attention.head_count")
-    # GQA: head_count_kv defaults to head_count when absent (full MHA).
-    n_head_kv = g("attention.head_count_kv") or n_head
+    # GQA: head_count_kv defaults to head_count when absent (full MHA). Some
+    # hybrid archs (Nemotron-H) publish it as a per-layer array instead of a
+    # scalar — 0 marks an SSM/Mamba layer, a nonzero entry a real attention
+    # layer. Pull the first nonzero as the scalar KV-head count for the byte
+    # formula below; the list itself is kept to size n_kv_layer exactly.
+    n_head_kv_raw = g("attention.head_count_kv")
+    n_head_kv_list = n_head_kv_raw if isinstance(n_head_kv_raw, list) else None
+    n_head_kv = (
+        next((v for v in n_head_kv_list if v), None) if n_head_kv_list
+        else n_head_kv_raw
+    ) or n_head
     train_ctx = g("context_length")
     if not (n_layer and n_embd and n_head and n_head_kv):
         return None
@@ -819,8 +828,14 @@ def _gguf_arch_dims(meta: dict) -> dict | None:
     # --spec-type draft-mtp loads it.
     n_nextn = int(g("nextn_predict_layers") or 0)
     interval = int(g("full_attention_interval") or 0)
-    n_dense = n_layer - n_nextn
-    n_kv_layer = (n_dense // interval + n_nextn) if interval > 1 else n_layer
+    if n_head_kv_list:
+        # Exact per-layer count. The trailing MTP/nextn block is itself a
+        # full-attention layer, so it already shows up as a nonzero entry here
+        # — no separate += n_nextn needed, unlike the interval-based path.
+        n_kv_layer = sum(1 for v in n_head_kv_list if v)
+    else:
+        n_dense = n_layer - n_nextn
+        n_kv_layer = (n_dense // interval + n_nextn) if interval > 1 else n_layer
 
     # The other way a layer escapes the per-token cost: sliding-window
     # attention. Gemma publishes a per-layer bool pattern (True = SWA) and

@@ -159,6 +159,14 @@ class LlamaServerBackend:
         # activates it; spec_draft_n_max tunes lookahead (2 is a good start).
         "spec_type": "--spec-type",
         "spec_draft_n_max": "--spec-draft-n-max",
+        # Standalone speculative decoding: a genuinely separate, smaller draft
+        # model (spec_type "draft-simple" and friends), as opposed to draft-mtp's
+        # head baked into the main GGUF. The draft file itself is supplied as
+        # the `draft` artifact (see build_args) rather than a params path, so it
+        # resolves through the same models_dir-relative lookup as mmproj.
+        # spec_draft_ngl caps how many of the draft model's layers go to VRAM —
+        # worth lowering on a card where the main model already fills it.
+        "spec_draft_ngl": "--spec-draft-ngl",
         # Reasoning effort handed to the chat template. Thinking models that
         # default to a high effort (Qwen3.8 templates start at "xhigh") spend
         # most of their wall-clock inside <think>, so dropping this to "medium"
@@ -224,6 +232,13 @@ class LlamaServerBackend:
         mmproj = artifacts.get("mmproj")
         if mmproj is not None:
             args += ["--mmproj", str(mmproj)]
+
+        # Standalone draft model for speculative decoding (draft-simple and
+        # friends). draft-mtp needs none of this — its head lives inside the
+        # main GGUF and is enabled by spec_type alone.
+        draft = artifacts.get("draft")
+        if draft is not None:
+            args += ["--model-draft", str(draft)]
 
         for key, flag in self._PARAM_MAP.items():
             if key in merged_params:

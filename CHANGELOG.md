@@ -5,6 +5,30 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-08-15
+
+### Added
+- `draft` artifact and `spec_draft_ngl` param for `text`/`embedding`/`rerank` entries, mapping to
+  `llama-server`'s `--model-draft` / `--spec-draft-ngl`. This is standalone speculative decoding —
+  a genuinely separate, smaller draft GGUF (`spec_type: draft-simple` and friends) — as opposed to
+  `draft-mtp`, whose draft head is already baked into the main GGUF and needs neither flag. Before
+  this there was no way to register a model's external draft checkpoint at all.
+
+### Fixed
+- `zallama calibrate` crashed its own GGUF-dims calculation (silently, into the crude size-only
+  fallback) on architectures that publish `attention.head_count_kv` as a **per-layer array**
+  rather than a scalar. Nemotron-H marks each of its blocks attention (nonzero) or SSM/Mamba (0)
+  this way, instead of Qwen3.x's scalar `head_count_kv` + `full_attention_interval` pair for the
+  same idea. `_gguf_arch_dims` now reads the array directly — an exact per-layer count of
+  KV-caching blocks, rather than an assumed even interval — recovering full-size recommendations
+  (444k tokens of context fit a Nemotron-H MoE that the old fallback would have capped at 4096).
+
+### Known gaps
+- `calibrate` still doesn't parse the scalar-period form of `attention.sliding_window_pattern`
+  (an int meaning "1 in every N layers is global", used by e.g. Muse-Glimmer) — only Gemma3's
+  per-layer boolean array. It falls back to pricing every layer as full-context, which is safe
+  (never over-recommends) but conservative. See [Model Tuning Log](docs/tuning-log.md).
+
 ## [1.8.0] - 2026-08-15
 
 ### Added

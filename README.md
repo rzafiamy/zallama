@@ -489,7 +489,7 @@ Each entry may declare:
 
 Useful `params` for making a model fit on a busy GPU — `cache_type_k`/`cache_type_v` (quantize the KV cache), `ctx_size`, `n_cpu_moe` (keep the expert weights of the first N layers in system RAM, MoE models only) and `n_gpu_layers` — are covered with measured trade-offs in [Fitting Your Models on One GPU](docs/vram-planning.md#making-a-model-fit).
 
-If your GGUF carries a baked-in MTP head — llama.cpp logs its tensors as `unused tensor blk.N.nextn.* -- ignoring` until you switch it on — `spec_type: draft-mtp` roughly doubles decode speed for about 1 GiB of VRAM. See [Doubling Decode Speed with MTP](docs/mtp-speculative-decoding.md).
+If your GGUF carries a baked-in MTP head — llama.cpp logs its tensors as `unused tensor blk.N.nextn.* -- ignoring` until you switch it on — `spec_type: draft-mtp` roughly doubles decode speed for about 1 GiB of VRAM. See [Doubling Decode Speed with MTP](docs/mtp-speculative-decoding.md). For a model with no baked-in head but a genuinely separate draft checkpoint, register it as the `draft` artifact (`--model-draft`) and set `spec_type: draft-simple` instead; `spec_draft_ngl` caps how much of the draft model rides on VRAM.
 
 Sampling knobs — `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty` — are also settable per-model. They become the `llama-server` launch defaults, so a chat request that sets its own value always wins; the registry value only applies when the request leaves the field out. Full list of every `params` key per modality/backend: [Registry Parameter Reference](CONFIG.md).
 
@@ -542,7 +542,7 @@ zallama bench qwen3.5-4b-q4_k_m --sweep cache_type_k=f16,q8_0,q4_0
 zallama bench --all --runs 5 --out bench.md
 ```
 
-Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `reasoning_effort`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`, `image_min_tokens`, `image_max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`.
+Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `reasoning_effort`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`, `spec_draft_ngl`, `image_min_tokens`, `image_max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`.
 
 Measured results from past sweeps — settings tried, tok/s and VRAM they measured — are kept in the [Model Tuning Log](docs/tuning-log.md), so a config doesn't get re-benchmarked from scratch every session.
 

@@ -60,6 +60,13 @@ Also covers vision (add an `mmproj` artifact) and any entry with
 `backend: llama-server` explicitly. Source: `LlamaServerBackend` in
 `server/backends.py`.
 
+### Artifacts
+
+| key | CLI flag | notes |
+|---|---|---|
+| `mmproj` | `--mmproj` | vision projector |
+| `draft` | `--model-draft` | standalone draft model for `spec_type: draft-simple` (and friends). Not needed for `draft-mtp` — that head lives inside the main GGUF; check the main model's tensor list for a `blk.N.nextn.*` block before assuming a same-repo `*-mtp-*.gguf`/`*-draft-*.gguf` sibling is meant to be wired here — some repos ship it as a leftover/back-compat copy of the already-embedded head rather than a genuinely separate model. |
+
 ### Value params
 
 | key | CLI flag | notes |
@@ -72,8 +79,9 @@ Also covers vision (add an `mmproj` artifact) and any entry with
 | `ubatch_size` | `--ubatch-size` | prefill micro-batch |
 | `cache_type_k` | `--cache-type-k` | KV cache dtype for K, e.g. `q8_0`, `f16` |
 | `cache_type_v` | `--cache-type-v` | KV cache dtype for V |
-| `spec_type` | `--spec-type` | speculative decoding mode, e.g. `draft-mtp` |
+| `spec_type` | `--spec-type` | speculative decoding mode, e.g. `draft-mtp`, `draft-simple` |
 | `spec_draft_n_max` | `--spec-draft-n-max` | draft lookahead length |
+| `spec_draft_ngl` | `--spec-draft-ngl` | standalone draft model only: layers of it to keep in VRAM |
 | `reasoning_effort` | `--reasoning-effort` | `minimal\|low\|medium\|high\|xhigh\|max` (template-dependent) |
 | `image_min_tokens` | `--image-min-tokens` | vision: min tokens per image |
 | `image_max_tokens` | `--image-max-tokens` | vision: max tokens per image |
