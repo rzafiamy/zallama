@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
-from ..backends import ENDPOINT_MODALITY
+from ..backends import ENDPOINT_MODALITY, get_backend
 from ..tts_lang import voice_for_text
 from ..model_registry import ModelRegistry
 
@@ -169,6 +169,47 @@ async def _to_wav(data: bytes) -> bytes:
     return out
 
 
+def _model_info(entry: dict, running: set[str], pm) -> dict:
+    """Shape one registry entry into the info a chatbot app needs to drive a
+    request: context size, modality/capabilities, current load status.
+
+    context_length comes from the same registry-params-over-config-defaults
+    merge the launcher uses (ProcessManager.merged_params), so it reflects
+    what the model will actually be started with, not just a static default.
+    """
+    name = entry["name"]
+    modality = ModelRegistry.modality_of(entry)
+    backend_name = ModelRegistry.backend_of(entry)
+    merged = pm.merged_params(entry)
+    artifacts = entry.get("artifacts") or {}
+
+    # Knobs this model's backend accepts inline in a chat request body
+    # (temperature, reasoning_effort, ...), each paired with the current
+    # server-side default (None if nothing set it, so llama.cpp's own
+    # built-in default applies). Lets a chatbot app discover what it's
+    # allowed to tweak per-request without hardcoding it per model.
+    backend_obj = get_backend(backend_name)
+    tunable_params = {
+        key: merged.get(key)
+        for key in sorted(getattr(backend_obj, "REQUEST_TUNABLE_PARAMS", ()))
+    }
+
+    return {
+        "id": name,
+        "object": "model",
+        "created": int(time.time()),
+        "owned_by": "zallama",
+        "description": entry.get("description", ""),
+        "status": "running" if name in running else "available",
+        "modality": modality,
+        "backend": backend_name,
+        "context_length": merged.get("ctx_size"),
+        "supports_vision": bool(artifacts.get("mmproj")),
+        "pinned": bool(entry.get("pinned", False)),
+        "tunable_params": tunable_params,
+    }
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/models
 # ---------------------------------------------------------------------------
@@ -176,17 +217,7 @@ async def _to_wav(data: bytes) -> bytes:
 async def list_models(registry=Depends(get_registry), pm=Depends(get_pm)):
     models = registry.list_models()
     running = {r["name"] for r in pm.list_running()}
-    data = []
-    for m in models:
-        name = m["name"]
-        data.append({
-            "id": name,
-            "object": "model",
-            "created": int(time.time()),
-            "owned_by": "zallama",
-            "description": m.get("description", ""),
-            "status": "running" if name in running else "available",
-        })
+    data = [_model_info(m, running, pm) for m in models]
     return {"object": "list", "data": data}
 
 
@@ -200,14 +231,7 @@ async def get_model(model_id: str, registry=Depends(get_registry), pm=Depends(ge
     except Exception:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
     running = {r["name"] for r in pm.list_running()}
-    return {
-        "id": entry["name"],
-        "object": "model",
-        "created": int(time.time()),
-        "owned_by": "zallama",
-        "description": entry.get("description", ""),
-        "status": "running" if entry["name"] in running else "available",
-    }
+    return _model_info(entry, running, pm)
 
 
 # ---------------------------------------------------------------------------

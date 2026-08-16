@@ -177,8 +177,16 @@ class ModelRegistry:
         aliases: list[str] | None = None,
         mem_gb: float | None = None,
         pinned: bool = False,
+        evict_group: str | None = None,
     ) -> dict:
-        """Register (or replace) a model in registry.yaml."""
+        """Register (or replace) a model in registry.yaml.
+
+        `evict_group` is tri-state, unlike the other optional fields: `None`
+        means "no override" (the key is omitted, so ProcessManager falls back
+        to the modality default), while `""` is a meaningful explicit value
+        (opt out of grouping entirely) that must still be written to the
+        entry rather than dropped like a falsy `mem_gb`/`pinned` would be.
+        """
         entry: dict[str, Any] = {
             "name": name,
             "file": str(file_path),
@@ -196,6 +204,8 @@ class ModelRegistry:
             entry["mem_gb"] = mem_gb
         if pinned:
             entry["pinned"] = True
+        if evict_group is not None:
+            entry["evict_group"] = evict_group
         if params:
             entry["params"] = params
 

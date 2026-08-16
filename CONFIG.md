@@ -84,6 +84,14 @@ behavior), or invent an unrelated group name:
 - name: flux:klein              # image — defaults to "primary"
 ```
 
+Or set it from the CLI instead of hand-editing the YAML:
+
+```bash
+zallama set my-reranker evict_group=custom-slot   # put it in its own group
+zallama set my-reranker evict_group=              # opt out of grouping entirely
+zallama set my-reranker evict_group=none           # reset to the modality default
+```
+
 If capacity is tight and no same-group victim is loaded, Zallama does **not**
 fall back to evicting across groups — it logs a warning and admits the
 incoming model over budget instead, the same fallback used when every loaded
@@ -140,6 +148,7 @@ Also covers vision (add an `mmproj` artifact) and any entry with
 | `mlock` | `--mlock` |
 | `no_mmap` | `--no-mmap` |
 | `embedding` | `--embedding` (legacy; prefer `modality: embedding`) |
+| `no_mmproj_offload` | `--no-mmproj-offload` — keeps the vision projector on CPU instead of VRAM; frees the mmproj's own footprint (and its compute buffers) for a larger `ctx_size`, at the cost of slower image encoding |
 
 ### Tri-state (`true`/`false`/`"on"`/`"off"`/`"auto"`)
 

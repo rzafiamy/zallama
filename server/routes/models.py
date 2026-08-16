@@ -83,6 +83,9 @@ class AddModelRequest(BaseModel):
     artifacts: dict = {}        # e.g. {"mmproj": "/path/to/clip.gguf"} for vision
     mem_gb: float = 0           # declared memory cost; 0 = infer/fallback
     pinned: bool = False        # keep loaded (prewarmed, never idle-evicted)
+    # LRU eviction scope. None = no override (modality default applies); ""
+    # opts out of grouping entirely; any other string is a custom group name.
+    evict_group: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +122,11 @@ async def list_models(registry=Depends(get_registry), pm=Depends(get_pm)):
             "artifacts": m.get("artifacts", {}),
             "mem_gb": m.get("mem_gb", 0),
             "pinned": bool(m.get("pinned", False)),
+            "evict_group": m.get("evict_group"),
+            # Group actually in effect for eviction — the raw field above is
+            # None for most entries (they just take the modality default),
+            # which isn't useful to list/filter on by itself.
+            "evict_group_effective": pm.evict_group_of(m),
             "running": name in running_map,
             "port": running_map.get(name, {}).get("port"),
         })
@@ -148,6 +156,7 @@ async def add_model(req: AddModelRequest, registry=Depends(get_registry)):
         aliases=req.aliases or None,
         mem_gb=req.mem_gb or None,
         pinned=req.pinned,
+        evict_group=req.evict_group,
     )
     return {"status": "added", "model": entry}
 

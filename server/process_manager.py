@@ -131,9 +131,9 @@ class ProcessManager:
     }
 
     @classmethod
-    def _evict_group(cls, entry: dict) -> str | None:
-        """Eviction group for an entry: explicit `evict_group`, else a
-        modality-based default (see `_DEFAULT_EVICT_GROUP`).
+    def evict_group_of(cls, entry: dict) -> str | None:
+        """Effective eviction group for an entry: explicit `evict_group`,
+        else a modality-based default (see `_DEFAULT_EVICT_GROUP`).
 
         Entries sharing a group can evict each other but never reach outside
         the group — e.g. asr/embedding trade a shared slot without ever
@@ -141,6 +141,12 @@ class ProcessManager:
         of the default (e.g. group a specific model with "primary" even
         though its modality would default elsewhere) or to invent a new,
         unrelated group.
+
+        Public (not just used internally by `_make_room_locked`) so callers
+        like the model-info/list route can show the group actually in effect
+        — the raw `entry.get("evict_group")` is None for the vast majority of
+        entries that just take the modality default, which isn't useful to
+        display on its own.
         """
         if "evict_group" in entry:
             # Explicitly set (including "" or null): honor it as-is, even to
@@ -407,7 +413,7 @@ class ProcessManager:
         behavior of evicting (and being evicted by) anything non-pinned.
         """
         evicted: list[ModelInstance] = []
-        incoming_group = self._evict_group(entry)
+        incoming_group = self.evict_group_of(entry)
 
         def over_count() -> bool:
             return self._max_loaded > 0 and len(self._instances) >= self._max_loaded
@@ -426,7 +432,7 @@ class ProcessManager:
             for name, inst in self._instances.items():
                 if self._is_pinned(inst.entry):
                     continue
-                if incoming_group is not None and self._evict_group(inst.entry) != incoming_group:
+                if incoming_group is not None and self.evict_group_of(inst.entry) != incoming_group:
                     continue
                 return name
             return None
@@ -481,7 +487,12 @@ class ProcessManager:
             except OSError:
                 return False
 
-    def _merged_params(self, entry: dict) -> dict:
+    def merged_params(self, entry: dict) -> dict:
+        """Registry params layered over llama_server.default_params.
+
+        Public so callers outside the spawn path (e.g. the model-info route)
+        can see the effective ctx_size etc. without duplicating the merge.
+        """
         default_params = self.cfg["llama_server"]["default_params"].copy()
         model_params = entry.get("params", {})
         return {**default_params, **model_params}
@@ -498,7 +509,7 @@ class ProcessManager:
         backend = get_backend(ModelRegistry.backend_of(entry))
         binary = self._binary_for(backend)
         artifacts = get_registry().resolve_artifacts(entry)
-        merged = self._merged_params(entry)
+        merged = self.merged_params(entry)
 
         port = self._next_port()
         log_path = self.logs_dir / f"{model_name.replace(':', '_')}.log"

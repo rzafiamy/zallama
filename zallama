@@ -95,7 +95,7 @@ def _default_zallama_host() -> str:
 
 ZALLAMA_HOST = _default_zallama_host()
 _VERSION_FILE = Path(__file__).resolve().parent / "version.txt"
-VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.is_file() else "1.7.0"
+VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.is_file() else "1.11.0"
 
 # Project / developer metadata (shown by `zallama version`).
 DESCRIPTION = "OpenAI-compatible local LLM server powered by llama.cpp"
@@ -441,10 +441,22 @@ def _print_remote_presets():
 
 
 def cmd_list(args: list[str]):
-    """List all registered models."""
+    """List all registered models: zallama list [--group <name>|none]"""
     if args and args[0] in ("--remote", "-r", "remote"):
         _print_remote_presets()
         return
+
+    group_filter = None
+    filtered_args = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--group" and i + 1 < len(args):
+            group_filter = args[i + 1]
+            i += 2
+        else:
+            filtered_args.append(args[i])
+            i += 1
+    args = filtered_args
 
     r = _api("GET", "/api/models")
     data = r.json()
@@ -456,13 +468,24 @@ def cmd_list(args: list[str]):
         _info("Or pull a remote model: zallama pull <name>")
         return
 
+    if group_filter is not None:
+        # "none" selects models with no eviction restriction at all — distinct
+        # from a literal group named "none", which nobody would sanely pick.
+        wanted = None if group_filter.lower() == "none" else group_filter
+        models = [m for m in models if m.get("evict_group_effective") == wanted]
+        if not models:
+            print(_color(f"No models in eviction group '{group_filter}'.", F_DIM))
+            return
+
     print(f"\n{BOLD}{F_BLUE} Registered Models{RESET}")
-    headers = ["MODEL", "MODALITY", "ENGINE", "STATUS", "SIZE", "DESCRIPTION"]
+    headers = ["MODEL", "MODALITY", "ENGINE", "GROUP", "STATUS", "SIZE", "DESCRIPTION"]
     rows = []
     for m in models:
         name = m["name"]
         modality = m.get("modality", "text")
         backend = m.get("backend", "llama-server")
+        group = m.get("evict_group_effective")
+        group_str = _color(group, F_PURPLE) if group else _color("—", F_DIM)
         status = _color("● RUNNING", F_TEAL) if m["running"] else _color("○ stopped", F_DIM)
         size = m.get("file_size", 0)
         size_str = f"{size / 1e9:.1f} GB" if size > 0 else "?"
@@ -476,6 +499,7 @@ def cmd_list(args: list[str]):
             _color(name, F_BLUE + BOLD),
             _color(modality, F_GRAY),
             _color(backend, F_DIM),
+            group_str,
             status,
             size_str,
             desc
@@ -574,9 +598,12 @@ def cmd_set(args: list[str]):
         _info("  zallama set my-reranker modality=rerank    # backend auto-selected")
         _info("  zallama set my-embed modality=embedding    # serve /v1/embeddings")
         _info("  zallama set qwen3.5-4b-q4_k_m mem_gb=13.2 pinned=true")
+        _info("  zallama set my-reranker evict_group=services  # share a slot with other 'services'")
+        _info("  zallama set my-model evict_group=none          # reset to the modality default group")
+        _info("  zallama set my-model evict_group=              # opt out of grouping entirely")
         _info("Special keys (entry-level, not llama-server params): modality "
               "(text|embedding|rerank|asr|tts|image), backend, mem_gb, pinned, "
-              "description.")
+              "evict_group, description.")
         sys.exit(1)
 
     model_name = args[0]
@@ -616,6 +643,13 @@ def cmd_set(args: list[str]):
         "pinned": model_entry.get("pinned", False),
         "description": model_entry.get("description", ""),
     }
+    # evict_group is tri-state — None (no override, modality default),
+    # "" (explicit opt-out of grouping), or a custom group name — so it can't
+    # share entry_fields' generic "None -> type-zero" coercion below: that
+    # would turn a reset (evict_group=none, meaning "drop back to default")
+    # into an opt-out ("", meaning "never restrict eviction") whenever the
+    # current value was already a non-empty string. Handled separately instead.
+    evict_group = model_entry.get("evict_group")
 
     for kv in kv_args:
         if "=" not in kv:
@@ -631,6 +665,13 @@ def cmd_set(args: list[str]):
         if key == "backend":
             backend = val
             backend_explicit = True
+            continue
+        if key == "evict_group":
+            parsed_val = _parse_param_value(val)
+            # "none"/"null" -> None (drop the key, revert to the modality
+            # default); "evict_group=" -> "" (explicit opt-out); anything
+            # else -> that literal group name.
+            evict_group = None if parsed_val is None else str(parsed_val)
             continue
 
         parsed_val = _parse_param_value(val)
@@ -669,6 +710,7 @@ def cmd_set(args: list[str]):
         "artifacts": model_entry.get("artifacts", {}),
         "mem_gb": entry_fields["mem_gb"],
         "pinned": entry_fields["pinned"],
+        "evict_group": evict_group,
     }
 
     r = _api("POST", "/api/models/add", payload)
@@ -677,6 +719,8 @@ def cmd_set(args: list[str]):
             f" {k}={entry_fields[k]}" for k in ("mem_gb", "pinned")
             if entry_fields[k] != model_entry.get(
                 k, 0 if k == "mem_gb" else False))
+        if evict_group != model_entry.get("evict_group"):
+            extra += f" evict_group={evict_group!r}"
         _ok(f"Updated '{model_entry['name']}' "
             f"(modality={modality}, backend={backend}) params={params}{extra}")
     else:
@@ -1227,6 +1271,7 @@ def _bench_set_params(entry: dict, params: dict) -> bool:
         "artifacts": entry.get("artifacts", {}),
         "mem_gb": entry.get("mem_gb", 0),
         "pinned": entry.get("pinned", False),
+        "evict_group": entry.get("evict_group"),
     }
     return _api("POST", "/api/models/add", payload).status_code == 200
 

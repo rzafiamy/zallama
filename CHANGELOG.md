@@ -5,6 +5,30 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-08-16
+
+### Added
+- `zallama set <model> evict_group=<group>` and `zallama list --group <name>|none` to manage and
+  inspect `evict_group` eviction scoping from the CLI instead of hand-editing `registry.yaml`.
+  `evict_group=` opts a model out of grouping entirely, `evict_group=none` resets it to the
+  modality default. `ProcessManager.evict_group_of()` and `merged_params()` are now public so the
+  `/api/models` route can report each model's *effective* group (`evict_group_effective`) — the
+  raw registry field is `None` for most entries since they just take the modality default, which
+  isn't useful to filter/display on its own.
+- `no_mmproj_offload` param (`--no-mmproj-offload`) for vision models: keeps the multimodal
+  projector's weights and compute buffers on CPU instead of VRAM, trading slower image encoding
+  for a larger `ctx_size` budget.
+- `/v1/models` and `/v1/models/{id}` now return `context_length`, `modality`, `backend`,
+  `supports_vision`, `pinned`, and `tunable_params` (the sampling/reasoning knobs — temperature,
+  top_p, top_k, min_p, presence_penalty, repeat_penalty, reasoning_effort, reasoning — that
+  backend accepts inline in a request body, paired with their current server-side default) so a
+  chatbot app can discover per-model capabilities and overridable params without hardcoding them.
+- `scripts/embed_bench.py`: retrieval smoke test for registered embedding models. Embeds a
+  handful of English, French, and cross-lingual query/passage pairs against the live daemon and
+  checks that cosine similarity ranks the correct passage above distractors — catches a model
+  that fails to load, a broken GGUF conversion (e.g. missing `context_length` in the GGUF
+  metadata), or a language the model doesn't handle, in a few seconds instead of a full MTEB run.
+
 ## [1.10.0] - 2026-08-15
 
 ### Added

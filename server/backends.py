@@ -113,6 +113,10 @@ class Backend(Protocol):
     # or two text encoders on top of the diffusion weights) need longer before
     # they answer their first request.
     startup_timeout_factor: float = 1.0
+    # Registry/config param keys this backend also accepts inline in a
+    # per-request body, overriding the launch-time default. Empty for backends
+    # with no such request-level knobs (the default).
+    REQUEST_TUNABLE_PARAMS: set[str] = set()
 
     def build_args(
         self,
@@ -204,11 +208,29 @@ class LlamaServerBackend:
         "mlock": "--mlock",
         "no_mmap": "--no-mmap",
         "embedding": "--embedding",
+        # Keeps the multimodal projector's weights (and its own compute
+        # buffers) off the GPU entirely — llama.cpp offloads mmproj to VRAM by
+        # default. Vision encode moves to CPU (slower per image, but images
+        # are a small fraction of most workloads), freeing the mmproj's own
+        # footprint plus room in the shared VRAM pool for a larger ctx_size.
+        "no_mmproj_offload": "--no-mmproj-offload",
     }
     # Tri-state options that take on/off/auto in recent llama.cpp.
     _TRISTATE = {
         "flash_attn": "--flash-attn",
         "reasoning": "--reasoning",
+    }
+
+    # Subset of the above that llama-server also accepts inline in a
+    # /v1/chat/completions request body — a request value overrides whatever
+    # registry/config default launched the server (see the priority note on
+    # the sampling params above). Exposed via /v1/models so a chatbot app can
+    # discover which knobs it's allowed to tweak per-request for a given
+    # model, and what the current server-side default is.
+    REQUEST_TUNABLE_PARAMS = {
+        "temperature", "top_p", "top_k", "min_p",
+        "presence_penalty", "repeat_penalty",
+        "reasoning_effort", "reasoning",
     }
 
     def build_args(
@@ -289,6 +311,9 @@ class RerankServerBackend(LlamaServerBackend):
     name = "rerank-server"
     binary_name = "llama-server"
     modalities = {RERANK}
+    # Rerank doesn't serve /v1/chat/completions, so none of the inherited
+    # sampling/reasoning knobs are request-tunable here.
+    REQUEST_TUNABLE_PARAMS: set[str] = set()
 
     def build_args(
         self,
@@ -328,6 +353,9 @@ class EmbeddingServerBackend(LlamaServerBackend):
     name = "embedding-server"
     binary_name = "llama-server"
     modalities = {EMBEDDING}
+    # Embedding doesn't serve /v1/chat/completions, so none of the inherited
+    # sampling/reasoning knobs are request-tunable here.
+    REQUEST_TUNABLE_PARAMS: set[str] = set()
 
     def build_args(
         self,
