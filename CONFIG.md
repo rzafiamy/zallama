@@ -98,6 +98,40 @@ incoming model over budget instead, the same fallback used when every loaded
 model is pinned. See
 [docs/vram-planning.md](docs/vram-planning.md) for a full worked example.
 
+### `evict_group_mem_budgets` — capping a group's own memory, independent of global slack
+
+`max_loaded_models` and `mem_budget_gb` only pressure eviction once the
+**global** count/budget is exceeded. That leaves a gap: if those globals were
+sized assuming, say, two `primary` models resident at once, then whenever only
+one is actually loaded there's global slack left over — enough for *several*
+`services` models (ASR, embedding, autocomplete, ...) to load side by side
+without any of them ever pressuring the others out, even though they share an
+`evict_group`. Sharing a group only says *who's allowed to evict whom* — it
+doesn't by itself cap *how much* of them can be resident together.
+
+`config.yaml`'s `llama_server.evict_group_mem_budgets` closes that gap with a
+per-group memory budget that's checked regardless of global slack:
+
+```yaml
+llama_server:
+  evict_group_mem_budgets:
+    services: 1.5   # ASR + embedding + autocomplete share 1.5 GB between them
+```
+
+This is a **memory** cap, not an instance-count cap — deliberately: capping
+the *count* would block a second small model from loading even when VRAM is
+sitting idle, which isn't the goal. With a budget instead, two small models
+are free to coexist for as long as their combined `mem_gb` fits inside it;
+eviction of the group's LRU member only fires once a new arrival would
+actually push the group's own total over its own budget — even if
+`max_loaded_models` and `mem_budget_gb` are nowhere near their limits — while
+`primary` stays completely unaffected (group-scoped eviction still never
+crosses into it). A group with no entry here is uncapped except by the two
+global knobs, same as before this option existed. As with the global budget,
+it's only meaningful once the group's members carry *measured* `mem_gb`
+values — see [Why the default cost estimate is
+wrong](docs/vram-planning.md#why-the-default-cost-estimate-is-wrong).
+
 ---
 
 ## `text` (backend: `llama-server`)
@@ -165,6 +199,16 @@ Same `LlamaServerBackend` param tables as `text` above (it subclasses it), plus
 `--embedding` is always forced on — you don't need to set the `embedding` flag
 yourself. Use `modality: embedding` rather than the legacy `embedding: true`
 param on a `text` entry.
+
+`ctx_size` is not the per-request cap here: embedding is non-causal, so each
+input must fit in a single `ubatch_size` (llama.cpp requires `ctx_size >=
+ubatch_size`, but `ctx_size` can be much larger without raising the actual
+per-call limit). Leaving `batch_size`/`ubatch_size` at the llama.cpp default
+(2048/512) silently truncates any input over 512 tokens even if `ctx_size` is
+set to the model's full native context. Set `batch_size`/`ubatch_size`
+explicitly to your largest expected chunk length, and keep `ctx_size` aligned
+to the same figure (rather than the model's advertised max) so the config
+isn't promising a capacity it can't actually serve per call.
 
 ## `rerank` (backend: `rerank-server`)
 

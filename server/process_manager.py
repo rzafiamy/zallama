@@ -90,6 +90,22 @@ class ProcessManager:
         self._max_loaded: int = ls.get("max_loaded_models", 0)  # 0 = unlimited
         self._mem_budget_gb: float = float(ls.get("mem_budget_gb", 0))  # 0 = unlimited
         self._mem_init_gb: float = float(ls.get("mem_init_gb", 2))      # fallback cost
+        # Per-evict_group memory budget (GB), e.g. {"services": 1.5} — mirrors
+        # mem_budget_gb but scoped to one group, so ASR/embedding/autocomplete
+        # (or whatever shares "services") can freely coexist as long as their
+        # combined mem_gb fits the group's own budget, and only evict their LRU
+        # member once a new arrival would push the group over it. This is
+        # deliberately a memory cap, not an instance-count cap: capping by count
+        # would block a second small model from loading even when VRAM is
+        # plentiful, which isn't the goal — the goal is just to stop the group
+        # from growing past what its budget allows. It's checked independent of
+        # the global max_loaded_models/mem_budget_gb, which only pressure
+        # eviction once the *global* count/budget is hit — leaving slack for
+        # several same-group models to coexist unchecked whenever fewer
+        # "primary" models are resident than the global cap assumes.
+        self._group_mem_budgets: dict[str, float] = {
+            k: float(v) for k, v in (ls.get("evict_group_mem_budgets") or {}).items()
+        }
 
     # -----------------------------------------------------------------------
     # Public API
@@ -187,7 +203,9 @@ class ProcessManager:
                     del self._instances[model_name]
 
             incoming_cost = self._estimate_cost(entry, model_path)
-            has_capacity_limit = self._max_loaded > 0 or self._mem_budget_gb > 0
+            incoming_group = self.evict_group_of(entry)
+            has_group_budget = incoming_group is not None and incoming_group in self._group_mem_budgets
+            has_capacity_limit = self._max_loaded > 0 or self._mem_budget_gb > 0 or has_group_budget
 
             if has_capacity_limit:
                 # Keep the reservation from capacity check through registration.
@@ -403,6 +421,17 @@ class ProcessManager:
 
         Caller holds the global lock. Count budget: keep loaded count below
         max_loaded. Memory budget: keep loaded + incoming within mem_budget_gb.
+        Group budget: keep the incoming model's own evict_group's *own* mem_gb
+        total (not the global total) within its configured
+        `evict_group_mem_budgets` entry, if any — checked regardless of the
+        global count/budget, so e.g. a 1.5GB "services" budget is enforced even
+        when max_loaded_models has slack (only one "primary" model loaded,
+        leaving multiple global slots free that would otherwise let several
+        "services" models coexist without ever being pressured to evict each
+        other). This is a memory cap, not an instance-count cap: two small
+        models that both fit the group's budget are free to coexist — eviction
+        only fires once an arrival would actually push the group's own total
+        over its own budget, never just because a second one showed up.
         Eviction always targets the least-recently-used instance first. Victims
         are removed here but killed by the caller after releasing the lock.
 
@@ -414,6 +443,13 @@ class ProcessManager:
         """
         evicted: list[ModelInstance] = []
         incoming_group = self.evict_group_of(entry)
+        group_budget = self._group_mem_budgets.get(incoming_group) if incoming_group is not None else None
+
+        def _group_mem_gb() -> float:
+            return sum(
+                inst.mem_gb for inst in self._instances.values()
+                if self.evict_group_of(inst.entry) == incoming_group
+            )
 
         def over_count() -> bool:
             return self._max_loaded > 0 and len(self._instances) >= self._max_loaded
@@ -423,6 +459,9 @@ class ProcessManager:
                 self._mem_budget_gb > 0
                 and (self._loaded_mem_gb() + incoming_cost) > self._mem_budget_gb
             )
+
+        def over_group() -> bool:
+            return group_budget is not None and (_group_mem_gb() + incoming_cost) > group_budget
 
         def next_victim() -> str | None:
             # LRU is first; skip pinned models — they are never evicted, even
@@ -437,7 +476,7 @@ class ProcessManager:
                 return name
             return None
 
-        while self._instances and (over_count() or over_mem()):
+        while self._instances and (over_count() or over_mem() or over_group()):
             victim_name = next_victim()
             if victim_name is None:
                 reason = (
@@ -451,7 +490,7 @@ class ProcessManager:
                 )
                 break
             victim = self._instances.pop(victim_name)
-            reason = "count" if over_count() else "memory"
+            reason = "count" if over_count() else ("memory" if over_mem() else f"group '{incoming_group}' budget {group_budget}GB")
             logger.info(
                 f"Capacity ({reason}) reached — evicting LRU model "
                 f"'{victim_name}' ({victim.mem_gb:.1f}GB) to make room "

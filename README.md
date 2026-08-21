@@ -45,6 +45,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Memory-Aware Eviction](#-memory-aware-eviction)
 - [Fitting Your Models on One GPU](docs/vram-planning.md)
 - [Doubling Decode Speed with MTP](docs/mtp-speculative-decoding.md)
+- [What Qwen3-0.6B Can Actually Do in an Agentic Client](docs/qwen3-0.6b-agentic.md)
 - [Model Tuning Log](docs/tuning-log.md)
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)

@@ -5,6 +5,25 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-08-21
+
+### Added
+- `llama_server.evict_group_mem_budgets` config: a per-`evict_group` memory budget (GB), enforced
+  independent of the two global knobs. `max_loaded_models`/`mem_budget_gb` only pressure eviction
+  once the *global* count/budget is exceeded, which leaves a gap — while there's global slack
+  (e.g. only one `primary` model loaded of the two the cap was sized for), several models sharing
+  an `evict_group` (ASR, embedding, autocomplete, ...) can stay resident together without ever
+  evicting each other. This is a memory cap, not an instance-count cap: two small models are free
+  to coexist as long as their combined `mem_gb` fits the group's own budget; eviction of the
+  group's LRU member only fires once an arrival would actually push the group's own total over
+  its own budget. See [CONFIG.md](CONFIG.md#evict_group_mem_budgets--capping-a-groups-own-memory-independent-of-global-slack).
+- [docs/qwen3-0.6b-agentic.md](docs/qwen3-0.6b-agentic.md): measured what `qwen3-0.6b-q8_0` can
+  do as a tool-calling agent (not just zechat autocompletion) — parallel tool calls, tool-result
+  synthesis, and distractor-tool selection all work well at ~440 tok/s decode, but it collapses a
+  sequential tool dependency into one turn with a hallucinated intermediate argument instead of
+  waiting for the real result, and the registered `ctx_size: 1024` is too small for real tool
+  schemas.
+
 ## [1.11.0] - 2026-08-16
 
 ### Added

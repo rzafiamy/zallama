@@ -33,6 +33,21 @@ llama_server:
   mem_budget_gb: 0     # Memory budget (GB); evicts LRU to fit a model's mem_gb (0 = unlimited)
   mem_init_gb: 2       # Fallback per-model cost when mem_gb is undeclared & file size unknown
 
+  # Per evict_group memory budget (GB), on top of the two global knobs above.
+  # max_loaded_models/mem_budget_gb only pressure eviction once the GLOBAL
+  # count/budget is exceeded — while there's global slack (e.g. only one
+  # "primary" model loaded out of the two the cap was sized for), several
+  # models sharing a group can stay resident together without ever evicting
+  # each other. This is a memory cap, not an instance-count cap: two small
+  # models are free to coexist as long as their combined mem_gb fits the
+  # group's own budget — eviction only fires once an arrival would actually
+  # push the group over it, never just because a second one showed up.
+  # `services: 1.5` lets ASR/embedding/rerank/tts (or whatever else shares
+  # "services") share up to 1.5 GB between themselves, evicting their own LRU
+  # member as needed to stay under it. A group with no entry here is uncapped
+  # except by the two global knobs.
+  evict_group_mem_budgets: {}
+
   # Default parameters passed to every llama-server instance.
   # Can be overridden per-model in registry.yaml.
   default_params:
