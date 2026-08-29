@@ -5,6 +5,30 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-08-29
+
+### Added
+- `llama_server.evict_drain_timeout` config (default 30s): when eviction has to reclaim a
+  backend that still has requests in flight, it now waits up to this many seconds for them to
+  finish before killing the process, instead of cutting the response off mid-stream. Eviction
+  prefers a victim with nothing in flight and only waits when the sole eligible victim is busy,
+  so the common case is unaffected. Set to `0` for the old evict-immediately behavior. See
+  [CONFIG.md](CONFIG.md#evict_drain_timeout--dont-kill-a-backend-mid-response) and
+  [docs/vram-planning.md](docs/vram-planning.md#alternation-thrash-two-big-models-that-dont-fit-together).
+
+### Fixed
+- CORS behind a reverse proxy with `api_key` set: browser preflight (`OPTIONS`) requests no longer
+  hit the API-key check (they never carry an `Authorization` header), and the CORS middleware now
+  wraps the API-key middleware so even a `401` response carries `Access-Control-Allow-Origin`.
+  Previously any non-simple cross-origin request (e.g. a JSON `POST` to `/v1/chat/completions` from
+  a browser app) was blocked with a misleading "CORS error" instead of reaching the backend.
+- Proxied requests (`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/rerank`,
+  `/v1/audio/*`, `/v1/images/generations`, zvec embed/rerank) are now tracked as in-flight
+  against their backend for the whole response, streaming included. Two models alternating faster
+  than they serve (a request for B landing while A is mid-stream) no longer `502`s the in-flight
+  request when its backend is evicted; idle-sweep also skips a backend still serving a generation
+  longer than `idle_timeout`.
+
 ## [1.12.0] - 2026-08-21
 
 ### Added
@@ -409,7 +433,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/rzafiamy/zallama/compare/v1.12.0...v1.13.0
 [1.6.0]: https://github.com/rzafiamy/zallama/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/rzafiamy/zallama/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/rzafiamy/zallama/compare/v1.4.0...v1.5.0

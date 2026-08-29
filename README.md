@@ -1009,6 +1009,7 @@ Additional layers worth adding:
 | Models keep getting unloaded | Increase `idle_timeout`, `max_loaded_models`, or `mem_budget_gb`. |
 | `400` "modality ... cannot serve" | You called an endpoint the model's `modality` doesn't support (e.g. a vision-only flow on the wrong route). |
 | `401 Invalid or missing API key` | `api_key` is set — pass `Authorization: Bearer <key>`. |
+| Browser app gets a CORS error (works from curl/Postman) | If **nginx/Caddy adds its own `Access-Control-*` headers**, remove them — Zallama already sends `Access-Control-Allow-Origin: *`, and duplicate headers make Firefox/Safari reject the response. Don't add CORS handling at the proxy; just `proxy_pass`. Zallama's own preflight (`OPTIONS`) and `401` responses carry CORS headers as of the fix in v1.13.0. |
 | systemd service missing after install | `install.sh` only installs it as root — run `sudo bash install.sh` then `sudo systemctl enable --now zallama`. |
 | `error: externally-managed-environment` from pip | PEP 668 — don't `pip install` system-wide. Re-run `sudo bash install.sh` (it uses `.venv`). If venv creation fails: `sudo apt install python3-venv python3-full`. |
 | `Import error: No module named 'fastapi'` on `serve` | The `.venv` is missing or incomplete — re-run `sudo bash install.sh`. |

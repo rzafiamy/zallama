@@ -48,6 +48,14 @@ llama_server:
   # except by the two global knobs.
   evict_group_mem_budgets: {}
 
+  # When eviction has to reclaim a backend that still has requests in flight
+  # (two models alternating faster than they serve, a request for B landing
+  # while A is mid-stream), wait this many seconds for those requests to finish
+  # before killing it — so a response isn't cut off / 502'd mid-stream. The
+  # wait only happens when the LRU victim is actually busy AND no idle victim
+  # exists; 0 disables it (evict immediately, old behavior).
+  evict_drain_timeout: 30
+
   # Default parameters passed to every llama-server instance.
   # Can be overridden per-model in registry.yaml.
   default_params:

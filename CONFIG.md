@@ -134,6 +134,32 @@ wrong](docs/vram-planning.md#why-the-default-cost-estimate-is-wrong).
 
 ---
 
+### `evict_drain_timeout` — don't kill a backend mid-response
+
+When two models don't fit together and clients alternate between them, every
+request evicts the other model and respawns its backend. On its own that's just
+slow. The sharp edge is a request landing for model B *while model A is still
+streaming a response* — eviction would kill A's backend out from under the
+in-flight proxy, and A's client gets a truncated stream / `502`.
+
+Zallama tracks in-flight requests per backend. Eviction prefers a victim with
+nothing in flight; when the only eligible victim is busy, it waits up to
+`evict_drain_timeout` seconds for that backend to go idle before killing it:
+
+```yaml
+llama_server:
+  evict_drain_timeout: 30   # seconds; 0 = evict immediately (old behavior)
+```
+
+The wait is bounded — if requests keep the backend busy past the timeout it's
+evicted anyway, since an unbounded stall is worse. Idle-sweep (`idle_timeout`)
+also skips a backend that's still serving, so a generation longer than
+`idle_timeout` won't be cut off. None of this makes two oversized models
+coexist — the real fix for alternation thrash is to route traffic to **one**
+model, or give it enough `mem_budget_gb` headroom that both stay resident.
+
+---
+
 ## `text` (backend: `llama-server`)
 
 Also covers vision (add an `mmproj` artifact) and any entry with
@@ -317,5 +343,5 @@ Not part of the registry, but the other half of the merge chain — see
 from the `text`/`embedding`/`rerank` tables above set there applies to every
 `llama-server`-family model unless overridden by that model's own `params`.
 `llama_server.mem_budget_gb`, `.max_loaded_models`, `.idle_timeout`,
-`.port_start`, `.startup_timeout` control process lifecycle, not per-model
-launch flags, and have no `params` equivalent.
+`.port_start`, `.startup_timeout`, `.evict_drain_timeout` control process
+lifecycle, not per-model launch flags, and have no `params` equivalent.

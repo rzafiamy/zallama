@@ -128,16 +128,6 @@ def create_app(cfg: dict) -> FastAPI:
     )
     app.state.cfg = cfg
 
-    # CORS — allow all origins for local UI use. Note: credentials cannot be
-    # combined with wildcard origins per the CORS spec, so we leave them off.
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
     # Optional API-key auth, required everywhere except the bare health check
     # and landing page, so a network-facing deployment leaks nothing (not even
     # the API schema) without the key. Preferred form: zallama.api_key_sha256
@@ -170,6 +160,11 @@ def create_app(cfg: dict) -> FastAPI:
 
         @app.middleware("http")
         async def require_api_key(request: Request, call_next):
+            # CORS preflight requests never carry an Authorization header, so
+            # they must pass through untouched or the browser blocks every
+            # non-simple cross-origin request (e.g. JSON POST to /v1/*).
+            if request.method == "OPTIONS":
+                return await call_next(request)
             path = request.url.path
             if path == "/" or path.startswith(public_prefixes):
                 return await call_next(request)
@@ -186,6 +181,19 @@ def create_app(cfg: dict) -> FastAPI:
                     status_code=401,
                     content={"detail": "API key expired — issue a new one with `zallama apikey`"})
             return await call_next(request)
+
+    # CORS — allow all origins for local UI use. Note: credentials cannot be
+    # combined with wildcard origins per the CORS spec, so we leave them off.
+    # Added last so it wraps the API-key middleware: a 401 response then still
+    # carries Access-Control-Allow-Origin and the browser surfaces the real
+    # status instead of a misleading "CORS error".
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Routes
     app.include_router(health_routes.router)

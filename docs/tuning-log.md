@@ -25,6 +25,7 @@ flat index across all of them.
 | Qwen3.8-27B-Q4_K_M | qwen35 (hybrid) | RTX 4090 24 GiB | `ubatch_size`: 512 / 1024 / 2048 (prefill) | 2493 / 2491 / 2455 tok/s prefill | up to +0.8 GiB | 2026-08-14 | Prefill already compute-bound; knob is inert here. |
 | NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0 | nemotron_h_moe (hybrid MoE) | RTX 4090 24 GiB | `ctx_size 444416`, `cache_type_k/v q8_0`, `spec_type draft-mtp` (nextn head baked into the main GGUF) | **332.4** greedy | 21.3 GiB | 2026-08-15 | 80–92% draft acceptance at temp 0. Only 7 of 53 blocks cache anything (rest is Mamba/SSM) and KV-heads = 2, so the KV cache costs ~4 KiB/token — `calibrate` (after the fix below) recommended the max the trained ctx allows. A same-repo `mtp-*.gguf` sibling turned out to be a redundant copy of the already-embedded nextn block, not a separate draft model — checked its tensor list before wiring `--model-draft`. |
 | Muse-Glimmer-30B-UD-Q4_K_XL | muse-glimmer (dense, SWA) | RTX 4090 24 GiB | `ctx_size 33792`, `cache_type_k/v q8_0`, vision mmproj (+3.6 GiB) | 52.8 | 18.8 GiB | 2026-08-15 | Dense model, no MTP head to exploit. `calibrate` doesn't parse this arch's `attention.sliding_window_pattern` (published as a period int, not Gemma3's per-layer bool array) so it prices every layer as full-context — the 33792 recommendation is conservative; real max ctx is likely well above it. Not fixed yet, see below. |
+| gemma-4-31B-it-Q4_K_M | gemma4 (dense, SWA 50/60 layers) | RTX 4090 24 GiB | `ctx_size 81920`, `cache_type_k/v q8_0`, `no_mmproj_offload`, `reasoning true`, no MTP (none baked in) | 42.2 (shallow, no spec) | 22.2 GiB solo / 22.9 GiB with granite embedding co-resident | 2026-08-23 | Dense 31B, no `nextn` tensors in the GGUF (checked both the tensor list and the load log — no "unused tensor" warnings), so `spec_type: draft-mtp` isn't available. `gemma-4-E4B-it-Q6_K` shares its exact 262144-token vocab (verified byte-for-byte) so it's tokenizer-compatible as an external `draft-simple` model, but at 7.1 GiB it doesn't fit alongside the 31B's ~18.2 GiB (weights+mmproj) floor on one 24 GiB card without gutting ctx_size further — not wired up. `calibrate` badly under-recommends here (ctx 2048, false "weights exceed usable VRAM" alarm) — see gap below. `no_mmproj_offload` (the Qwen3.8-27B trick) was required: without it, 65536 already left only 869 MiB free and evicted the embedding service; with it, 81920 leaves ~1.3 GiB solo, ~0.6 GiB with granite co-resident — tight but loads and serves without crashing, same risk tier accepted for Qwen3.8-27B's 131072 config. 98304 (still with `no_mmproj_offload`) OOM's the headroom down to 509 MiB solo — one step too far, reverted. |
 
 **2026-08-15 — two calibrate/registry gaps found registering the above:**
 - `_gguf_arch_dims` (`zallama` CLI) assumed `attention.head_count_kv` is a scalar.
@@ -47,6 +48,22 @@ flat index across all of them.
 - Still open: teach `calibrate` the scalar-period form of
   `attention.sliding_window_pattern` (Muse-Glimmer's case above) the way it
   already handles Gemma3's per-layer boolean array.
+
+**2026-08-23 — third calibrate gap, on `gemma4` (Gemma-4-31B):** this arch
+*does* publish the per-layer boolean `sliding_window_pattern` `calibrate`
+knows how to read, but it still prices SWA layers using the full-attention
+`attention.key_length`/`value_length` (512) instead of the
+`_swa`-suffixed pair (`key_length_swa`/`value_length_swa` = 256) that this
+GGUF also carries. Effect: it estimated the 50 SWA-layer cache at 2.3 GiB
+where hand math with the correct dims gives ~0.85 GiB (f16) — badly
+oversized — on top of a separate false-positive "weights + reserve exceed
+usable VRAM" alarm (18.2 GiB actually fits fine under the 21.1 GiB it
+computed as usable). Net effect: recommended `ctx_size: 2048` against a
+`ctx_size: 81920` that's actually stable and measured. Don't trust
+`calibrate`'s ctx number on `gemma4` SWA models — do the per-layer byte math
+by hand (same method as the MTP doc's hybrid-arch formula, just swap in
+`key_length_swa`/`value_length_swa` for the SWA-tagged layers) and verify
+with a real `zallama load` + `nvidia-smi`. Not fixed yet.
 
 ## Adding a row
 

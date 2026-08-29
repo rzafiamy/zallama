@@ -44,11 +44,12 @@ async def _embed(request: Request, pm, registry, model: str, texts: list[str]) -
     inst = await _resolve_instance(model, pm, registry, endpoint="embeddings")
     inst.touch()
     upstream_url = f"{inst.base_url}/v1/embeddings"
-    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-        try:
-            resp = await client.post(upstream_url, json={"model": model, "input": texts})
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"embedding error: {e}")
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, json={"model": model, "input": texts})
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"embedding error: {e}")
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text[:300])
     data = resp.json().get("data", [])
@@ -218,11 +219,12 @@ async def _rerank(request, pm, registry, model, query, hits, top_k):
     inst.touch()
     upstream_url = f"{inst.base_url}/v1/rerank"
     payload = {"model": model, "query": query, "documents": [h.text for h in hits]}
-    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-        try:
-            resp = await client.post(upstream_url, json=payload)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"rerank error: {e}")
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, json=payload)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"rerank error: {e}")
     if resp.status_code != 200:
         # Reranking is best-effort; fall back to the vector-similarity order.
         return hits[:top_k]

@@ -54,6 +54,39 @@ Capacity reached but all loaded models are pinned — admitting incoming 23.4GB 
 The budget is a scheduling hint, not a hard gate. It will not save you from an
 OOM — that is what accurate `mem_gb` values are for.
 
+### Alternation thrash: two big models that don't fit together
+
+If two `primary` models (two 27B text models, say) each cost more than half your
+budget, they can never be co-resident. When clients alternate between them —
+even just a chatbot UI with a model switcher, or two agents on the same box —
+**every request evicts the other model and cold-reloads a backend**: a 4–8 s
+respawn, a burst of `503`s, and the whole cycle repeats on the next request to
+the other model. The daemon itself never restarts (`systemctl status zallama`
+stays `active (running)`), but `journalctl -u zallama` fills with:
+
+```
+Capacity (group 'primary' ...) reached — evicting LRU model 'A' (19.5GB) to make room for incoming 21.0GB
+Spawning llama-server for 'B' ...
+Capacity (group 'primary' ...) reached — evicting LRU model 'B' (21.0GB) to make room for incoming 19.5GB
+Spawning llama-server for 'A' ...
+```
+
+There is no config that makes two oversized models coexist. The fix is one of:
+
+- **Route traffic to one model.** Pick the winner and point every client at it.
+- **Shrink one** (lower `ctx_size`, quantize KV, offload MoE experts — see
+  [Making a model fit](#making-a-model-fit)) until both fit under `mem_budget_gb`
+  at once, then raise the budget so neither evicts the other.
+- **Accept the reload cost** if the alternation is rare (a few times a day).
+
+What Zallama *does* do automatically: `evict_drain_timeout` (default 30 s) stops
+eviction from killing a backend that's still streaming a response. Eviction
+prefers an idle victim, and when the only candidate is busy it waits for that
+backend to go idle — up to the timeout — before killing it, so an alternating
+request no longer truncates the in-flight one with a `502`. It does not stop the
+thrash, only its sharpest symptom. Set it to `0` to restore the old
+evict-immediately behavior.
+
 ### Editing `pinned` on a model that's already running does nothing yet
 
 `_make_room_locked()` checks `inst.entry["pinned"]` on the **already-running

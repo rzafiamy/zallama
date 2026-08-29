@@ -84,17 +84,24 @@ async def _resolve_instance(model_name: str, pm, registry, endpoint: str | None 
     return inst
 
 
-async def _stream_proxy(upstream_url: str, body: dict) -> AsyncIterator[bytes]:
-    """Stream SSE from llama-server back to client."""
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", upstream_url, json=body) as resp:
-            if resp.status_code != 200:
-                error_body = await resp.aread()
-                yield error_body
-                return
-            async for chunk in resp.aiter_bytes():
-                if chunk:
-                    yield chunk
+async def _stream_proxy(pm, inst, upstream_url: str, body: dict) -> AsyncIterator[bytes]:
+    """Stream SSE from llama-server back to client.
+
+    The whole stream runs inside `pm.serving(inst)` so the backend isn't evicted
+    out from under a response that's still being read (which would 502 the
+    client mid-stream). The scope has to live here, in the generator, not in the
+    handler — the handler returns as soon as StreamingResponse is constructed.
+    """
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("POST", upstream_url, json=body) as resp:
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    yield error_body
+                    return
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
 
 
 def _is_wav(data: bytes) -> bool:
@@ -253,7 +260,7 @@ async def chat_completions(
 
     if stream:
         return StreamingResponse(
-            _stream_proxy(upstream_url, body),
+            _stream_proxy(pm, inst, upstream_url, body),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -261,11 +268,12 @@ async def chat_completions(
             },
         )
     else:
-        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-            try:
-                resp = await client.post(upstream_url, json=body)
-            except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
+        async with pm.serving(inst):
+            async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+                try:
+                    resp = await client.post(upstream_url, json=body)
+                except httpx.RequestError as e:
+                    raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
         return JSONResponse(content=resp.json(), status_code=resp.status_code)
 
 
@@ -288,16 +296,17 @@ async def completions(
 
     if stream:
         return StreamingResponse(
-            _stream_proxy(upstream_url, body),
+            _stream_proxy(pm, inst, upstream_url, body),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     else:
-        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-            try:
-                resp = await client.post(upstream_url, json=body)
-            except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
+        async with pm.serving(inst):
+            async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+                try:
+                    resp = await client.post(upstream_url, json=body)
+                except httpx.RequestError as e:
+                    raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
         return JSONResponse(content=resp.json(), status_code=resp.status_code)
 
 
@@ -316,11 +325,12 @@ async def embeddings(
     inst.touch()
 
     upstream_url = f"{inst.base_url}/v1/embeddings"
-    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-        try:
-            resp = await client.post(upstream_url, json=body)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, json=body)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
     return JSONResponse(content=resp.json(), status_code=resp.status_code)
 
 
@@ -366,11 +376,12 @@ async def rerank(
     if "top_n" in body:
         upstream_body["top_n"] = body["top_n"]
 
-    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-        try:
-            resp = await client.post(upstream_url, json=upstream_body)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, json=upstream_body)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
 
     if resp.status_code != 200:
         return JSONResponse(content=resp.json(), status_code=resp.status_code)
@@ -445,11 +456,12 @@ async def audio_transcriptions(
             data[key] = value
 
     upstream_url = f"{inst.base_url}/v1/audio/transcriptions"
-    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-        try:
-            resp = await client.post(upstream_url, data=data, files=files)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"parakeet-server error: {e}")
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, data=data, files=files)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"parakeet-server error: {e}")
     # parakeet-server honours response_format (json / text / verbose_json), so
     # pass the upstream body and content type straight back to the client.
     return Response(
@@ -529,11 +541,12 @@ async def audio_speech(
             body.pop("voice", None)
 
     upstream_url = f"{inst.base_url}/v1/audio/speech"
-    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-        try:
-            resp = await client.post(upstream_url, json=body)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"kokoro-server error: {e}")
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, json=body)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"kokoro-server error: {e}")
     # kokoro-server returns audio/wav on success, or a JSON error body otherwise;
     # pass the upstream content and content type straight back to the client.
     return Response(
@@ -574,11 +587,12 @@ async def images_generations(
             body[key] = params[key]
 
     upstream_url = f"{inst.base_url}/v1/images/generations"
-    async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
-        try:
-            resp = await client.post(upstream_url, json=body)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"sd-server error: {e}")
+    async with pm.serving(inst):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, json=body)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"sd-server error: {e}")
     # An upstream failure may come back as plain text (or an empty body), so
     # don't assume JSON — surface whatever was returned rather than 500-ing on
     # a decode error.

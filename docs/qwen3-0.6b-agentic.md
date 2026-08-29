@@ -85,7 +85,33 @@ tokens/sec it's cheap enough to call speculatively. It should **not** be
 trusted to plan or sequence a multi-step tool chain on its own; a harness
 needs to feed back only one dependent call at a time and treat any same-turn
 call whose arguments look derived from another pending call's result as
-invalid. The model stays registered at `ctx_size: 1024` for its actual job
-(zechat autocompletion); an agentic client should register/load it as a
-separate entry (or reload with a bumped `ctx_size`) rather than assuming the
-1024-token autocomplete config is enough headroom for tool schemas.
+invalid.
+
+## 2026-08-21 update — registered ctx_size bumped to 5000
+
+Rather than adding a separate registry entry, the shared `qwen3-0.6b-q8_0`
+entry itself was moved from `ctx_size: 1024` to `5000`, so both zechat
+autocompletion and agentic tool-calling now use the same instance. Verified
+live: a padded request (1592 prompt tokens, tool schemas included) that
+would have been rejected outright at the old 1024 ceiling now completes
+normally.
+
+`ctx_size: 8192` was tried first (the floor suggested above) but reverted:
+it pushed the model's real VRAM from 1.1 GB (ctx 1024) to 1.6 GB, and with
+`Qwen3.8-27B-Q4_K_M` and `granite-embedding-311m-multilingual-r2-f16`
+co-resident (the `services` group's normal pairing), a concurrent real-load
+stress test (300-token completion + an embedding call, fired together) left
+only 247 MiB free on the 24.56 GB card — survived, but too tight for
+comfort. `ctx_size: 5000` is comfortably above the ~1.6k-token real prompts
+seen in this test and the padded-request check above, and dropped real VRAM
+to 1.4 GB; the same concurrent stress test then held 435 MiB free — nearly
+double the margin, still bounded (not a large cushion — avoid adding a
+fourth big concurrent load in this state).
+
+This also required raising `evict_group_mem_budgets.services` from 2.0 GB
+to 2.5 GB in `~/.zallama/config.yaml` (daemon-startup-only, needs a
+`systemctl restart zallama`) — at the bumped ctx_size, `qwen3-0.6b-q8_0`
+alone no longer fit in the same 2.0 GB group budget alongside
+`granite-embedding-311m-multilingual-r2-f16`, a pairing that worked before
+this change. See config.yaml's `evict_group_mem_budgets` comment for the
+full pairwise math (which pairs fit, which stay blocked on purpose).

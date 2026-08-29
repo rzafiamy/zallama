@@ -21,6 +21,7 @@ import signal
 import socket
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -55,9 +56,44 @@ class ModelInstance:
         self.started_at = time.time()
         self.last_used = time.time()
         self.base_url = f"http://127.0.0.1:{port}"
+        # In-flight request accounting. `active` is the number of proxied
+        # requests currently reading from this backend; `_idle_event` is set
+        # whenever `active` drops to 0. Eviction consults these so a backend is
+        # not killed out from under a request being streamed through it (which
+        # would 502 the client mid-response), and idle-sweep skips a backend
+        # that is still serving a long generation.
+        self.active = 0
+        self._idle_event = asyncio.Event()
+        self._idle_event.set()
 
     def touch(self):
         self.last_used = time.time()
+
+    def acquire(self):
+        """Mark one proxied request as in-flight against this backend."""
+        self.active += 1
+        self._idle_event.clear()
+        self.last_used = time.time()
+
+    def release(self):
+        """Release an in-flight request; wake eviction waiters when idle."""
+        self.active = max(0, self.active - 1)
+        self.last_used = time.time()
+        if self.active == 0:
+            self._idle_event.set()
+
+    async def wait_idle(self, timeout: float) -> bool:
+        """Block until no request is in-flight, or `timeout` seconds elapse.
+
+        Returns True if the backend went idle, False on timeout.
+        """
+        if self.active == 0:
+            return True
+        try:
+            await asyncio.wait_for(self._idle_event.wait(), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     def is_alive(self) -> bool:
         return self.process.returncode is None
@@ -90,6 +126,12 @@ class ProcessManager:
         self._max_loaded: int = ls.get("max_loaded_models", 0)  # 0 = unlimited
         self._mem_budget_gb: float = float(ls.get("mem_budget_gb", 0))  # 0 = unlimited
         self._mem_init_gb: float = float(ls.get("mem_init_gb", 2))      # fallback cost
+        # How long eviction waits for a victim backend's in-flight requests to
+        # finish before killing it anyway. 0 disables the wait (old behavior:
+        # evict immediately, 502-ing whatever was mid-flight). The wait only
+        # happens when the LRU victim is actually busy *and* no idle victim
+        # exists, so it does not slow the common case.
+        self._evict_drain_timeout: float = float(ls.get("evict_drain_timeout", 30))
         # Per-evict_group memory budget (GB), e.g. {"services": 1.5} — mirrors
         # mem_budget_gb but scoped to one group, so ASR/embedding/autocomplete
         # (or whatever shares "services") can freely coexist as long as their
@@ -117,6 +159,20 @@ class ProcessManager:
             lock = asyncio.Lock()
             self._model_locks[model_name] = lock
         return lock
+
+    @asynccontextmanager
+    async def serving(self, inst: ModelInstance):
+        """Scope a proxied request against `inst` so eviction won't kill the
+        backend while the request is still reading from it.
+
+        Routes wrap their upstream call in this; for streaming responses the
+        scope must span the generator's lifetime, not just the handler.
+        """
+        inst.acquire()
+        try:
+            yield inst
+        finally:
+            inst.release()
 
     @staticmethod
     def _is_pinned(entry: dict) -> bool:
@@ -215,7 +271,9 @@ class ProcessManager:
                     async with self._global_lock:
                         evicted = self._make_room_locked(incoming_cost, entry)
                     for victim in evicted:
-                        await self._kill_instance(victim)
+                        await self._kill_instance(
+                            victim, drain_timeout=self._evict_drain_timeout
+                        )
                     inst = await self._spawn(model_name, entry, model_path, incoming_cost)
                     async with self._global_lock:
                         self._instances[model_name] = inst
@@ -315,6 +373,7 @@ class ProcessManager:
             to_evict = [
                 name for name, inst in self._instances.items()
                 if not self._is_pinned(inst.entry)
+                and inst.active == 0
                 and (now - inst.last_used) > self._idle_timeout
             ]
             evicted = [self._instances.pop(name) for name in to_evict]
@@ -468,13 +527,22 @@ class ProcessManager:
             # under capacity pressure. If only pinned models remain, give up and
             # let the incoming model exceed the budget rather than killing a
             # warm-pinned instance.
+            #
+            # Among eligible victims, prefer one with no in-flight requests so a
+            # backend that is mid-response is only chosen when it is the sole
+            # candidate (and even then the caller drains it before killing).
+            busy_fallback: str | None = None
             for name, inst in self._instances.items():
                 if self._is_pinned(inst.entry):
                     continue
                 if incoming_group is not None and self.evict_group_of(inst.entry) != incoming_group:
                     continue
+                if inst.active > 0:
+                    if busy_fallback is None:
+                        busy_fallback = name
+                    continue
                 return name
-            return None
+            return busy_fallback
 
         while self._instances and (over_count() or over_mem() or over_group()):
             victim_name = next_victim()
@@ -610,8 +678,20 @@ class ProcessManager:
             f"{timeout:.0f}s. Check logs: {inst.log_file}"
         )
 
-    async def _kill_instance(self, inst: ModelInstance):
-        """Gracefully terminate a process group."""
+    async def _kill_instance(self, inst: ModelInstance, drain_timeout: float = 0.0):
+        """Gracefully terminate a process group.
+
+        When `drain_timeout` > 0 and the instance still has in-flight requests,
+        wait up to that many seconds for them to finish first, so eviction does
+        not cut a response off mid-stream. If they don't drain in time, evict
+        anyway — a bounded wait beats an unbounded stall.
+        """
+        if drain_timeout > 0 and inst.active > 0:
+            if not await inst.wait_idle(drain_timeout):
+                logger.warning(
+                    f"Evicting '{inst.name}' with {inst.active} in-flight "
+                    f"request(s) still active after {drain_timeout:.0f}s drain wait"
+                )
         try:
             if inst.process.returncode is None:
                 os.killpg(os.getpgid(inst.process.pid), signal.SIGTERM)
