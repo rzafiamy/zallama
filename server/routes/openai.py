@@ -556,6 +556,44 @@ async def audio_speech(
     )
 
 
+# sd-server's own /v1/images/generations honours `prompt` and `size` and
+# silently ignores every other generation knob — `steps` and `cfg_scale`
+# included — falling back to the CLI flags it was launched with, so a
+# per-request override looked accepted and did nothing. Its A1111-compatible
+# /sdapi/v1/txt2img route does honour them, so that is the dialect we speak
+# upstream; the OpenAI request and response shapes are preserved for clients.
+_TXT2IMG_KNOBS = {
+    "steps": "steps",
+    "cfg_scale": "cfg_scale",
+    "sampler": "sampler_name",
+    "scheduler": "scheduler",
+    "negative_prompt": "negative_prompt",
+    "seed": "seed",
+    "guidance": "guidance",
+    "eta": "eta",
+}
+
+
+def _txt2img_payload(body: dict) -> dict:
+    """Translate an OpenAI image request into sd-server's txt2img shape."""
+    payload: dict[str, Any] = {"prompt": body.get("prompt", "")}
+    size = body.get("size")
+    if isinstance(size, str) and "x" in size:
+        w, _, h = size.partition("x")
+        try:
+            payload["width"], payload["height"] = int(w), int(h)
+        except ValueError:
+            pass
+    for src, dst in _TXT2IMG_KNOBS.items():
+        value = body.get(src)
+        if value is not None and value != "":
+            payload[dst] = value
+    n = body.get("n")
+    if isinstance(n, int) and n > 1:
+        payload["batch_size"] = n
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # POST /v1/images/generations  (Image Generation via sd-server)
 # ---------------------------------------------------------------------------
@@ -586,11 +624,11 @@ async def images_generations(
         if key in params and key not in body:
             body[key] = params[key]
 
-    upstream_url = f"{inst.base_url}/v1/images/generations"
+    upstream_url = f"{inst.base_url}/sdapi/v1/txt2img"
     async with pm.serving(inst):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
-                resp = await client.post(upstream_url, json=body)
+                resp = await client.post(upstream_url, json=_txt2img_payload(body))
             except httpx.RequestError as e:
                 raise HTTPException(status_code=502, detail=f"sd-server error: {e}")
     # An upstream failure may come back as plain text (or an empty body), so
@@ -601,6 +639,16 @@ async def images_generations(
     except ValueError:
         content = {"error": {"message": resp.text or "sd-server returned a non-JSON response",
                              "type": "upstream_error"}}
+    else:
+        # txt2img answers {"images": [b64, ...], "info": ..., "parameters": ...};
+        # clients asked for the OpenAI shape. sd-server only ever returns base64
+        # (it has nowhere to host a URL), so `response_format: url` was already
+        # being answered with b64_json before this translation existed.
+        if isinstance(content, dict) and isinstance(content.get("images"), list):
+            content = {
+                "created": int(time.time()),
+                "data": [{"b64_json": img} for img in content["images"]],
+            }
     return JSONResponse(
         content=content,
         status_code=resp.status_code,

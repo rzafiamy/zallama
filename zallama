@@ -2884,9 +2884,9 @@ def _resolved_paths() -> dict:
 
 
 def cmd_generate(args: list[str]):
-    """Generate an image using a diffusion model: zallama generate <model> "<prompt>" [--output out.png] [--size 512x512] [--steps 20]"""
+    """Generate an image: zallama generate <model> "<prompt>" [--output out.png] [--size 512x512 | --width W --height H] [--steps N] [--cfg-scale F] [--negative-prompt "..."]"""
     if len(args) < 2:
-        _err("Usage: zallama generate <model-name> \"<prompt>\" [--output <file.png>] [--size 512x512] [--steps 20]")
+        _err("Usage: zallama generate <model-name> \"<prompt>\" [--output <file.png>] [--size 512x512] [--width W --height H] [--steps N] [--cfg-scale F] [--negative-prompt \"...\"]")
         _info("Example: zallama generate sd:1.5 \"a majestic mountain landscape at sunset\" --output mountain.png")
         sys.exit(1)
 
@@ -2902,31 +2902,58 @@ def cmd_generate(args: list[str]):
     cfg_scale = None
     negative_prompt = ""
 
+    # Every flag is matched explicitly and anything else is an error. Silently
+    # skipping unknown arguments made `--width 1024 --height 1024` (a plausible
+    # guess for `--size 1024x1024`) render a default-size image at default-size
+    # speed with no indication anything had been ignored.
+    width = height = None
+    known = ("--output", "--size", "--width", "--height", "--steps",
+             "--cfg-scale", "--negative-prompt")
     i = 2
     while i < len(args):
-        if args[i] == "--output" and i + 1 < len(args):
-            output_path = args[i+1]
-            i += 2
-        elif args[i] == "--size" and i + 1 < len(args):
-            size = args[i+1]
-            i += 2
-        elif args[i] == "--steps" and i + 1 < len(args):
+        flag = args[i]
+        if flag not in known:
+            _err(f"Unknown argument '{flag}' for `zallama generate`.")
+            _info(f"Valid flags: {', '.join(known)}")
+            sys.exit(1)
+        if i + 1 >= len(args):
+            _err(f"{flag} expects a value")
+            sys.exit(1)
+        value = args[i+1]
+        if flag == "--output":
+            output_path = value
+        elif flag == "--size":
+            size = value
+        elif flag in ("--width", "--height"):
             try:
-                steps = int(args[i+1])
+                if flag == "--width":
+                    width = int(value)
+                else:
+                    height = int(value)
             except ValueError:
-                pass
-            i += 2
-        elif args[i] == "--cfg-scale" and i + 1 < len(args):
+                _err(f"{flag} expects an integer, got '{value}'")
+                sys.exit(1)
+        elif flag == "--steps":
             try:
-                cfg_scale = float(args[i+1])
+                steps = int(value)
             except ValueError:
-                pass
-            i += 2
-        elif args[i] == "--negative-prompt" and i + 1 < len(args):
-            negative_prompt = args[i+1]
-            i += 2
-        else:
-            i += 1
+                _err(f"--steps expects an integer, got '{value}'")
+                sys.exit(1)
+        elif flag == "--cfg-scale":
+            try:
+                cfg_scale = float(value)
+            except ValueError:
+                _err(f"--cfg-scale expects a number, got '{value}'")
+                sys.exit(1)
+        elif flag == "--negative-prompt":
+            negative_prompt = value
+        i += 2
+
+    # --width/--height are accepted as a convenience and fold into --size, which
+    # is what the API takes.
+    if width is not None or height is not None:
+        cur_w, _, cur_h = size.partition("x")
+        size = f"{width or cur_w}x{height or cur_h}"
 
     payload = {
         "model": model,
@@ -3043,7 +3070,9 @@ def cmd_pull(args: list[str]):
             model = a
             i += 1
         else:
-            i += 1
+            _err(f"Unexpected argument '{a}' for `zallama pull`.")
+            _info("Usage: zallama pull <model-name-or-hf-path> [--type text|asr|tts|rerank]")
+            sys.exit(1)
 
     if not model:
         _err("Usage: zallama pull <model-name-or-hf-path> [--type text|asr|tts|rerank]")

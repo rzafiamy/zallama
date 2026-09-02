@@ -66,11 +66,24 @@ a warmup.
 
 Two things to take from that table.
 
-**`vae_tiling` is a memory trade, not a free one.** It was switched on to
-survive a VAE decode buffer that the README describes as ~6.6 GB on top of the
-weights. On this build it is worth **0.5 GiB** and costs **20 %** of the clock,
-so once the T5 swap freed room it was pure loss. Re-measure it before enabling
-it on a new model rather than assuming the old figure.
+**`vae_tiling` is a memory trade, not a free one — but measure the *peak*, not
+the resident size.** The VRAM column above is steady-state residency, where
+tiling is worth only 0.5 GiB and costs 20 % of the clock. That column hides the
+number that actually decides whether you OOM: the decode buffer is allocated
+*after* everything else is resident, and it scales with image area. Peak GPU
+usage during one 1024x1024 generation, measured with `nvidia-smi` polling:
+
+| | resident | **peak during decode** | s/image |
+|---|---|---|---|
+| `vae_tiling: false` | 11.9 GiB | **19.5 GiB** (+6.2) | 3.46 |
+| `vae_tiling: true` | 11.4 GiB | **13.4 GiB** (+1.5) | 4.14 |
+
+So the README's ~6.6 GB warning is right, and it applies at 1024x1024 — the
+untiled buffer is ~6.2 GiB here. With the whole card to itself Klein has room
+for it and tiling is pure loss; the moment anything else is resident, or the
+image gets larger, tiling is what keeps the last step from failing. **Re-measure
+at the resolution you actually serve**: at 512x512 the untiled buffer is only
+~2.7 GiB and the whole question is moot.
 
 **`vae_conv_direct` is a trap.** It buys the same 0.5 GiB as tiling and costs
 2.7× the wall time. `diffusion_conv_direct` is free either way (3.31 vs 3.32 s,
@@ -94,11 +107,47 @@ reach it. These are mapped as of v1.14.0 but not yet measured here:
 | Param | Why |
 |---|---|
 | `cache_mode` (`easycache`, `dbcache`, `taylorseer`, `spectrum`) | Reuses block activations across timesteps — usually the largest decode lever a diffusion model has. **Worth nothing at `steps: 4`**: there is no redundancy to skip. Test it on a 20-step model (`flux:dev`, `qwen-image:20b`). |
-| `eager_load` | sd-server answers its health check *before* the weights are resident — they load lazily on first use. `LOAD s` therefore reads 0.5 s while the real cost hides in the first generation. `eager_load` moves it back into startup, where the process manager's health check already waits. |
+| `eager_load` | **Measured 2026-09-02: apply it.** sd-server answers its health check *before* the weights are resident — they load lazily on first use, so `LOAD s` reads 0.5 s while ~2.3 s of `loading tensors` hides in the first generation (3.2 s cold vs 0.8 s warm at 512x512). `eager_load: true` moves it into startup, where the process manager's health check already waits: `zallama load` takes 2.7 s and the *first* image costs the same as every later one. Worth it on any model that gets evicted and respawned regularly. |
 | `max_vram` + `stream_layers` | Graph-cut segmented execution: run the graph in slices that fit a budget. A negative value auto-detects free VRAM sparing that many GiB, which is the principled way to co-exist with a text model instead of `offload_to_cpu`. |
 | `taesd` | Tiny autoencoder, a few MB, decodes far faster than the 335 MB VAE. Its main draw was avoiding tiling — less compelling now that tiling is off, but still the fastest decode path for previews. |
 | `hires` + `hires_scale` | Sample at 512 and upscale. Diffusion cost grows with latent area, so this is much cheaper than sampling natively at 1024. |
 | `tensor_type_rules` | Per-pattern load-time quantization, e.g. `^vae\.=f16,model\.=q8_0` — the alternative to the T5 swap when no quantized file exists. |
+
+## Step count is the only real speed knob on a distilled model
+
+Klein is already step-distilled, so there is no cache or LoRA left to win with
+(`cache_mode` needs redundancy across timesteps; a Turbo/Hyper LoRA re-distils a
+model that is already distilled). What remains is the step count itself, and it
+is close to linear — measured at 1024x1024, warm, `diffusion_fa: true`,
+`vae_tiling: false`, wall time end-to-end through `zallama generate`:
+
+| `steps` | s/image | quality |
+|---|---|---|
+| 1 | **1.53** | usable; softer background, noisier texture, looser anatomy |
+| 2 | **2.15** | very close to 4 — the sweet spot |
+| 4 (default) | 3.44 | reference |
+
+That is ~0.65 s per step plus ~0.85 s fixed (VAE decode 0.40 s + HTTP and PNG
+encode). Sub-second at 1024x1024 therefore needs `steps: 1` *and* a cheaper
+decode (`taesd`), or `hires` — sampling at 512 and upscaling, since diffusion
+cost follows latent area.
+
+**Gotcha: sd-server ignores per-request `steps` and `cfg_scale`.** The daemon
+forwards them in the request body (`/v1/images/generations` fills unset ones
+from the registry), but the backend uses the values it was launched with, so
+`zallama generate --steps 1` silently produces a 4-step image at the 4-step
+price. Verified against sd-server directly with `steps`, `sample_steps` and
+`num_inference_steps` — all three ignored. To change the step count you must
+`zallama set flux:klein steps=N` and reload the instance.
+
+**Gotcha: `zallama generate` takes `--size WxH`, and silently drops flags it
+doesn't know.** `--width 1024 --height 1024` parses as nothing at all and you
+get a 512x512 image at 512x512 speed — which looks like a spectacular result
+until you check the PNG header. Always confirm what you actually rendered:
+
+```
+python3 -c "import struct;d=open('output.png','rb').read(33);print(*struct.unpack('>II',d[16:24]))"
+```
 
 ## Benchmarking image models
 

@@ -87,6 +87,23 @@ request no longer truncates the in-flight one with a `502`. It does not stop the
 thrash, only its sharpest symptom. Set it to `0` to restore the old
 evict-immediately behavior.
 
+Watch out for the **three-way** version of this, which is easy to miss because
+each pair looks plausible on its own. An app that uses a big text model, a small
+one, and an image model hits it on the RTX 4090: `Qwen3.8-27B` (21.0) + `flux:klein`
+(12.3) = 33.3, 27B + `Qwen3.5-4B` (9.5) = 30.5 — only the 4B + flux pair (21.8 with
+an embedding model) fits under a 23.8 budget. One oversized member is enough to
+make *every* combination thrash, so the diagnosis is per-set, not per-pair. Count
+respawns rather than eyeballing the log:
+
+```
+journalctl -u zallama --since "-20 min" | grep -oP "Spawning \S+ for '\K[^']+" | sort | uniq -c | sort -rn
+```
+
+Anything in double digits over 20 minutes is thrashing. Note that idle unloads
+look identical in `zallama ps` (the model is simply gone) but are *not* this:
+`idle_timeout` only fires after its full window with no requests at all, and logs
+nothing about capacity.
+
 ### Editing `pinned` on a model that's already running does nothing yet
 
 `_make_room_locked()` checks `inst.entry["pinned"]` on the **already-running
@@ -350,6 +367,66 @@ column on the text model; if it never exceeds a few seconds, that's the
 thrash. The fix then is to give the text model its own reserved slot (pin it,
 or raise `max_loaded_models` and accept the larger VRAM footprint), not to
 re-pin ASR or embedding.
+
+---
+
+### Variant: a text model and an image model resident together
+
+Text and image models share the `primary` evict group (see *The three
+controls*), so a diffusion model loading will evict the text model — and vice
+versa — the moment their **declared** `mem_gb` don't both fit under
+`mem_budget_gb`. There is no "coexist if there is room" switch: making them
+coexist *is* making the declared numbers fit.
+
+Measured 2026-09-02 on the RTX 4090 (24.56 GB card, `mem_budget_gb: 23.8`),
+with `granite-embedding-311m` (0.7 GB) also resident:
+
+| `Qwen3.5-4B-Q6_K` `ctx_size` | 4B real VRAM | + `flux:klein` (11.8 GB) + granite | verdict |
+|---|---|---|---|
+| 262144 (solo default) | 13.0 GB | 25.5 GB | **never fits** — over the card, not just the budget |
+| **131072** | 8.8 GB | 21.3 GB steady | fits, but see the peak note below |
+| 65536 | 6.7 GB | 19.2 GB steady | fits comfortably |
+
+The 4B's KV cache costs ~40 KB/token at f16, so context is the whole story:
+every halving of `ctx_size` gives back ~2 GB. `cache_type_k/v: q8_0` would buy
+roughly another halving of the KV portion if more room is needed.
+
+**Decide whether co-residency is worth what it costs.** It is not free: the text
+model gives up half or more of its context, and the image model needs tiled VAE
+decode. Left alone, each model gets the whole card — the 4B keeps `ctx_size:
+262144` (12.9 GB) and FLUX Klein decodes untiled (11.9 GB resident, **19.5 GB
+peak** at 1024x1024, 3.46 s per image). The price of *not* co-residing is one
+cold reload (4-8 s) each time traffic switches modality. If image requests are
+occasional, paying that reload is usually the better trade than permanently
+halving the text model's context — co-residency only wins when both are hit in
+the same breath, often enough that the reloads dominate.
+
+Two things specific to the image side:
+
+- **`vae_tiling: true` is mandatory when co-resident, and steady state does not
+  tell you that.** The VAE decode buffer is allocated *after* everything else is
+  already on the card and scales with image area: at 1024×1024 untiled it adds
+  **6.2 GB** on top of the 11.9 GB resident footprint (19.5 GB peak), which turns
+  a comfortable-looking 21.3 GB steady state into an OOM at the very last step.
+  Tiled, the same decode peaks 1.5 GB above resident (13.4 GB) and costs 20 % of
+  the clock. At 512×512 the untiled buffer is only ~2.7 GB and none of this
+  bites — **a co-residency plan validated at 512×512 is not validated at all**
+  (the steady-state rows above were measured that way; re-check the peak at the
+  resolution you serve). See `docs/sd-tuning.md`.
+- **`sd-server` allocates lazily.** Right after `zallama load flux:klein`,
+  `zallama ps` shows `—` for its real VRAM and `nvidia-smi` sees nothing: the
+  weights land on the card during the *first generation*, not at load. Verify
+  co-residency by generating an image, never by reading `ps` after the load.
+  (`eager_load: true` moves that cost into the load if you'd rather.)
+
+**Gotcha: `mem_gb` on a running instance is the value it was started with.**
+The eviction math uses `inst.mem_gb`, captured at spawn time — so
+`zallama set <model> mem_gb=…` does *not* change what a currently-loaded
+instance counts for. Editing the 4B's `mem_gb` from a stale `13.3` down to a
+measured `7.0` and then loading the image model still evicted it, because the
+running instance was still being counted at 13.3. `zallama reload <model>`
+(or `unload` + `load`) after changing `mem_gb`, before loading the other
+model. Same rule as `ctx_size` and every other param.
 
 ## Checklist
 

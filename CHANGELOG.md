@@ -5,6 +5,25 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Per-request `steps` / `cfg_scale` / `sampler` / `seed` now reach the image backend.**
+  `POST /v1/images/generations` proxied to sd-server's own OpenAI route, which honours
+  `prompt` and `size` and silently ignores every other generation knob, falling back to the
+  CLI flags the process was launched with — so `zallama generate --steps 1` produced a 4-step
+  image at the 4-step price with nothing to indicate the value had been dropped. The proxy now
+  speaks sd-server's A1111-compatible `/sdapi/v1/txt2img` upstream (which does honour them) and
+  translates the response back to the OpenAI shape. Client-visible request and response formats
+  are unchanged. Measured at 1024x1024 on `flux:klein`: 3.44 s at `steps: 4`, 1.53 s at
+  `steps: 1`.
+- **`zallama generate` no longer ignores unknown flags.** Anything unrecognised was skipped
+  silently, so `--width 1024 --height 1024` — a plausible guess for `--size 1024x1024` — rendered
+  a 512x512 image at 512x512 speed and looked like a spectacular result. Unknown flags and
+  missing values are now errors, non-numeric values for `--steps`/`--cfg-scale` are rejected
+  instead of being discarded, and `--width`/`--height` are accepted as a convenience that folds
+  into `--size`. `zallama pull` had the same silent-skip and now errors on a stray argument.
+
 ## [1.14.0] - 2026-09-02
 
 ### Added
