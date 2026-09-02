@@ -5,6 +5,40 @@ All notable changes to **Zallama** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-09-02
+
+### Added
+- **`zallama bench` measures image models.** Naming an `sd-server` model now benchmarks
+  seconds-per-image instead of refusing outright, with `--image-size` and `--image-prompt`,
+  its own results table (`IMAGE s`, `IMG/min`) and the same `--sweep` / `--out` / `--compare`
+  machinery as text. There is no token axis, so `--prompt-tokens`, `--max-tokens` and `--temp`
+  are ignored; `--concurrency` still applies. `IMAGE s` is wall time at the client because
+  sd-server publishes no per-step clock, and the VRAM reading is taken after the warmup because
+  sd-server answers its health check before the weights are resident.
+- **~50 new `sd-server` params.** `SdServerBackend` forwards only the flags it maps and silently
+  drops the rest, so a large part of stable-diffusion.cpp was unreachable from the registry.
+  Now mapped: `cache_mode`/`cache_option` (step caching), `max_vram` + `stream_layers` and
+  `auto_fit` (graph-cut segmented execution), `eager_load`, `mmap`, `type`/`tensor_type_rules`
+  (load-time weight typing), `hires*` and `upscale_*` (highres fix / ESRGAN), `guidance`,
+  `flow_shift`, `eta`, `sigmas`, `slg_scale` and the rest of the sampling knobs,
+  `vae_relative_tile_size`, `lora_model_dir`/`lora_apply_mode`, and the `ip_adapter`,
+  `photo_maker`, `pulid_weights`, `motion_module`, `upscale_model` and `audio_vae` artifacts.
+  See [CONFIG.md](CONFIG.md#image-backend-sd-server).
+- [docs/sd-tuning.md](docs/sd-tuning.md): measured tuning for diffusion models on a 4090 —
+  why the text encoder, not the diffusion model, is usually what fills the card, and what each
+  switch is actually worth. Rows added to [docs/tuning-log.md](docs/tuning-log.md#image-models).
+
+### Fixed
+- `sd-server` artifact flags are now an explicit table rather than derived from the artifact key.
+  stable-diffusion.cpp is inconsistent about separators — the text encoders take underscores
+  (`--clip_l`, `--t5xxl`, `--llm_vision`) while everything else takes dashes (`--control-net`,
+  `--ip-adapter`) — and a wrong guess makes sd-server abort on an unknown argument.
+
+### Changed
+- README and CONFIG.md no longer present `vae_tiling` and `vae_conv_direct` as free memory wins.
+  Measured on FLUX at 1024x1024, tiling costs 20% of the wall clock for 0.5 GiB and
+  `vae_conv_direct` costs 2.7x for the same 0.5 GiB.
+
 ## [1.13.0] - 2026-08-29
 
 ### Added
@@ -433,7 +467,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.13.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/rzafiamy/zallama/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/rzafiamy/zallama/compare/v1.12.0...v1.13.0
 [1.6.0]: https://github.com/rzafiamy/zallama/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/rzafiamy/zallama/compare/v1.5.0...v1.5.1

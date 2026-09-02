@@ -515,10 +515,109 @@ class SdServerBackend:
         # VAE tiling geometry — only meaningful with vae_tiling below.
         "vae_tile_size": "--vae-tile-size",
         "vae_tile_overlap": "--vae-tile-overlap",
+        # Overrides vae_tile_size: fractions of the image size when < 1, a tile
+        # count per dimension when >= 1, so one setting follows every --size.
+        "vae_relative_tile_size": "--vae-relative-tile-size",
         # Per-component device placement, e.g. "te=cpu" or "vae=cuda0,diffusion=cpu".
         # The modern replacement for the deprecated --clip-on-cpu/--vae-on-cpu.
         "backend": "--backend",
         "params_backend": "--params-backend",
+
+        # --- Step caching -------------------------------------------------
+        # The largest decode-side lever a diffusion model has: reuse block
+        # activations across timesteps instead of recomputing them. Worth
+        # nothing on a 4-step schnell (there is no redundancy to skip) and a
+        # lot from ~20 steps up. easycache/spectrum are the general ones;
+        # dbcache/taylorseer/cache-dit are DiT block-level.
+        "cache_mode": "--cache-mode",
+        "cache_option": "--cache-option",
+
+        # --- Fitting on a busy card ---------------------------------------
+        # Graph-cut segmented execution: run the graph in slices that fit the
+        # given budget instead of demanding the whole model resident. A
+        # negative value auto-detects free VRAM, sparing that many GiB — which
+        # is what makes an image model survive next to a loaded text model.
+        # Strictly better than offload_to_cpu when it applies.
+        "max_vram": "--max-vram",
+        # Weight distribution when a module is assigned several devices.
+        "split_mode": "--split-mode",
+        "rpc_servers": "--rpc-servers",
+
+        # --- Load-time weight typing --------------------------------------
+        # Quantize on load rather than downloading a second copy: "type" casts
+        # everything, "tensor_type_rules" is per-pattern, e.g.
+        # "^vae\.=f16,model\.=q8_0".
+        "type": "--type",
+        "tensor_type_rules": "--tensor-type-rules",
+        "model_args": "--model-args",
+
+        # --- Sampling quality per step ------------------------------------
+        # These are what buy back quality when steps are cut, which is the
+        # cheapest speed-up available on a few-step model.
+        "guidance": "--guidance",
+        "img_cfg_scale": "--img-cfg-scale",
+        "flow_shift": "--flow-shift",
+        "eta": "--eta",
+        "sigmas": "--sigmas",
+        "clip_skip": "--clip-skip",
+        "batch_count": "--batch-count",
+        "timestep_shift": "--timestep-shift",
+        "extra_sample_args": "--extra-sample-args",
+        "extra_tiling_args": "--extra-tiling-args",
+        # Skip layer guidance — DiT only, 0 disables.
+        "slg_scale": "--slg-scale",
+        "skip_layers": "--skip-layers",
+        "skip_layer_start": "--skip-layer-start",
+        "skip_layer_end": "--skip-layer-end",
+        "strength": "--strength",
+        "rng": "--rng",
+        "sampler_rng": "--sampler-rng",
+        "prediction": "--prediction",
+        "lora_model_dir": "--lora-model-dir",
+        "lora_apply_mode": "--lora-apply-mode",
+        "embd_dir": "--embd-dir",
+
+        # --- Highres fix / upscaling --------------------------------------
+        # Sampling at 512 and upscaling costs far less than sampling natively
+        # at 1024, because diffusion cost grows with latent area.
+        "hires_upscaler": "--hires-upscaler",
+        "hires_upscalers_dir": "--hires-upscalers-dir",
+        "hires_scale": "--hires-scale",
+        "hires_width": "--hires-width",
+        "hires_height": "--hires-height",
+        "hires_steps": "--hires-steps",
+        "hires_sigmas": "--hires-sigmas",
+        "hires_denoising_strength": "--hires-denoising-strength",
+        "hires_upscale_tile_size": "--hires-upscale-tile-size",
+        "upscale_model": "--upscale-model",
+        "upscale_repeats": "--upscale-repeats",
+        "upscale_tile_size": "--upscale-tile-size",
+    }
+
+    # Artifact key -> flag. Kept explicit because stable-diffusion.cpp is not
+    # consistent about separators: the text encoders take underscores
+    # (--clip_l, --t5xxl, --llm_vision) while everything else takes dashes
+    # (--control-net, --ip-adapter, --photo-maker). Deriving one from the other
+    # silently produces an unknown argument, which sd-server aborts on.
+    _ARTIFACT_FLAGS = {
+        "vae": "--vae",
+        "taesd": "--taesd",
+        "audio_vae": "--audio-vae",
+        "control_net": "--control-net",
+        "clip_l": "--clip_l",
+        "clip_g": "--clip_g",
+        "t5xxl": "--t5xxl",
+        "llm": "--llm",
+        "llm_vision": "--llm_vision",
+        "clip_vision": "--clip_vision",
+        "ip_adapter": "--ip-adapter",
+        "photo_maker": "--photo-maker",
+        "pulid_weights": "--pulid-weights",
+        "motion_module": "--motion-module",
+        "upscale_model": "--upscale-model",
+        "high_noise_diffusion_model": "--high-noise-diffusion-model",
+        "uncond_diffusion_model": "--uncond-diffusion-model",
+        "embeddings_connectors": "--embeddings-connectors",
     }
 
     # Boolean flags: present-if-truthy.
@@ -536,6 +635,25 @@ class SdServerBackend:
         "vae_conv_direct": "--vae-conv-direct",
         # Keep weights in RAM and stream them into VRAM per graph.
         "offload_to_cpu": "--offload-to-cpu",
+        # Residency + prefetch on top of max_vram. No effect without it.
+        "stream_layers": "--stream-layers",
+        # Derive the diffusion/te/vae placement from model size and the
+        # per-device budget. Overrides `backend` and `params_backend`.
+        "auto_fit": "--auto-fit",
+        # Load every parameter at model-load time rather than lazily on first
+        # use, so the cost lands inside the startup health check instead of
+        # inside the first generation.
+        "eager_load": "--eager-load",
+        "mmap": "--mmap",
+        "hires": "--hires",
+        "temporal_tiling": "--temporal-tiling",
+        "circular": "--circular",
+        "circularx": "--circularx",
+        "circulary": "--circulary",
+        "force_sdxl_vae_conv_scale": "--force-sdxl-vae-conv-scale",
+        "disable_image_metadata": "--disable-image-metadata",
+        "increase_ref_index": "--increase-ref-index",
+        "disable_auto_resize_ref_image": "--disable-auto-resize-ref-image",
     }
 
     def build_args(
@@ -568,10 +686,8 @@ class SdServerBackend:
         # Attach artifacts if specified (vae, taesd, control_net, etc.). `llm` is
         # the text encoder newer architectures use in place of clip/t5 (Qwen2.5-VL
         # for qwen-image, Mistral-Small-3.2 for flux2).
-        for art_key in ("vae", "taesd", "control_net", "clip_l", "clip_g", "t5xxl",
-                        "llm", "llm_vision", "clip_vision"):
+        for art_key, flag in self._ARTIFACT_FLAGS.items():
             if art_key in artifacts:
-                flag = f"--{art_key.replace('_', '-')}" if art_key in ("control_net",) else f"--{art_key}"
                 args += [flag, str(artifacts[art_key])]
 
         for key, flag in self._PARAM_MAP.items():

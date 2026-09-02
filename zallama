@@ -1258,6 +1258,64 @@ def _bench_batch(model: str, target_tokens: int, max_tokens: int, temp: float,
     return results, time.perf_counter() - t0
 
 
+def _bench_image_request(model: str, prompt: str, size: str,
+                         timeout: float) -> dict:
+    """Time one image generation end to end.
+
+    sd-server reports no per-step clock the way llama.cpp reports timings, so
+    unlike the text path there is nothing to read off the engine — the wall
+    time at this client is the measurement. It therefore includes queueing and
+    proxy overhead, which is the honest number for "how long until I have a
+    picture" anyway.
+    """
+    body = {
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+        "n": 1,
+        "response_format": "b64_json",
+    }
+    t0 = time.perf_counter()
+    try:
+        r = requests.post(f"{ZALLAMA_HOST}/v1/images/generations",
+                          json=body, timeout=timeout)
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)[:160]}
+    wall = time.perf_counter() - t0
+    if r.status_code != 200:
+        return {"error": f"HTTP {r.status_code}: {r.text[:160]}"}
+    try:
+        payload = r.json()
+    except ValueError:
+        return {"error": "non-JSON response from sd-server"}
+    data = payload.get("data") or []
+    if not data:
+        err = (payload.get("error") or {}).get("message", "no image returned")
+        return {"error": str(err)[:160]}
+    b64 = data[0].get("b64_json") or ""
+    return {"wall_s": wall, "image_bytes": (len(b64) * 3) // 4}
+
+
+def _bench_image_batch(model: str, prompt: str, size: str, timeout: float,
+                       concurrency: int, tag: str) -> tuple[list[dict], float]:
+    """Fire `concurrency` generations at once; return their results + batch wall."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Vary the prompt per request for the same reason the text path defeats the
+    # prompt cache: identical prompts let the text encoder's conditioning be
+    # reused, which measures the cache rather than the pipeline.
+    prompts = [f"{prompt} [{tag}/{i}]" for i in range(concurrency)]
+
+    t0 = time.perf_counter()
+    if concurrency == 1:
+        results = [_bench_image_request(model, prompts[0], size, timeout)]
+    else:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            results = list(pool.map(
+                lambda pr: _bench_image_request(model, pr, size, timeout), prompts))
+    return results, time.perf_counter() - t0
+
+
 def _bench_set_params(entry: dict, params: dict) -> bool:
     """Rewrite one model's `params`, leaving every other registry field intact."""
     payload = {
@@ -1342,7 +1400,9 @@ _BENCH_FIELDS = [
     "label", "gpu", "model", "params", "prompt_tokens_target", "prompt_tokens",
     "max_tokens", "concurrency", "runs", "load_s", "vram_gib", "ttft_ms",
     "prefill_tps", "decode_tps", "decode_tps_stdev", "throughput_tps",
-    "gen_tokens", "cached_tokens", "engine_build", "error",
+    "gen_tokens", "cached_tokens", "engine_build",
+    "modality", "image_size", "image_steps", "image_s", "images_per_min",
+    "error",
 ]
 
 
@@ -1466,6 +1526,9 @@ _BENCH_METRICS = {
     "load_s": ("LOAD s", "lower", "{:.1f}"),
     "vram_gib": ("VRAM GiB", "lower", "{:.1f}"),
     "gen_tokens": ("GEN tokens", "lower", "{:.0f}"),
+    # Image models: wall seconds per image, and the batch rate.
+    "image_s": ("IMAGE s", "lower", "{:.2f}"),
+    "images_per_min": ("IMG/min", "higher", "{:.2f}"),
 }
 
 
@@ -1476,8 +1539,11 @@ def _bench_point_key(rec: dict) -> str:
                       for k, v in (rec.get("params") or {}).items())
     if params:
         bits.append(params)
-    bits.append(f"prompt {rec.get('prompt_tokens_target')}")
-    bits.append(f"gen {rec.get('max_tokens')}")
+    if rec.get("modality") == "image":
+        bits.append(f"size {rec.get('image_size')}")
+    else:
+        bits.append(f"prompt {rec.get('prompt_tokens_target')}")
+        bits.append(f"gen {rec.get('max_tokens')}")
     if (rec.get("concurrency") or 1) > 1:
         bits.append(f"conc {rec['concurrency']}")
     return " · ".join(bits)
@@ -1586,15 +1652,18 @@ def cmd_bench_compare(paths: list[str], metrics: list[str]):
 
 _BENCH_USAGE = f"""{BOLD}Usage:{RESET} zallama bench <model> [<model> ...] [options]
 
-Measures tokens/sec for text models, optionally sweeping llama-server
-parameters. Each combination is applied to the registry, the model is restarted
-so it takes effect, and the original parameters are restored at the end.
+Measures tokens/sec for text models and seconds-per-image for image models,
+optionally sweeping backend parameters. Each combination is applied to the
+registry, the model is restarted so it takes effect, and the original
+parameters are restored at the end.
 
 {BOLD}Sweeps{RESET}
   --sweep <key>=<v1>,<v2>   Sweep any registry param; repeat for a grid.
                             e.g. ctx_size, reasoning, n_gpu_layers, threads,
                             batch_size, ubatch_size, flash_attn, parallel,
                             cache_type_k, cache_type_v, spec_type
+                            image models: steps, sampler, scheduler, cache_mode,
+                            vae_tiling, taesd, fa, diffusion_conv_direct
 
 {BOLD}Workload{RESET}
   -p, --prompt-tokens N[,N] Prompt sizes to send      (default 512)
@@ -1608,8 +1677,17 @@ so it takes effect, and the original parameters are restored at the end.
       --reuse-cache         Don't defeat the prompt cache — measures the warm
                             prefill path instead of a cold one
 
+{BOLD}Image models{RESET}
+      --image-size WxH      Image size to generate       (default 512x512)
+      --image-prompt TEXT   Prompt to render             (default: a fixed scene)
+
+  Image points ignore --prompt-tokens, --max-tokens and --temp: sd-server has
+  no token axis. --concurrency still applies. The reported IMAGE s is wall
+  time at this client, because sd-server exposes no per-step clock.
+
 {BOLD}Selection & output{RESET}
-      --all                 Bench every registered text model
+      --all                 Bench every registered text model (name image
+                            models explicitly — their results table differs)
   -o, --out FILE            Write results (.json / .csv / .md)
       --label NAME          Name this machine in the export (default: its GPU)
       --keep                Leave the last swept params in the registry
@@ -1622,6 +1700,8 @@ so it takes effect, and the original parameters are restored at the end.
   zallama bench Qwen3.5-4B-Q6_K --sweep reasoning=on,off -p 512,8192
   zallama bench Qwen3.5-4B-Q6_K --sweep n_gpu_layers=0,20,99 -o bench.md
   zallama bench --all -c 1,4 --runs 5 -o results.json
+  zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
+  zallama bench flux:klein --sweep steps=4,8 --sweep cache_mode=,easycache
 
 {BOLD}Comparing machines{RESET}
   zallama bench --compare a.json b.json [...] [--metric decode_tps,ttft_ms]
@@ -1649,6 +1729,8 @@ def cmd_bench(args: list[str]):
     concurrencies = [1]
     max_tokens, runs, warmup = 128, 3, 1
     temp, timeout = 0.0, 600.0
+    image_size = "512x512"
+    image_prompt = "a lighthouse at dawn, cinematic lighting, high detail"
     out_path: str | None = None
     label: str | None = None
     metrics = ["prefill_tps", "decode_tps", "ttft_ms"]
@@ -1690,6 +1772,14 @@ def cmd_bench(args: list[str]):
             if val is None:
                 _err("--timeout expects a value"); sys.exit(1)
             timeout = float(val); i += 2
+        elif arg == "--image-size":
+            if val is None:
+                _err("--image-size expects WxH, e.g. 512x512"); sys.exit(1)
+            image_size = val; i += 2
+        elif arg == "--image-prompt":
+            if val is None:
+                _err("--image-prompt expects a prompt"); sys.exit(1)
+            image_prompt = val; i += 2
         elif arg in ("--out", "-o"):
             if val is None:
                 _err("--out expects a file path"); sys.exit(1)
@@ -1755,9 +1845,9 @@ def cmd_bench(args: list[str]):
         if not entry:
             _err(f"Model '{name}' not found in registry.")
             sys.exit(1)
-        if entry.get("modality", "text") != "text":
+        if entry.get("modality", "text") not in ("text", "image"):
             _err(f"'{name}' has modality '{entry.get('modality')}'; bench measures "
-                 f"text generation only.")
+                 f"text and image generation only.")
             sys.exit(1)
         if not entry.get("file_ok"):
             _err(f"Model file is missing: {entry.get('file')}")
@@ -1773,6 +1863,12 @@ def cmd_bench(args: list[str]):
 
     env = _bench_environment()
     label = label or _bench_default_label(env)
+    any_image = any(t.get("modality") == "image" for t in targets)
+    any_text = any(t.get("modality", "text") != "image" for t in targets)
+    if any_image and not any_text:
+        # An image-only run has no token axis, so one workload per concurrency.
+        total_points = len(targets) * len(combos) * len(concurrencies)
+        total_reqs = total_points * (runs + warmup) * max(concurrencies)
     print(f"\n{BOLD}{F_BLUE} Benchmark plan{RESET}")
     plan = [
         ["Machine", f"{label}  ({_bench_gpu_name(env)})"],
@@ -1780,13 +1876,22 @@ def cmd_bench(args: list[str]):
         ["Restarts (param combos)", f"{len(targets) * len(combos)}"],
         ["Measured points", f"{total_points}"],
         ["Requests (incl. warmup)", f"~{total_reqs}"],
-        ["Prompt sizes", ", ".join(str(p) for p in prompt_sizes)],
-        ["Generate", f"{max_tokens} tokens"
-                     f"{' (natural stop)' if natural else ' (fixed, ignore_eos)'}"],
+    ]
+    if any_text:
+        plan += [
+            ["Prompt sizes", ", ".join(str(p) for p in prompt_sizes)],
+            ["Generate", f"{max_tokens} tokens"
+                         f"{' (natural stop)' if natural else ' (fixed, ignore_eos)'}"],
+        ]
+    plan += [
         ["Concurrency", ", ".join(str(c) for c in concurrencies)],
         ["Runs / warmup", f"{runs} / {warmup}"],
-        ["Prompt cache", "reused" if reuse_cache else "defeated (cold prefill)"],
     ]
+    if any_text:
+        plan.append(["Prompt cache",
+                     "reused" if reuse_cache else "defeated (cold prefill)"])
+    if any_image:
+        plan.append(["Image size", image_size])
     for key, values in sweeps:
         plan.append([f"Sweep {key}", ", ".join(_bench_fmt_value(v) for v in values)])
     _print_table(["FIELD", "VALUE"], plan)
@@ -1842,6 +1947,75 @@ def cmd_bench(args: list[str]):
                 print(f"\r    {_color(f'loaded in {load_s:.1f}s', F_DIM)}"
                       f"{_color(f' · {vram:.1f} GiB VRAM', F_DIM) if vram else ''}"
                       f"{' ' * 12}")
+
+                if entry.get("modality", "text") == "image":
+                    # sd-server has no prompt-token axis: the workload is the
+                    # image size and how many are asked for at once.
+                    eff = dict(base_params); eff.update(overrides)
+                    for conc in concurrencies:
+                        print(f"    {_color(f'{image_size} · conc {conc} …', F_DIM)}",
+                              end="", flush=True)
+                        for w in range(warmup):
+                            _bench_image_batch(name, image_prompt, image_size,
+                                               timeout, conc, f"warm{w}")
+                        # sd-server answers its health check before the weights
+                        # are resident (they load lazily on first use unless
+                        # eager_load is set), so the VRAM read taken right after
+                        # loading is ~0. Re-read once the warmup has forced the
+                        # whole stack in.
+                        if not vram:
+                            vram = _bench_vram(name)
+
+                        samples, batch_rates, errors = [], [], []
+                        for run_idx in range(runs):
+                            results, batch_wall = _bench_image_batch(
+                                name, image_prompt, image_size, timeout, conc,
+                                f"run{run_idx}")
+                            ok = [x for x in results if "error" not in x]
+                            errors += [x["error"] for x in results if "error" in x]
+                            samples += ok
+                            if ok and batch_wall > 0:
+                                batch_rates.append(len(ok) * 60.0 / batch_wall)
+
+                        # With --warmup 0 the re-read above still predates the
+                        # weights, since the first measured run is what pulls
+                        # them in. Try once more now that something has run.
+                        if not vram:
+                            vram = _bench_vram(name)
+
+                        base = {
+                            "model": name,
+                            "modality": "image",
+                            "params": overrides,
+                            "image_size": image_size,
+                            "image_steps": eff.get("steps"),
+                            "concurrency": conc,
+                            "runs": runs,
+                            "load_s": round(load_s, 2),
+                            "vram_gib": round(vram, 2) if vram else None,
+                        }
+                        if not samples:
+                            msg = errors[0] if errors else "no successful runs"
+                            print(f"\r    {_color('✗ ' + msg, RED)}{' ' * 20}")
+                            records.append({**base, "error": msg})
+                            continue
+
+                        record = {
+                            **base,
+                            "image_s": _bench_mean([s["wall_s"] for s in samples]),
+                            "images_per_min": (_bench_mean(batch_rates)
+                                               if batch_rates else None),
+                            "error": "; ".join(dict.fromkeys(errors))[:160] or None,
+                            "_samples": samples,
+                            "_batch_tps": batch_rates,
+                        }
+                        records.append(record)
+                        secs = record["image_s"] or 0.0
+                        print(f"\r    {_color(f'{image_size} · conc {conc}', F_DIM)}"
+                              f"  {_color(f'{secs:.2f} s', F_TEAL)}"
+                              f"{_color(' / image', F_DIM)}{' ' * 12}")
+                    print()
+                    continue
 
                 for ptokens, conc in workloads:
                     print(f"    {_color(f'prompt {ptokens} · conc {conc} …', F_DIM)}",
@@ -1920,12 +2094,18 @@ def cmd_bench(args: list[str]):
                 # load picks up what was just restored.
                 _api("POST", f"/api/models/{name}/unload")
 
-    measured = [r for r in records if r.get("decode_tps")]
-    if not measured:
+    text_recs = [r for r in records
+                 if r.get("modality") != "image" and r.get("decode_tps")]
+    image_recs = [r for r in records
+                  if r.get("modality") == "image" and r.get("image_s")]
+    if not text_recs and not image_recs:
         _err("No successful measurements.")
         return
 
-    _bench_report(measured, sweep_keys)
+    if text_recs:
+        _bench_report(text_recs, sweep_keys)
+    if image_recs:
+        _bench_report_image(image_recs, sweep_keys)
 
     if out_path:
         gpu = _bench_gpu_name(env)
@@ -1941,6 +2121,76 @@ def cmd_bench(args: list[str]):
 def _bench_mean(values: list) -> float | None:
     vals = [v for v in values if v is not None]
     return round(statistics.fmean(vals), 2) if vals else None
+
+
+def _bench_report_image(records: list[dict], sweep_keys: list[str]):
+    """Results table for image models: seconds per image, not tokens per second."""
+    multi_model = len({r["model"] for r in records}) > 1
+    has_vram = any(r.get("vram_gib") for r in records)
+    has_steps = any(r.get("image_steps") for r in records)
+    show_conc = any(r["concurrency"] > 1 for r in records)
+
+    headers, aligns = [], []
+    if multi_model:
+        headers.append("MODEL"); aligns.append("left")
+    if sweep_keys:
+        headers.append("PARAMS"); aligns.append("left")
+    headers.append("SIZE"); aligns.append("right")
+    if has_steps:
+        headers.append("STEPS"); aligns.append("right")
+    if show_conc:
+        headers.append("CONC"); aligns.append("right")
+    headers.append("LOAD s"); aligns.append("right")
+    if has_vram:
+        headers.append("VRAM GiB"); aligns.append("right")
+    headers += ["IMAGE s", "IMG/min"]; aligns += ["right", "right"]
+
+    rows = []
+    for rec in records:
+        row = []
+        if multi_model:
+            row.append(rec["model"])
+        if sweep_keys:
+            row.append(_color(" ".join(f"{k}={_bench_fmt_value(v)}"
+                                       for k, v in rec["params"].items()), F_PURPLE))
+        row.append(rec["image_size"])
+        if has_steps:
+            row.append(str(rec.get("image_steps") or "—"))
+        if show_conc:
+            row.append(str(rec["concurrency"]))
+        row.append(f"{rec['load_s']:.1f}")
+        if has_vram:
+            row.append(f"{rec['vram_gib']:.1f}" if rec.get("vram_gib") else "—")
+        row += [
+            _color(_bench_stat([s["wall_s"] for s in rec["_samples"]], "{:.2f}"),
+                   F_TEAL),
+            _bench_stat(rec["_batch_tps"], "{:.2f}"),
+        ]
+        rows.append(row)
+
+    print(f"\n{BOLD}{F_BLUE} Image results{RESET}"
+          f"{F_DIM}  (mean ± stdev across runs){RESET}")
+    _print_table(headers, rows, aligns)
+    notes = ["IMAGE s is wall time at this client — sd-server exposes no "
+             "per-step clock, so queueing and proxy overhead are included.",
+             "LOAD s stops at sd-server's health check. Weights load lazily on "
+             "first use, so that cost sits in the warmup generation, not here — "
+             "set eager_load to move it back into LOAD s."]
+    if show_conc:
+        notes.append("IMG/min = images completed over the batch's wall time.")
+    print("\n" + "\n".join(f"{F_DIM}  {n}{RESET}" for n in notes))
+
+    for model in dict.fromkeys(r["model"] for r in records):
+        mine = [r for r in records if r["model"] == model]
+        if len(mine) < 2:
+            continue
+        best = min(mine, key=lambda r: r["image_s"])
+        label = " ".join(f"{k}={_bench_fmt_value(v)}" for k, v in best["params"].items())
+        where = (label + ", " if label else "") + best["image_size"]
+        rate = f"{best['image_s']:.2f} s"
+        print(f"  {_color('★', F_ORANGE)} {BOLD}{model}{RESET} fastest at "
+              f"{_color(where, F_PURPLE)} → {_color(rate, F_TEAL)}/image")
+    print()
 
 
 def _bench_report(records: list[dict], sweep_keys: list[str]):

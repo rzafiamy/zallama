@@ -488,7 +488,7 @@ Each entry may declare:
 - **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size — an estimate that is frequently off by 100% or more, so [measure it](docs/vram-planning.md#measuring-what-a-model-actually-costs).
 - **`pinned`** — `true` keeps the model loaded for the daemon's lifetime: pre-warmed at startup, exempt from both idle sweep and eviction. Intended for small always-on services (ASR, TTS), not for large models.
 
-Useful `params` for making a model fit on a busy GPU — `cache_type_k`/`cache_type_v` (quantize the KV cache), `ctx_size`, `n_cpu_moe` (keep the expert weights of the first N layers in system RAM, MoE models only) and `n_gpu_layers` — are covered with measured trade-offs in [Fitting Your Models on One GPU](docs/vram-planning.md#making-a-model-fit).
+Useful `params` for making a model fit on a busy GPU — `cache_type_k`/`cache_type_v` (quantize the KV cache), `ctx_size`, `n_cpu_moe` (keep the expert weights of the first N layers in system RAM, MoE models only) and `n_gpu_layers` — are covered with measured trade-offs in [Fitting Your Models on One GPU](docs/vram-planning.md#making-a-model-fit). For diffusion models, see [Tuning Image Generation](docs/sd-tuning.md).
 
 If your GGUF carries a baked-in MTP head — llama.cpp logs its tensors as `unused tensor blk.N.nextn.* -- ignoring` until you switch it on — `spec_type: draft-mtp` roughly doubles decode speed for about 1 GiB of VRAM. See [Doubling Decode Speed with MTP](docs/mtp-speculative-decoding.md). For a model with no baked-in head but a genuinely separate draft checkpoint, register it as the `draft` artifact (`--model-draft`) and set `spec_type: draft-simple` instead; `spec_draft_ngl` caps how much of the draft model rides on VRAM.
 
@@ -538,6 +538,7 @@ zallama bench qwen3.5-9b-q4_k_m --sweep n_gpu_layers=0,20,40,99
 
 # Quantized KV cache: how much ctx does the VRAM buy back?
 zallama bench qwen3.5-4b-q4_k_m --sweep cache_type_k=f16,q8_0,q4_0
+zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
 
 # Compare models head to head, and keep the numbers
 zallama bench --all --runs 5 --out bench.md
@@ -785,11 +786,16 @@ zallama set sd:1.5 steps=25 cfg_scale=7.5
 ```
 The daemon applies those registry values to any request that does not specify them. Auxiliary weights (`vae`, `taesd`, `control_net`, `clip_l`, `clip_g`, `t5xxl`) are passed to `sd-server` at launch when registered as artifacts on the model.
 
-**Large images and VRAM.** The VAE decode buffer grows with the square of the image size and is allocated *after* the whole stack is resident, so a generation can sample all its steps and then die at the final decode — a FLUX 1024×1024 decode asks for ~6.6 GB on top of ~16 GB of weights, which does not fit on a 24 GB card. Set `vae_tiling` to decode the latent in patches instead, which cuts that buffer to a few hundred MB for no visible seam:
+**Speed.** `diffusion_fa` (flash attention in the diffusion model) is the one switch that is always worth it — **1.73x** on FLUX at 1024×1024, measured. `fa` adds nothing on top of it, and `vae_conv_direct` costs **2.7x** the wall time for 0.5 GiB. On models of ~20 steps and up, `cache_mode` (`easycache`, `dbcache`, `taylorseer`, `spectrum`) reuses block activations across timesteps; below that there is no redundancy to skip.
+
+**VRAM: look at the text encoder first.** A FLUX stack spends more on `t5xxl_fp16.safetensors` (9.8 GB) than on Q4_0 diffusion weights (6.8 GB). Registering a quantized encoder instead takes the resident stack from 17.0 to **11.8 GiB** with no visible quality change — which is the difference between an image model that evicts your text model on every request and one that sits beside it.
+
+**Large images.** The VAE decode buffer grows with the square of the image size and is allocated *after* the whole stack is resident, so a generation can sample all its steps and then die at the final decode. `vae_tiling` decodes the latent in patches instead. It is a trade, not a free win — measured at 0.5 GiB saved for 20 % of the clock — so turn it on when you need the room and measure when you do not:
 ```bash
-zallama set flux:klein vae_tiling=true diffusion_fa=true
+zallama set flux:klein diffusion_fa=true vae_tiling=false
+zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
 ```
-The other memory switches are `fa` (flash attention everywhere), `diffusion_fa` (diffusion model only), `vae_conv_direct` / `diffusion_conv_direct`, `offload_to_cpu` (weights live in RAM, streamed into VRAM per graph), and `backend` for per-component placement (e.g. `backend=te=cpu`). Tile geometry is tunable with `vae_tile_size` and `vae_tile_overlap`.
+The other memory switches are `max_vram` + `stream_layers` (graph-cut segmented execution — prefer these over `offload_to_cpu`), `auto_fit`, `taesd` (tiny autoencoder, far faster decode), `eager_load`, `mmap`, and `backend` for per-component placement (e.g. `backend=te=cpu`). Tile geometry is tunable with `vae_tile_size`, `vae_tile_overlap` and `vae_relative_tile_size`. Full measured write-up: [Tuning Image Generation](docs/sd-tuning.md).
 
 > Image models are not chat models: `zallama run <name>` refuses them and points you at `zallama generate`.
 

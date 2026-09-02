@@ -304,23 +304,83 @@ else in `params` is dropped (`sd-server` aborts on an unrecognized argument).
 | `seed` | `--seed` | |
 | `vae_tile_size` | `--vae-tile-size` | only meaningful with `vae_tiling: true` |
 | `vae_tile_overlap` | `--vae-tile-overlap` | only meaningful with `vae_tiling: true` |
+| `vae_relative_tile_size` | `--vae-relative-tile-size` | overrides `vae_tile_size`; fractions of image size when < 1, tiles per dim when >= 1 |
 | `backend` | `--backend` | per-component device placement, e.g. `"vae=cuda0,diffusion=cpu"` |
 | `params_backend` | `--params-backend` | |
+| `cache_mode` | `--cache-mode` | step caching: `easycache`, `ucache`, `dbcache`/`taylorseer`/`cache-dit`, `spectrum`. Nothing to gain below ~20 steps |
+| `cache_option` | `--cache-option` | named cache params, e.g. `"threshold=0.25"` |
+| `max_vram` | `--max-vram` | GiB budget for graph-cut segmented execution; negative auto-detects free VRAM sparing that much |
+| `split_mode` | `--split-mode` | `layer` or `row` when a module spans several devices |
+| `rpc_servers` | `--rpc-servers` | |
+| `type` | `--type` | cast every weight on load, e.g. `q8_0` |
+| `tensor_type_rules` | `--tensor-type-rules` | per-pattern load-time typing, e.g. `"^vae\.=f16,model\.=q8_0"` |
+| `model_args` | `--model-args` | arch-specific key=value list |
+| `guidance` | `--guidance` | distilled guidance scale (models with a guidance input) |
+| `img_cfg_scale` | `--img-cfg-scale` | inpaint / image-edit models |
+| `flow_shift` | `--flow-shift` | flow models (SD3.x, WAN) |
+| `eta` | `--eta` | noise multiplier |
+| `sigmas` | `--sigmas` | explicit comma-separated sigma schedule |
+| `clip_skip` | `--clip-skip` | |
+| `batch_count` | `--batch-count` | |
+| `timestep_shift` | `--timestep-shift` | NitroFusion models |
+| `extra_sample_args` | `--extra-sample-args` | sampler/scheduler/guidance key=value list |
+| `extra_tiling_args` | `--extra-tiling-args` | VAE tiling key=value list |
+| `slg_scale` | `--slg-scale` | skip layer guidance, DiT only; `0` disables |
+| `skip_layers` | `--skip-layers` | layers SLG skips (default `[7,8,9]`) |
+| `skip_layer_start` / `skip_layer_end` | `--skip-layer-start` / `--skip-layer-end` | SLG window |
+| `strength` | `--strength` | noising/unnoising strength |
+| `rng` / `sampler_rng` | `--rng` / `--sampler-rng` | `std_default`, `cuda`, `cpu` |
+| `prediction` | `--prediction` | prediction type override |
+| `lora_model_dir` | `--lora-model-dir` | |
+| `lora_apply_mode` | `--lora-apply-mode` | `auto`, `immediately`, `at_runtime` |
+| `embd_dir` | `--embd-dir` | textual-inversion embeddings |
+| `hires_upscaler` | `--hires-upscaler` | with `hires: true` |
+| `hires_upscalers_dir` | `--hires-upscalers-dir` | |
+| `hires_scale` | `--hires-scale` | used when `hires_width`/`hires_height` are unset |
+| `hires_width` / `hires_height` | `--hires-width` / `--hires-height` | |
+| `hires_steps` | `--hires-steps` | second-pass steps; `0` reuses `steps` |
+| `hires_sigmas` | `--hires-sigmas` | |
+| `hires_denoising_strength` | `--hires-denoising-strength` | |
+| `hires_upscale_tile_size` | `--hires-upscale-tile-size` | |
+| `upscale_model` | `--upscale-model` | ESRGAN weights |
+| `upscale_repeats` | `--upscale-repeats` | |
+| `upscale_tile_size` | `--upscale-tile-size` | |
 
-Artifacts (`artifacts.vae`, `.taesd`, `.control_net`, `.clip_l`, `.clip_g`,
-`.t5xxl`, `.llm`, `.llm_vision`, `.clip_vision`) take priority over the
-matching `params` key of the same name and are passed as their own flag.
+Artifacts take priority over the matching `params` key of the same name and are
+passed as their own flag: `artifacts.vae`, `.taesd`, `.audio_vae`,
+`.control_net`, `.clip_l`, `.clip_g`, `.t5xxl`, `.llm`, `.llm_vision`,
+`.clip_vision`, `.ip_adapter`, `.photo_maker`, `.pulid_weights`,
+`.motion_module`, `.upscale_model`, `.high_noise_diffusion_model`,
+`.uncond_diffusion_model`, `.embeddings_connectors`.
+
+> **The text encoder is usually the VRAM problem, not the diffusion model.**
+> A FLUX stack with `t5xxl_fp16.safetensors` spends 9.8 GB on the encoder
+> against 6.8 GB on Q4_0 diffusion weights. Registering a quantized encoder
+> instead (`t5-v1_1-xxl-encoder-Q8_0.gguf`, 5.1 GB) took a measured stack from
+> 17.0 to 11.8 GiB with no visible quality change — see
+> [docs/sd-tuning.md](docs/sd-tuning.md).
 
 ### Boolean flags (present only if truthy)
 
 | key | CLI flag | notes |
 |---|---|---|
-| `vae_tiling` | `--vae-tiling` | avoids an OOM on the VAE decode buffer at large resolutions |
-| `fa` | `--fa` | |
-| `diffusion_fa` | `--diffusion-fa` | |
-| `diffusion_conv_direct` | `--diffusion-conv-direct` | |
-| `vae_conv_direct` | `--vae-conv-direct` | |
-| `offload_to_cpu` | `--offload-to-cpu` | keep weights in RAM, stream into VRAM per graph |
+| `vae_tiling` | `--vae-tiling` | avoids an OOM on the VAE decode buffer at large resolutions — but costs ~20% of the clock, so measure before enabling |
+| `fa` | `--fa` | flash attention everywhere. Measured to add nothing over `diffusion_fa` alone |
+| `diffusion_fa` | `--diffusion-fa` | flash attention in the diffusion model. Worth **1.73x** on FLUX at 1024x1024 |
+| `diffusion_conv_direct` | `--diffusion-conv-direct` | measured as noise on FLUX |
+| `vae_conv_direct` | `--vae-conv-direct` | saves ~0.5 GiB and costs **2.7x** the wall time — see [docs/sd-tuning.md](docs/sd-tuning.md) |
+| `offload_to_cpu` | `--offload-to-cpu` | keep weights in RAM, stream into VRAM per graph. Prefer `max_vram` + `stream_layers` |
+| `stream_layers` | `--stream-layers` | residency + prefetch on top of `max_vram`; no effect without it |
+| `auto_fit` | `--auto-fit` | derive placement from model size and per-device budget; overrides `backend`/`params_backend` |
+| `eager_load` | `--eager-load` | load all params at model-load time instead of lazily on first use, moving the cost into the startup health check |
+| `mmap` | `--mmap` | memory-map the weights |
+| `hires` | `--hires` | highres fix: sample small, upscale, re-denoise |
+| `temporal_tiling` | `--temporal-tiling` | LTX video VAE decode |
+| `circular` / `circularx` / `circulary` | `--circular` / `--circularx` / `--circulary` | circular padding for tileable output |
+| `force_sdxl_vae_conv_scale` | `--force-sdxl-vae-conv-scale` | |
+| `disable_image_metadata` | `--disable-image-metadata` | |
+| `increase_ref_index` | `--increase-ref-index` | |
+| `disable_auto_resize_ref_image` | `--disable-auto-resize-ref-image` | |
 
 ### Request-body-only defaults
 

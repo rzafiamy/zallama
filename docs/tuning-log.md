@@ -10,6 +10,7 @@ for how. Deep dives on a single knob get their own doc (e.g.
 flat index across all of them.
 
 - [Log](#log)
+- [Image models](#image-models)
 - [Adding a row](#adding-a-row)
 
 ---
@@ -64,6 +65,23 @@ computed as usable). Net effect: recommended `ctx_size: 2048` against a
 by hand (same method as the MTP doc's hybrid-arch formula, just swap in
 `key_length_swa`/`value_length_swa` for the SWA-tagged layers) and verify
 with a real `zallama load` + `nvidia-smi`. Not fixed yet.
+
+## Image models
+
+Diffusion has no token axis, so these rows report **seconds per image** instead
+of decode tok/s. Measured with `zallama bench <model> --image-size WxH`; the
+full write-up is [Tuning Image Generation](sd-tuning.md).
+
+| Model | Backend | GPU | Config | s/image @ 1024x1024 | VRAM | Date | Notes |
+|---|---|---|---|---|---|---|---|
+| FLUX.1-schnell-Q4_0 (`flux:klein`) | sd-server (`master-813`) | RTX 4090 24 GiB | `steps 4`, `sampler euler`, `cfg_scale 1.0`, `diffusion_fa`, `vae_tiling`, `t5xxl_fp16` | 3.95 | 17.0 GiB | 2026-09-02 | Starting config. The fp16 T5 encoder (9.8 GB) cost more than the Q4_0 diffusion weights (6.8 GB), and at 17 GiB the model could not co-exist with anything on the card. |
+| FLUX.1-schnell-Q4_0 (`flux:klein`) | sd-server (`master-813`) | RTX 4090 24 GiB | as above but `t5xxl` = `t5-v1_1-xxl-encoder-Q8_0.gguf`, `vae_tiling false` | **3.30** | **12.3 GiB** | 2026-09-02 | Winning config. Q8_0 text encoder is visually lossless and frees 5.2 GiB; dropping tiling buys 20% back. 10.6 GiB now free for a co-resident text model. |
+| FLUX.1-schnell-Q4_0 (`flux:klein`) | sd-server (`master-813`) | RTX 4090 24 GiB | `vae_tiling`: true vs false, else as winning config | 3.95 vs 3.30 | 11.8 vs 12.3 GiB | 2026-09-02 | Tiling is a memory trade, not a free one: 0.5 GiB for 20% of the clock. The README's old "~6.6 GB decode buffer" figure does not hold on this build. |
+| FLUX.1-schnell-Q4_0 (`flux:klein`) | sd-server (`master-813`) | RTX 4090 24 GiB | `fa` x `diffusion_fa`, else as winning config | 3.31 / 3.32 / 3.32 / 5.72 | 12.3 GiB | 2026-09-02 | Flash attention is worth **1.73x**, and all of it lives in the diffusion model — `fa` on top of `diffusion_fa` measures identical. Keep `diffusion_fa` alone. |
+| FLUX.1-schnell-Q4_0 (`flux:klein`) | sd-server (`master-813`) | RTX 4090 24 GiB | `vae_conv_direct` / `diffusion_conv_direct`, else as winning config | 9.01 vs 3.31 | 11.8 vs 12.3 GiB | 2026-09-02 | `vae_conv_direct` buys the same 0.5 GiB as tiling and costs **2.7x** the wall time — never worth it here. `diffusion_conv_direct` is noise in both directions. |
+| FLUX.1-schnell-Q4_0 (`flux:klein`) | sd-server (`master-813`) | RTX 4090 24 GiB | `steps`: 4 vs 8 @ 512x512, else as winning config | 0.93 vs 1.54 | 12.3 GiB | 2026-09-02 | Near-linear in steps, as expected — which is also why `cache_mode` has nothing to skip at 4 steps. |
+
+---
 
 ## Adding a row
 
