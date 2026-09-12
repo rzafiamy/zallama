@@ -462,7 +462,7 @@ The daemon listens on **two ports**: the inference API (`/v1/*`) on `port`, and 
 models:
   # Standard text/chat model
   - name: "qwen3.5-4b-q4_k_m"
-    file: "/home/cook/.zallama/models/Qwen3.5-4B-Q4_K_M.gguf"
+    file: "/home/user/.zallama/models/Qwen3.5-4B-Q4_K_M.gguf"
     description: "Downloaded from unsloth/Qwen3.5-4B-GGUF"
     params:
       ctx_size: 8192
