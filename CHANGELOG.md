@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-09-12
+
 ### Added
 - **Prometheus `GET /metrics`** — the daemon's monitoring state in text exposition format,
   rendered by hand (no new dependency): registry/loaded counts, the memory budget vs.
