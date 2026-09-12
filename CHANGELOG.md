@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-09-12
+
+### Added
+- **`zallama monitor`** (alias `top`) — an htop-style live view: GPU utilisation / VRAM /
+  temperature / power, CPU load and RAM, the loaded models with measured VRAM and in-flight
+  request counts, the requests being served right now (elapsed, TTFT, tokens streamed so
+  far) and the last N completed ones with prompt / cached / output tokens, TTFT, prefill and
+  decode rates, draft acceptance, total time and status. `--once` prints a single frame.
+  Backed by a new in-memory request log in the daemon (`GET /api/requests`, last 200): every
+  proxied `/v1` route is registered through `ProcessManager.serving()`, and the
+  chat/completions proxy taps its own SSE stream for TTFT and llama.cpp's `timings` block
+  without buffering it. `/api/ps` rows gain `active` (in-flight requests per instance).
+- **`zallama calibrate <model> --probe`** — calibration by measurement. Loads the model at a
+  few `ctx_size` values (bisecting between `--min`/4096 and `--max`/the trained context) and
+  reads the card's real free VRAM after each, reporting the largest context that leaves
+  `--margin` GiB free (default: the `services` group's memory budget, minus what services
+  already hold). `--apply` writes `ctx_size` plus the measured `mem_gb`. Registry params are
+  restored on exit and on Ctrl-C. Motivation: the static estimate was wrong on every hybrid
+  model tried this month — it can't see the MTP/DFlash draft context's own KV cache, the
+  compute buffers, or a CPU-side mmproj, and its "weights + reserve exceed usable VRAM"
+  alarm refuses any GGUF over ~18 GiB outright. Measured slopes: Qwen3.8-27B 43 KiB/token
+  all-in (17 KV layers), Nemotron 3.5 30B-A3B 8 KiB/token.
+- **`zallama probe <model>`** — a smoke test of behaviour, not speed: does the model think
+  before answering (and does the answer even arrive within the budget), do tool calls come
+  back as structured `tool_calls`, does it see an image, and which thinking switch does its
+  chat template actually understand (`<think>` toggle → `reasoning=false`; `reasoning_effort`;
+  `enable_thinking` / `reasoning_strength` → `chat_template_kwargs`).
+- **`zallama bench` reports draft acceptance** (`ACCEPT %` column, `draft_accept_pct` in
+  exports) for models running speculative decoding, from llama.cpp's `draft_n` /
+  `draft_n_accepted` timings. It is the steady signal a `spec_draft_n_max` sweep should be
+  read from — decode tok/s swings ±10–40% with content, acceptance does not.
+- `chat_template_kwargs` model param (`--chat-template-kwargs`), also accepted per-request.
+  Some chat templates gate thinking on a jinja variable of their own instead of the
+  `reasoning_effort` llama-server sets natively — Muse-Glimmer reads `reasoning_strength`
+  (template default `high`) and always opens a `to=self` channel before answering, which
+  neither `reasoning: false` nor `reasoning_effort` can touch. `chat_template_kwargs:
+  '{"reasoning_strength":"low"}'` halves its output on short answers (47 vs ~100 tokens).
+  A JSON string (what `zallama set` stores) or a mapping in a hand-edited registry both work.
+
+### Changed
+- **`zallama bench`'s prompt now demands original text.** It used to end with "Continue the
+  passage above", and models did exactly that — copied the filler back out. A speculative
+  draft predicts a copy perfectly: measured **100% acceptance** on Nemotron, which made every
+  longer `spec_draft_n_max` look better and put Nemotron at 330–470 tok/s. On the new prompt
+  ("write an original short story…") the same model does 237–247 tok/s, acceptance is 20–62%,
+  and the shortest draft wins. **Decode numbers from earlier exports of speculative models are
+  not comparable with new ones**; non-speculative models are unaffected (per-token cost doesn't
+  depend on what the token is). Prefill measurements are unchanged.
+
 ### Fixed
 - **Per-request `steps` / `cfg_scale` / `sampler` / `seed` now reach the image backend.**
   `POST /v1/images/generations` proxied to sd-server's own OpenAI route, which honours
@@ -486,7 +535,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/rzafiamy/zallama/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/rzafiamy/zallama/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/rzafiamy/zallama/compare/v1.12.0...v1.13.0
 [1.6.0]: https://github.com/rzafiamy/zallama/compare/v1.5.1...v1.6.0

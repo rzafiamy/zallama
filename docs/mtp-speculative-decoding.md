@@ -67,6 +67,16 @@ acceptance rate at the end of each request:
 draft acceptance = 0.70769 ( 184 accepted / 260 generated), mean len = 3.83
 ```
 
+> **Caveat (2026-09-11):** the sentence below is **not true on build 10434 for a
+> quantized target.** [llama.cpp #25618](https://github.com/ggml-org/llama.cpp/issues/25618)
+> reports that `draft-mtp` and `draft-dspark` diverge from vanilla under greedy
+> sampling when the target is quantized, and it reproduces here: same prompt,
+> `temperature: 0`, `top_k: 1`, fixed seed, Q4_K_M target — free prose came back
+> as a different paragraph (106 words vs 74, similarity 0.578), while structured
+> output stayed identical. `Qwen3.8-27B-Q4_K_M` runs `draft-mtp` on a quantized
+> target and is in scope. No quality loss was observed, but reproducibility is
+> gone. Details in [two-model-agent-study.md](two-model-agent-study.md).
+
 Speculative decoding does not change *what* the model produces — rejected drafts
 are discarded and the target model's own distribution is preserved. It only
 changes how many tokens come out per forward pass.
@@ -89,6 +99,19 @@ Measured on Qwen3.8-27B over one fixed three-prompt set at `--temp 0`:
 
 The default of 3 wins. Try 4 on very predictable output (code, structured
 formats), but measure it — see the warning below before you trust a single run.
+
+> **2026-09-12 — the table above was measured on a prompt the model could
+> copy.** `zallama bench` used to end its prompt with "Continue the passage
+> above", and the acceptance figures partly reflect the model repeating the
+> filler. Re-measured on the fixed prompt (original prose, `--temp 0`, 512
+> tokens, 3 runs) Qwen3.8-27B-UD-Q3_K_XL gives: n_max 1 → 82.9 tok/s (76%
+> accepted), **2 → 88.1 (55%)**, **3 → 87.9 (43%)**, 4 → 81.9 (33%). So 2–3
+> are a tie and the honest decode is ~88 tok/s, not ~105. The `ACCEPT %`
+> column `bench` now prints is what to read a sweep from. And the picture is
+> model-specific: on Nemotron 3.5 30B-A3B, MTP is worth **+4%** at n_max 1
+> (247 vs 237 tok/s with no speculation at all) for +2.1 GiB VRAM and −20%
+> prefill — the MoE is fast enough that verifying drafts costs what it saves.
+> Its registry entry runs without MTP now.
 
 > **`zallama bench` alone will not settle this.** With the default fixed-length
 > generation, each run generates *different* text, and acceptance depends
@@ -161,8 +184,10 @@ picture.
    MTP head.
 2. `zallama set <model> spec_type=draft-mtp` and reload. Expect ~2x decode and
    ~1 GiB more VRAM.
-3. Leave `spec_draft_n_max` at 3 unless a fixed-prompt, `--temp 0` comparison
-   says otherwise.
+3. Leave `spec_draft_n_max` at 2–3 unless a fixed-prompt, `--temp 0` comparison
+   says otherwise — read the `ACCEPT %` column, not just DECODE. Below ~40%
+   acceptance the draft is costing more than it returns; on a fast MoE, check
+   that `spec_type` beats no speculation at all before keeping it.
 4. Re-run `zallama calibrate <model>` — the extra GiB comes out of the context
    budget.
 5. Update `mem_gb` from what `zallama ps` reports, so eviction schedules on the

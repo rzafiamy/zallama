@@ -189,6 +189,7 @@ Also covers vision (add an `mmproj` artifact) and any entry with
 | `spec_draft_n_max` | `--spec-draft-n-max` | draft lookahead length |
 | `spec_draft_ngl` | `--spec-draft-ngl` | standalone draft model only: layers of it to keep in VRAM |
 | `reasoning_effort` | `--reasoning-effort` | `minimal\|low\|medium\|high\|xhigh\|max` (template-dependent) |
+| `chat_template_kwargs` | `--chat-template-kwargs` | JSON object of extra jinja variables for templates that gate thinking on their own key, e.g. `'{"reasoning_strength":"low"}'` (Muse-Glimmer) |
 | `image_min_tokens` | `--image-min-tokens` | vision: min tokens per image |
 | `image_max_tokens` | `--image-max-tokens` | vision: max tokens per image |
 | `n_cpu_moe` | `--n-cpu-moe` | MoE only: keep first N layers' experts in system RAM |

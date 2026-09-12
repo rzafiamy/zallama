@@ -125,6 +125,9 @@ class ProcessManager:
         self._startup_timeout: int = ls.get("startup_timeout", 60)
         self._max_loaded: int = ls.get("max_loaded_models", 0)  # 0 = unlimited
         self._mem_budget_gb: float = float(ls.get("mem_budget_gb", 0))  # 0 = unlimited
+        # Live + recent request metrics for `zallama monitor` (/api/requests).
+        from .request_log import RequestLog
+        self.request_log = RequestLog()
         self._mem_init_gb: float = float(ls.get("mem_init_gb", 2))      # fallback cost
         # How long eviction waits for a victim backend's in-flight requests to
         # finish before killing it anyway. 0 disables the wait (old behavior:
@@ -161,16 +164,30 @@ class ProcessManager:
         return lock
 
     @asynccontextmanager
-    async def serving(self, inst: ModelInstance):
+    async def serving(self, inst: ModelInstance, endpoint: str | None = None,
+                      stream: bool = False):
         """Scope a proxied request against `inst` so eviction won't kill the
         backend while the request is still reading from it.
 
         Routes wrap their upstream call in this; for streaming responses the
         scope must span the generator's lifetime, not just the handler.
+
+        With `endpoint` given, the request is also logged for `zallama monitor`
+        (`/api/requests`): registered as in flight on entry, finalised on exit
+        with the status the block ended in. The yielded value is then the
+        RequestRecord, so a route can attach llama.cpp's timings to it.
         """
         inst.acquire()
+        rec = self.request_log.start(inst.name, endpoint, stream) if endpoint else None
         try:
-            yield inst
+            yield rec if rec is not None else inst
+        except BaseException as e:
+            if rec is not None:
+                self.request_log.finish(rec, error=f"{type(e).__name__}: {e}")
+            raise
+        else:
+            if rec is not None:
+                self.request_log.finish(rec)
         finally:
             inst.release()
 
@@ -338,6 +355,8 @@ class ProcessManager:
                 "started_at": inst.started_at,
                 "last_used": inst.last_used,
                 "alive": inst.is_alive(),
+                # Proxied requests currently reading from this backend.
+                "active": inst.active,
             })
         return result
 

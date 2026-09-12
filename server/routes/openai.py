@@ -84,23 +84,33 @@ async def _resolve_instance(model_name: str, pm, registry, endpoint: str | None 
     return inst
 
 
-async def _stream_proxy(pm, inst, upstream_url: str, body: dict) -> AsyncIterator[bytes]:
+async def _stream_proxy(pm, inst, upstream_url: str, body: dict,
+                        endpoint: str | None = None) -> AsyncIterator[bytes]:
     """Stream SSE from llama-server back to client.
 
     The whole stream runs inside `pm.serving(inst)` so the backend isn't evicted
     out from under a response that's still being read (which would 502 the
     client mid-stream). The scope has to live here, in the generator, not in the
     handler — the handler returns as soon as StreamingResponse is constructed.
+
+    With `endpoint` set, the stream is also tapped for the request log: TTFT
+    from the first content delta, token counts and rates from the `timings`
+    block llama.cpp appends to its last chunk.
     """
-    async with pm.serving(inst):
+    async with pm.serving(inst, endpoint, stream=True) as rec:
+        tap = pm.request_log.make_sse_tap(rec) if endpoint else None
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", upstream_url, json=body) as resp:
                 if resp.status_code != 200:
                     error_body = await resp.aread()
+                    if rec is not None:
+                        pm.request_log.finish(rec, error=f"HTTP {resp.status_code}")
                     yield error_body
                     return
                 async for chunk in resp.aiter_bytes():
                     if chunk:
+                        if tap:
+                            tap(chunk)
                         yield chunk
 
 
@@ -260,7 +270,7 @@ async def chat_completions(
 
     if stream:
         return StreamingResponse(
-            _stream_proxy(pm, inst, upstream_url, body),
+            _stream_proxy(pm, inst, upstream_url, body, endpoint="chat/completions"),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -268,13 +278,19 @@ async def chat_completions(
             },
         )
     else:
-        async with pm.serving(inst):
+        async with pm.serving(inst, "chat/completions") as rec:
             async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
                 try:
                     resp = await client.post(upstream_url, json=body)
                 except httpx.RequestError as e:
                     raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
-        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+            payload = resp.json()
+            if resp.status_code == 200 and isinstance(payload, dict):
+                pm.request_log.apply_metrics(rec, payload.get("timings") or {},
+                                             payload.get("usage") or {})
+            else:
+                pm.request_log.finish(rec, error=f"HTTP {resp.status_code}")
+        return JSONResponse(content=payload, status_code=resp.status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -296,18 +312,24 @@ async def completions(
 
     if stream:
         return StreamingResponse(
-            _stream_proxy(pm, inst, upstream_url, body),
+            _stream_proxy(pm, inst, upstream_url, body, endpoint="completions"),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     else:
-        async with pm.serving(inst):
+        async with pm.serving(inst, "completions") as rec:
             async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
                 try:
                     resp = await client.post(upstream_url, json=body)
                 except httpx.RequestError as e:
                     raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
-        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+            payload = resp.json()
+            if resp.status_code == 200 and isinstance(payload, dict):
+                pm.request_log.apply_metrics(rec, payload.get("timings") or {},
+                                             payload.get("usage") or {})
+            else:
+                pm.request_log.finish(rec, error=f"HTTP {resp.status_code}")
+        return JSONResponse(content=payload, status_code=resp.status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -325,13 +347,16 @@ async def embeddings(
     inst.touch()
 
     upstream_url = f"{inst.base_url}/v1/embeddings"
-    async with pm.serving(inst):
+    async with pm.serving(inst, "embeddings") as rec:
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, json=body)
             except httpx.RequestError as e:
                 raise HTTPException(status_code=502, detail=f"llama-server error: {e}")
-    return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        payload = resp.json()
+        if resp.status_code == 200 and isinstance(payload, dict):
+            pm.request_log.apply_metrics(rec, {}, payload.get("usage") or {})
+    return JSONResponse(content=payload, status_code=resp.status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +401,7 @@ async def rerank(
     if "top_n" in body:
         upstream_body["top_n"] = body["top_n"]
 
-    async with pm.serving(inst):
+    async with pm.serving(inst, "rerank"):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, json=upstream_body)
@@ -456,7 +481,7 @@ async def audio_transcriptions(
             data[key] = value
 
     upstream_url = f"{inst.base_url}/v1/audio/transcriptions"
-    async with pm.serving(inst):
+    async with pm.serving(inst, "audio/transcriptions"):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, data=data, files=files)
@@ -541,7 +566,7 @@ async def audio_speech(
             body.pop("voice", None)
 
     upstream_url = f"{inst.base_url}/v1/audio/speech"
-    async with pm.serving(inst):
+    async with pm.serving(inst, "audio/speech"):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, json=body)
@@ -625,7 +650,7 @@ async def images_generations(
             body[key] = params[key]
 
     upstream_url = f"{inst.base_url}/sdapi/v1/txt2img"
-    async with pm.serving(inst):
+    async with pm.serving(inst, "images/generations"):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, json=_txt2img_payload(body))

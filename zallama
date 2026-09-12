@@ -963,11 +963,52 @@ def cmd_calibrate(args: list[str]):
     fits alongside the model weights and a compute reserve. Prints the
     recommendation and the exact `zallama set` command — it writes nothing.
     """
-    if not args:
-        _err("Usage: zallama calibrate <model>")
+    probe = False
+    apply = False
+    margin_gb: float | None = None
+    ctx_min: int | None = None
+    ctx_max: int | None = None
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--probe":
+            probe = True
+        elif arg == "--apply":
+            apply = True
+        elif arg in ("--margin", "--min", "--max"):
+            if i + 1 >= len(args):
+                _err(f"{arg} expects a value")
+                sys.exit(1)
+            try:
+                val = float(args[i + 1]) if arg == "--margin" else int(args[i + 1])
+            except ValueError:
+                _err(f"{arg} expects a number, got '{args[i + 1]}'")
+                sys.exit(1)
+            if arg == "--margin":
+                margin_gb = val
+            elif arg == "--min":
+                ctx_min = val
+            else:
+                ctx_max = val
+            i += 1
+        elif arg.startswith("-"):
+            _err(f"Unknown flag: {arg}")
+            sys.exit(1)
+        else:
+            positional.append(arg)
+        i += 1
+    if not positional:
+        _err("Usage: zallama calibrate <model> [--probe [--margin GiB] [--min N] [--max N] [--apply]]")
         _info("Recommends a max ctx_size + mem_gb from your VRAM. Changes nothing.")
+        _info("--probe: measure instead of predict — loads the model at a few ctx_size")
+        _info("         values and bisects to the largest that leaves --margin GiB free.")
+        _info("--apply: write the probed ctx_size + measured mem_gb into the registry.")
         sys.exit(1)
-    model_name = args[0]
+    if (apply or margin_gb is not None or ctx_min or ctx_max) and not probe:
+        _err("--apply/--margin/--min/--max only make sense with --probe")
+        sys.exit(1)
+    model_name = positional[0]
 
     # 1. Locate the model entry (file path, size, current params).
     r = _api("GET", "/api/models")
@@ -1004,6 +1045,10 @@ def cmd_calibrate(args: list[str]):
     except Exception as e:
         dims = None
         _info(f"Could not read GGUF metadata ({e}); using a size-only estimate.")
+
+    if probe:
+        _calibrate_probe(entry, dims, margin_gb, ctx_min, ctx_max, apply)
+        return
 
     # 4. Budgeting. Leave a slice of VRAM for the OS/desktop + llama.cpp's
     #    compute buffers (activations, graph). 88% usable is a safe default on
@@ -1122,6 +1167,727 @@ def cmd_calibrate(args: list[str]):
     print(f"\n{F_DIM}  Then `zallama reload {model_name}` (or it applies on next load).{RESET}\n")
 
 
+def _query_free_vram_gb() -> float | None:
+    """Free VRAM of GPU 0 in GiB via nvidia-smi, or None if unavailable."""
+    import shutil
+    import subprocess
+
+    if shutil.which("nvidia-smi") is None:
+        return None
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.free",
+             "--format=csv,noheader,nounits"],
+            text=True, timeout=5,
+        )
+        return float(out.strip().splitlines()[0]) / 1024
+    except Exception:
+        return None
+
+
+_PROBE_STEP = 4096
+
+
+def _calibrate_probe(entry: dict, dims: dict | None, margin_gb: float | None,
+                     ctx_min: int | None, ctx_max: int | None, apply: bool):
+    """Find the largest ctx_size that fits by loading the model, not predicting.
+
+    The static estimate above has to guess at everything that isn't in the
+    GGUF header — the compute buffers, the MTP/dflash draft context's own KV
+    cache, whether the mmproj is on the GPU, how a MoE's experts are laid out.
+    Every one of those has cost it a wrong answer on a hybrid model. This
+    instead bisects ctx_size between --min and --max (default: 4096 and the
+    trained context), loading the model at each step through the daemon and
+    reading the card's real free VRAM afterwards. A step "fits" when at least
+    --margin GiB stays free — by default the `services` group's memory budget
+    minus what services already hold, i.e. room for the embedding/ASR/TTS
+    models this one is meant to coexist with. ~6 loads for a 262144 range.
+
+    Dry-run like the static path: prints the `zallama set` line unless --apply.
+    """
+    import re
+
+    name = entry["name"]
+    base_params = dict(entry.get("params", {}))
+    my_group = entry.get("evict_group_effective") or entry.get("evict_group") or "primary"
+
+    # Other instances resident right now. Same-group ones will be evicted by
+    # the load and don't matter; other groups stay and shrink the free VRAM
+    # the probe sees, so their footprint is deducted from the default margin.
+    resident_other_gb = 0.0
+    resident_names: list[str] = []
+    r = _api("GET", "/api/models")
+    groups = {m["name"]: (m.get("evict_group_effective") or "primary")
+              for m in (r.json().get("models", []) if r.status_code == 200 else [])}
+    r = _api("GET", "/api/ps")
+    for proc in (r.json().get("processes", []) if r.status_code == 200 else []):
+        if proc.get("name") == name or not proc.get("alive", True):
+            continue
+        if groups.get(proc["name"], "primary") != my_group:
+            resident_names.append(proc["name"])
+            resident_other_gb += proc.get("vram_gb") or 0.0
+
+    if margin_gb is None:
+        budget = 1.0
+        try:
+            from server.config import load_config
+            budgets = (load_config().get("llama_server", {})
+                       .get("evict_group_mem_budgets") or {})
+            budget = float(budgets.get("services", budget))
+        except Exception:
+            pass
+        margin_gb = max(0.5, budget - resident_other_gb)
+
+    train_ctx = int(dims["train_ctx"]) if dims and dims.get("train_ctx") else 0
+    lo = max(_PROBE_STEP, ctx_min or _PROBE_STEP)
+    hi = ctx_max or train_ctx or max(int(base_params.get("ctx_size", 4096)) * 4, 65536)
+    lo = (lo // _PROBE_STEP) * _PROBE_STEP
+    hi = (hi // _PROBE_STEP) * _PROBE_STEP
+    if hi <= lo:
+        _err(f"--max ({hi}) must be above --min ({lo}).")
+        sys.exit(1)
+
+    print(f"\n{BOLD}{F_BLUE} Probing '{name}'{RESET}")
+    plan = [
+        ["ctx_size range", f"{lo} … {hi}"
+                            + (" (trained ctx)" if hi == train_ctx else "")],
+        ["Fits when", f"≥ {margin_gb:.1f} GiB stays free on the card"],
+    ]
+    if resident_names:
+        plan.append(["Also resident", f"{', '.join(resident_names)} "
+                                      f"({resident_other_gb:.1f} GiB, deducted from margin)"])
+    _print_table(["FIELD", "VALUE"], plan)
+    print(f"\n{F_DIM}  Each step loads the model — registry params are restored "
+          f"when done (including on Ctrl-C).{RESET}\n")
+
+    trials: list[dict] = []
+
+    def trial(ctx: int) -> bool:
+        params = dict(base_params)
+        params["ctx_size"] = ctx
+        if not _bench_set_params(entry, params):
+            _err("Could not write params to the registry.")
+            sys.exit(1)
+        print(f"  {_color('▸', F_BLUE)} ctx_size={ctx:<7} {_color('loading…', F_DIM)}",
+              end="", flush=True)
+        load_s, err = _bench_reload(name)
+        rec = {"ctx": ctx, "fits": False, "vram": None, "free": None, "err": None}
+        if err:
+            # The daemon only says "died during startup"; llama.cpp's log says
+            # why. An out-of-memory there is the expected way to overshoot.
+            reason = err
+            m = re.search(r"Check logs: (\S+)", err)
+            if m:
+                try:
+                    tail = Path(m.group(1)).read_text(errors="replace")[-20000:]
+                    if "out of memory" in tail:
+                        reason = "OOM at load"
+                except OSError:
+                    pass
+            rec["err"] = reason
+            print(f"\r  {_color('✗', RED)} ctx_size={ctx:<7} {_color(reason, RED)}{' ' * 20}")
+        else:
+            vram = _bench_vram(name)
+            free = _query_free_vram_gb()
+            rec.update(vram=vram, free=free)
+            rec["fits"] = free is not None and free >= margin_gb
+            mark = _color('✓', GREEN) if rec["fits"] else _color('✗', YELLOW)
+            print(f"\r  {mark} ctx_size={ctx:<7} "
+                  f"{(f'{vram:.1f} GiB' if vram else '?'):>9} used by model · "
+                  f"{(f'{free:.1f} GiB' if free is not None else '?'):>8} free"
+                  f"{'' if rec['fits'] else _color('  (below margin)', YELLOW)}{' ' * 8}")
+        trials.append(rec)
+        return rec["fits"]
+
+    best: int | None = None
+    try:
+        if trial(hi):
+            best = hi
+        elif not trial(lo):
+            best = None
+        else:
+            good, bad = lo, hi
+            # Stop once the bracket is within ~3% of the answer: the last few
+            # 4096-token steps of a 400k context cost a load each and buy
+            # nothing anyone will notice.
+            while bad - good > max(_PROBE_STEP, good // 32):
+                mid = ((good + bad) // 2 // _PROBE_STEP) * _PROBE_STEP
+                if trial(mid):
+                    good = mid
+                else:
+                    bad = mid
+            best = good
+    except KeyboardInterrupt:
+        print(f"\n{_color('  Interrupted — restoring registry params…', YELLOW)}")
+        good = [t["ctx"] for t in trials if t["fits"]]
+        best = max(good) if good else None
+        apply = False
+    finally:
+        _bench_set_params(entry, base_params)
+        _api("POST", f"/api/models/{name}/unload")
+
+    print()
+    if best is None:
+        _err(f"Even ctx_size={lo} doesn't leave {margin_gb:.1f} GiB free. "
+             f"Lower --margin, unload other models, or use a smaller quant / n_cpu_moe.")
+        sys.exit(1)
+
+    hit = next(t for t in trials if t["ctx"] == best)
+    mem_gb = round(hit["vram"] + 0.05, 1) if hit["vram"] else None
+    ok_pts = sorted((t["ctx"], t["vram"]) for t in trials if t["fits"] and t["vram"])
+    slope = None
+    if len(ok_pts) >= 2:
+        (c0, v0), (c1, v1) = ok_pts[0], ok_pts[-1]
+        if c1 > c0:
+            slope = (v1 - v0) * 2**20 / (c1 - c0)   # KiB per token
+
+    rows = [
+        [_color("→ Max ctx_size that fits", F_TEAL + BOLD), _color(str(best), F_TEAL + BOLD)],
+        ["Measured VRAM at that ctx", f"{hit['vram']:.1f} GiB" if hit["vram"] else "?"],
+        ["Free VRAM at that ctx", f"{hit['free']:.1f} GiB" if hit["free"] is not None else "?"],
+    ]
+    if slope is not None:
+        rows.append(["Measured KV slope", f"{slope:.1f} KiB/token (all-in: draft ctx, buffers)"])
+    if best == hi and hi == train_ctx:
+        rows.append(["Ceiling", "the model's trained context, not VRAM"])
+    elif best == hi:
+        rows.append(["Ceiling", f"--max {hi} — raise it, there may be room"])
+    if mem_gb is not None:
+        rows.append([_color("→ mem_gb", F_TEAL + BOLD), _color(str(mem_gb), F_TEAL + BOLD)])
+    _print_table(["FIELD", "VALUE"], rows)
+
+    cmd = f"zallama set {name} ctx_size={best}" + (f" mem_gb={mem_gb}" if mem_gb else "")
+    if apply:
+        params = dict(base_params)
+        params["ctx_size"] = best
+        payload_entry = dict(entry)
+        if mem_gb is not None:
+            payload_entry["mem_gb"] = mem_gb
+        if _bench_set_params(payload_entry, params):
+            _ok(f"Applied: {cmd}")
+        else:
+            _err(f"Could not write the registry — run it yourself: {cmd}")
+    else:
+        print(f"\n{BOLD}  To apply (nothing was changed):{RESET}")
+        print(f"    {_color(cmd, CYAN)}")
+        print(f"\n{F_DIM}  Or re-run with --apply.{RESET}\n")
+
+
+# ---------------------------------------------------------------------------
+# probe — does this model think / call tools / see, as configured?
+# ---------------------------------------------------------------------------
+
+# Template variables that gate thinking, by the models known to use them. A
+# `reasoning: false` in the registry maps to llama-server's --reasoning off,
+# which only works on templates with a <think> toggle; a template that reads
+# one of these instead needs `chat_template_kwargs` (or reasoning_effort).
+_TEMPLATE_REASONING_VARS = [
+    ("enable_thinking", "chat_template_kwargs='{\"enable_thinking\":false}' (Qwen3-style)"),
+    ("reasoning_effort", "reasoning_effort=low|minimal (llama-server sets this one natively)"),
+    ("reasoning_strength", "chat_template_kwargs='{\"reasoning_strength\":\"low\"}' (Muse-Glimmer)"),
+    ("thinking_mode", "chat_template_kwargs='{\"thinking_mode\":\"off\"}'"),
+]
+
+
+def _probe_png_b64(rgb: tuple[int, int, int] = (220, 30, 30), size: int = 64) -> str:
+    """A solid-colour PNG, built inline — the vision probe needs an image the
+    model can only describe by actually looking at it."""
+    import base64
+    import struct
+    import zlib
+
+    raw = b"".join(b"\x00" + bytes(rgb) * size for _ in range(size))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw))
+           + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode()
+
+
+def _probe_chat(model: str, messages: list, max_tokens: int, timeout: float,
+                **extra) -> dict:
+    """One non-streamed chat call; returns {message, usage, timings} or {error}."""
+    body = {"model": model, "messages": messages, "max_tokens": max_tokens,
+            "temperature": 0, **extra}
+    try:
+        r = requests.post(f"{ZALLAMA_HOST}/v1/chat/completions", json=body,
+                          timeout=timeout)
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)[:160]}
+    if r.status_code != 200:
+        return {"error": f"HTTP {r.status_code}: {r.text[:160]}"}
+    try:
+        d = r.json()
+    except ValueError:
+        return {"error": "non-JSON response"}
+    choice = (d.get("choices") or [{}])[0]
+    return {"message": choice.get("message") or {},
+            "finish": choice.get("finish_reason"),
+            "usage": d.get("usage") or {},
+            "timings": d.get("timings") or {}}
+
+
+def cmd_probe(args: list[str]):
+    """Smoke-test a model's behaviour: zallama probe <model> [--timeout S]
+
+    Three short real requests through the daemon, at temperature 0:
+      1. a trivial question — does the model think before answering, how many
+         tokens that costs, and whether the answer even arrives within the
+         budget (a thinking model can spend all of max_tokens in
+         reasoning_content and return an empty message);
+      2. the same with a tool definition — does it come back as a structured
+         `tool_calls` entry, as text, or not at all;
+      3. if the entry has a vision mmproj, a solid red image — does it see.
+    Then it reads the GGUF chat template to say which thinking switch this
+    model actually understands, since `reasoning: false` only works on some.
+    """
+    timeout = 180.0
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--timeout" and i + 1 < len(args):
+            timeout = float(args[i + 1]); i += 2; continue
+        if args[i].startswith("-"):
+            _err(f"Unknown flag: {args[i]}"); sys.exit(1)
+        positional.append(args[i]); i += 1
+    if not positional:
+        _err("Usage: zallama probe <model> [--timeout S]")
+        _info("Checks thinking, tool calling and vision with real requests.")
+        sys.exit(1)
+    name = positional[0]
+
+    r = _api("GET", "/api/models")
+    if r.status_code != 200:
+        _err(f"Failed to fetch models: {r.text}"); sys.exit(1)
+    entry = next((m for m in r.json().get("models", [])
+                  if m["name"] == name or name in m.get("aliases", [])), None)
+    if not entry:
+        _err(f"Model '{name}' not found in registry."); sys.exit(1)
+    if entry.get("modality", "text") != "text":
+        _err(f"probe targets chat models; '{name}' is '{entry.get('modality')}'.")
+        sys.exit(1)
+    name = entry["name"]
+    params = entry.get("params", {})
+    has_mmproj = bool((entry.get("artifacts") or {}).get("mmproj"))
+
+    print(f"\n{BOLD}{F_BLUE} Probing '{name}'{RESET}")
+    print(f"  {_color('loading…', F_DIM)}", end="", flush=True)
+    t0 = time.perf_counter()
+    r = _api("POST", f"/api/models/{name}/load")
+    if r.status_code != 200:
+        try:
+            detail = r.json().get("detail", r.text)
+        except ValueError:
+            detail = r.text
+        print(f"\r  {_color('✗ ' + str(detail)[:160], RED)}")
+        sys.exit(1)
+    print(f"\r  {_color(f'loaded in {time.perf_counter() - t0:.1f}s', F_DIM)}      \n")
+
+    rows: list[list[str]] = []
+    hints: list[str] = []
+    question = "What is 17 × 23? Answer with just the number."
+
+    # 1. Thinking.
+    res = _probe_chat(name, [{"role": "user", "content": question}], 400, timeout)
+    if "error" in res:
+        rows.append(["Chat", _color(res["error"], RED)])
+    else:
+        msg, usage = res["message"], res["usage"]
+        content = (msg.get("content") or "").strip()
+        reasoning = (msg.get("reasoning_content") or "").strip()
+        comp = usage.get("completion_tokens", 0)
+        decode = res["timings"].get("predicted_per_second")
+        rows.append(["Answer", (_color(content[:60], F_TEAL) if content
+                                else _color("(empty — budget spent thinking)", RED))
+                     + f"  {F_DIM}{comp} tokens"
+                     + (f", {decode:.0f} tok/s" if decode else "") + RESET])
+        if reasoning:
+            thinking = f"yes — {len(reasoning)} chars of reasoning_content"
+            if not content:
+                thinking += ", answer never arrived in 400 tokens"
+            rows.append(["Thinks", _color(thinking, F_ORANGE)])
+            if params.get("reasoning") is False:
+                hints.append("`reasoning: false` is set but the model still thinks — "
+                             "this template has no <think> toggle; see the switch below.")
+            elif "reasoning" not in params and "reasoning_effort" not in params \
+                    and "chat_template_kwargs" not in params:
+                hints.append("Thinking is on by default. For speed on short answers try "
+                             f"`zallama set {name} reasoning=false` (or the switch below).")
+        else:
+            rows.append(["Thinks", "no"])
+
+    # 2. Tool calling.
+    tools = [{"type": "function", "function": {
+        "name": "get_weather", "description": "Get the current weather for a city",
+        "parameters": {"type": "object",
+                       "properties": {"city": {"type": "string"}},
+                       "required": ["city"]}}}]
+    # Told to use the tool, not merely tempted: this checks that the template
+    # renders tools and llama-server parses the call back, not how eager the
+    # model is. Nemotron 3.5 politely declines "what's the weather?" yet calls
+    # the tool fine when asked to.
+    res = _probe_chat(name, [{"role": "user", "content":
+                              "Use the get_weather tool to look up the current weather in Lyon."}],
+                      300, timeout, tools=tools)
+    if "error" in res:
+        rows.append(["Tool call", _color(res["error"], RED)])
+    else:
+        msg = res["message"]
+        calls = msg.get("tool_calls") or []
+        content = (msg.get("content") or "").strip()
+        if calls:
+            fn = calls[0].get("function", {})
+            rows.append(["Tool call", _color(f"structured — {fn.get('name')}({fn.get('arguments', '')[:40]})", F_TEAL)])
+        elif "get_weather" in content:
+            rows.append(["Tool call", _color("as text only — call not parsed into tool_calls", F_ORANGE)])
+            hints.append("The tool call came back as plain text: llama-server didn't "
+                         "recognise this template's call format. Check `--jinja` support "
+                         "for it, or pass a `chat_template` file.")
+        else:
+            rows.append(["Tool call", _color("no — answered without calling the tool", F_ORANGE)])
+
+    # 3. Vision.
+    if has_mmproj:
+        nonce = f"[{time.time_ns():x}] "
+        res = _probe_chat(name, [{"role": "user", "content": [
+            {"type": "text", "text": nonce + "What is the dominant colour of this image? One word."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + _probe_png_b64()}},
+        ]}], 200, timeout)
+        if "error" in res:
+            rows.append(["Vision", _color(res["error"], RED)])
+        else:
+            content = (res["message"].get("content") or "").strip()
+            ok = any(w in content.lower() for w in ("red", "rouge", "crimson", "scarlet"))
+            rows.append(["Vision", (_color(f"sees — \"{content[:40]}\"", F_TEAL) if ok
+                                    else _color(f"answered \"{content[:40]}\" to a solid red image", F_ORANGE)
+                                    if content else _color("(empty answer)", RED))])
+    else:
+        rows.append(["Vision", f"{F_DIM}no mmproj registered{RESET}"])
+
+    # 4. What switch does the template understand?
+    switches: list[str] = []
+    try:
+        tmpl = _read_gguf_metadata(Path(entry["file"])).get("tokenizer.chat_template", "")
+        if "<think>" in tmpl or "</think>" in tmpl:
+            switches.append("<think> tags → `reasoning=false` works")
+        for var, how in _TEMPLATE_REASONING_VARS:
+            if var in tmpl:
+                switches.append(f"`{var}` → {how}")
+    except Exception:
+        pass
+    rows.append(["Template switches", "; ".join(switches) if switches
+                 else f"{F_DIM}none found in the chat template{RESET}"])
+    cfg = [k for k in ("reasoning", "reasoning_effort", "chat_template_kwargs") if k in params]
+    rows.append(["Configured", ", ".join(f"{k}={params[k]}" for k in cfg) if cfg
+                 else f"{F_DIM}nothing reasoning-related{RESET}"])
+
+    _print_table(["CHECK", "RESULT"], rows)
+    for h in hints:
+        _info(h)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# monitor — htop-style live view: GPU/CPU/RAM, loaded models, requests
+# ---------------------------------------------------------------------------
+
+def _mon_gpu() -> dict | None:
+    """GPU 0 utilisation/memory/temperature/power via nvidia-smi, or None."""
+    import shutil
+    import subprocess
+
+    if shutil.which("nvidia-smi") is None:
+        return None
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,"
+             "temperature.gpu,power.draw,power.limit",
+             "--format=csv,noheader,nounits"], text=True, timeout=5)
+        parts = [x.strip() for x in out.strip().splitlines()[0].split(",")]
+        num = lambda v: None if v in ("", "[N/A]", "N/A") else float(v)
+        return {"name": parts[0].replace("NVIDIA ", "").replace("GeForce ", ""),
+                "util": num(parts[1]), "mem_used": num(parts[2]) / 1024,
+                "mem_total": num(parts[3]) / 1024, "temp": num(parts[4]),
+                "power": num(parts[5]), "power_limit": num(parts[6])}
+    except Exception:
+        return None
+
+
+def _mon_cpu_ticks() -> tuple[int, int] | None:
+    """(busy, total) jiffies from /proc/stat — diff two samples for a percentage."""
+    try:
+        with open("/proc/stat") as fh:
+            f = fh.readline().split()
+        vals = [int(x) for x in f[1:]]
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+        return sum(vals) - idle, sum(vals)
+    except Exception:
+        return None
+
+
+def _mon_ram() -> tuple[float, float] | None:
+    """(used GiB, total GiB) from /proc/meminfo, used = total - available."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                k, v = line.split(":", 1)
+                info[k] = int(v.strip().split()[0])
+        total = info["MemTotal"] / 2**20
+        return total - info.get("MemAvailable", 0) / 2**20, total
+    except Exception:
+        return None
+
+
+def _mon_bar(frac: float | None, width: int) -> str:
+    if frac is None:
+        return "?" * width
+    n = max(0, min(width, round(frac * width)))
+    return "█" * n + "░" * (width - n)
+
+
+def _mon_age(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}m"
+    if seconds < 86400:
+        return f"{seconds / 3600:.1f}h"
+    return f"{seconds / 86400:.1f}d"
+
+
+def _mon_ms(ms: float | None) -> str:
+    if ms is None:
+        return "—"
+    return f"{ms:.0f}ms" if ms < 1000 else f"{ms / 1000:.1f}s"
+
+
+def _mon_num(v, fmt="{:.0f}") -> str:
+    return "—" if v is None else fmt.format(v)
+
+
+def _mon_fetch() -> tuple[dict | None, dict | None, str | None]:
+    """One poll of the daemon: (/api/ps, /api/requests, error)."""
+    try:
+        ps = requests.get(f"{ZALLAMA_HOST}/api/ps", timeout=3).json()
+        rq = requests.get(f"{ZALLAMA_HOST}/api/requests?limit=50", timeout=3)
+        # An older daemon (pre-monitor) has /api/ps but no /api/requests.
+        rq = rq.json() if rq.status_code == 200 else {"active": [], "recent": [],
+                                                       "totals": None}
+        return ps, rq, None
+    except Exception as e:
+        return None, None, str(e)[:80]
+
+
+def _mon_frame(width: int, cpu_pct: float | None, limit: int) -> list[tuple[str, str]]:
+    """Render one screen as [(style, line)] — shared by curses and --once.
+
+    Styles: 'title', 'head', 'ok', 'warn', 'err', 'dim', '' (plain).
+    """
+    lines: list[tuple[str, str]] = []
+    ps, rq, err = _mon_fetch()
+    gpu = _mon_gpu()
+    ram = _mon_ram()
+    now = time.time()
+    barw = max(8, min(20, (width - 60) // 2))
+
+    lines.append(("title", f" zallama monitor  •  {ZALLAMA_HOST}  •  "
+                           f"{time.strftime('%H:%M:%S')}  •  q quit"))
+    if gpu:
+        util = gpu["util"]
+        memf = (gpu["mem_used"] / gpu["mem_total"]) if gpu["mem_total"] else None
+        extra = ""
+        if gpu["temp"] is not None:
+            extra += f"  {gpu['temp']:.0f}°C"
+        if gpu["power"] is not None:
+            extra += f"  {gpu['power']:.0f}W"
+            if gpu["power_limit"]:
+                extra += f"/{gpu['power_limit']:.0f}W"
+        lines.append(("", f" GPU  {gpu['name'][:18]:<18} util {_mon_bar((util or 0) / 100, barw)} "
+                          f"{_mon_num(util):>3}%   VRAM {_mon_bar(memf, barw)} "
+                          f"{gpu['mem_used']:.1f}/{gpu['mem_total']:.1f} GiB{extra}"))
+    else:
+        lines.append(("dim", " GPU  (no nvidia-smi)"))
+    ramtxt = (f"RAM  {_mon_bar(ram[0] / ram[1], barw)} {ram[0]:.1f}/{ram[1]:.1f} GiB"
+              if ram else "RAM  ?")
+    lines.append(("", f" CPU  {'':<18} load {_mon_bar((cpu_pct or 0) / 100, barw)} "
+                      f"{_mon_num(cpu_pct):>3}%   {ramtxt}"))
+    lines.append(("", ""))
+
+    if err:
+        lines.append(("err", f" daemon unreachable: {err}"))
+        return lines
+
+    # -- models -------------------------------------------------------------
+    mem = ps.get("memory") or {}
+    procs = ps.get("processes") or []
+    budget = mem.get("budget_gb")
+    hdr = (f" MODELS  {len(procs)} loaded"
+           + (f"/{mem['max_loaded_models']}" if mem.get("max_loaded_models") else "")
+           + (f"  •  declared {mem.get('loaded_gb', 0):.1f}"
+              + (f"/{budget:.1f}" if budget else "") + " GB")
+           + (f"  •  measured {mem['vram_used_gb']:.1f} GiB" if mem.get("vram_used_gb") is not None else ""))
+    lines.append(("head", hdr))
+    lines.append(("dim", f"   {'NAME':<28} {'STATE':<7} {'VRAM':>9} {'ACTIVE':>6} {'IDLE':>6}  {'UP':>6}  BACKEND"))
+    if not procs:
+        lines.append(("dim", "   (nothing loaded)"))
+    for p in sorted(procs, key=lambda x: -(x.get("vram_gb") or 0)):
+        active = p.get("active") or 0
+        state, style = ("busy", "ok") if active else (("idle", "") if p.get("alive", True) else ("dead", "err"))
+        vram = f"{p['vram_gb']:.1f} GiB" if p.get("vram_gb") is not None else "—"
+        lines.append((style, f"   {p['name'][:28]:<28} {state:<7} {vram:>9} {active:>6} "
+                             f"{_mon_age(now - p.get('last_used', now)):>6}  "
+                             f"{_mon_age(now - p.get('started_at', now)):>6}  {p.get('backend', '')}"))
+    lines.append(("", ""))
+
+    # -- in flight ----------------------------------------------------------
+    active_reqs = rq.get("active") or []
+    lines.append(("head", f" IN FLIGHT  {len(active_reqs)}"))
+    if active_reqs:
+        lines.append(("dim", f"   {'#':>5}  {'MODEL':<24} {'ENDPOINT':<20} {'ELAPSED':>8} {'TTFT':>7} {'TOKENS':>7}"))
+        for r in active_reqs:
+            lines.append(("ok", f"   {r['id']:>5}  {r['model'][:24]:<24} {r['endpoint']:<20} "
+                                f"{_mon_ms(r.get('duration_ms')):>8} {_mon_ms(r.get('ttft_ms')):>7} "
+                                f"{(r.get('tokens_so_far') or '—') if r.get('stream') else '—':>7}"))
+    lines.append(("", ""))
+
+    # -- recent -------------------------------------------------------------
+    totals = rq.get("totals")
+    recent = (rq.get("recent") or [])[:limit]
+    hdr = f" RECENT  last {len(recent)}"
+    if totals:
+        hdr += (f"  •  since {_mon_age(now - totals['since'])}: {totals['requests']} req, "
+                f"{totals['errors']} err, {totals['prompt_tokens']:,} in / "
+                f"{totals['completion_tokens']:,} out tokens")
+    lines.append(("head", hdr))
+    lines.append(("dim", f"   {'TIME':<8} {'MODEL':<22} {'ENDPOINT':<18} {'PROMPT':>6} {'CACHE':>5} "
+                         f"{'OUT':>5} {'TTFT':>7} {'PREFILL':>8} {'DECODE':>7} {'ACC':>4} {'TOTAL':>7}  ST"))
+    if not recent:
+        lines.append(("dim", "   (no requests yet)"))
+    for r in recent:
+        acc = f"{r['draft_accept'] * 100:.0f}%" if r.get("draft_accept") is not None else "—"
+        style = "err" if r.get("status") == "error" else ""
+        st = r.get("status", "")
+        if r.get("error"):
+            st = r["error"][:24]
+        lines.append((style, f"   {time.strftime('%H:%M:%S', time.localtime(r['started_at'])):<8} "
+                             f"{r['model'][:22]:<22} {r['endpoint'][:18]:<18} "
+                             f"{_mon_num(r.get('prompt_tokens')):>6} {_mon_num(r.get('cached_tokens')):>5} "
+                             f"{_mon_num(r.get('completion_tokens')):>5} {_mon_ms(r.get('ttft_ms')):>7} "
+                             f"{(_mon_num(r.get('prefill_tps')) + '/s') if r.get('prefill_tps') else '—':>8} "
+                             f"{(_mon_num(r.get('decode_tps'), '{:.1f}') + '/s') if r.get('decode_tps') else '—':>7} "
+                             f"{acc:>4} {_mon_ms(r.get('duration_ms')):>7}  {st}"))
+    return lines
+
+
+def cmd_monitor(args: list[str]):
+    """Live dashboard: zallama monitor [--interval S] [--limit N] [--once]
+
+    Top: GPU utilisation/VRAM/temperature/power (nvidia-smi), CPU load and RAM
+    (/proc). Then the loaded models with their measured VRAM and in-flight
+    request count, the requests being served right now (elapsed, TTFT, tokens
+    streamed so far), and the most recent completed ones with what each cost:
+    prompt/cached/output tokens, TTFT, prefill and decode rates off llama.cpp's
+    own clock, draft acceptance for speculative models, total time, status.
+    --once prints a single frame and exits (for scripts and narrow terminals).
+    """
+    interval = 1.0
+    limit = 20
+    once = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--interval", "-n") and i + 1 < len(args):
+            interval = max(0.2, float(args[i + 1])); i += 2; continue
+        if a == "--limit" and i + 1 < len(args):
+            limit = max(1, int(args[i + 1])); i += 2; continue
+        if a == "--once":
+            once = True; i += 1; continue
+        _err(f"Unknown flag: {a}")
+        _info("Usage: zallama monitor [--interval S] [--limit N] [--once]")
+        sys.exit(1)
+
+    prev = _mon_cpu_ticks()
+
+    def cpu_pct() -> float | None:
+        nonlocal prev
+        cur = _mon_cpu_ticks()
+        if not cur or not prev:
+            prev = cur
+            return None
+        busy, total = cur[0] - prev[0], cur[1] - prev[1]
+        prev = cur
+        return (100.0 * busy / total) if total > 0 else None
+
+    if once or not sys.stdout.isatty():
+        time.sleep(0.2)
+        width = os.get_terminal_size().columns if sys.stdout.isatty() else 160
+        styles = {"title": BOLD + F_BLUE, "head": BOLD, "ok": F_TEAL, "warn": F_ORANGE,
+                  "err": F_RED, "dim": F_DIM, "": ""}
+        for style, line in _mon_frame(width, cpu_pct(), limit):
+            print(f"{styles[style]}{line}{RESET}" if style and sys.stdout.isatty() else line)
+        return
+
+    import curses
+
+    def run(stdscr):
+        curses.curs_set(0)
+        stdscr.nodelay(True)
+        has_color = curses.has_colors()
+        if has_color:
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_CYAN, -1)
+            curses.init_pair(2, curses.COLOR_GREEN, -1)
+            curses.init_pair(3, curses.COLOR_YELLOW, -1)
+            curses.init_pair(4, curses.COLOR_RED, -1)
+        attrs = {
+            "title": curses.A_BOLD | (curses.color_pair(1) if has_color else 0),
+            "head": curses.A_BOLD,
+            "ok": curses.color_pair(2) if has_color else 0,
+            "warn": curses.color_pair(3) if has_color else 0,
+            "err": curses.color_pair(4) if has_color else curses.A_BOLD,
+            "dim": curses.A_DIM,
+            "": 0,
+        }
+        last = 0.0
+        frame: list[tuple[str, str]] = []
+        while True:
+            now = time.time()
+            if now - last >= interval:
+                frame = _mon_frame(stdscr.getmaxyx()[1], cpu_pct(), limit)
+                last = now
+                stdscr.erase()
+                h, w = stdscr.getmaxyx()
+                for y, (style, line) in enumerate(frame[:h - 1]):
+                    try:
+                        stdscr.addnstr(y, 0, line, w - 1, attrs[style])
+                    except curses.error:
+                        pass
+                stdscr.refresh()
+            try:
+                key = stdscr.getch()
+            except curses.error:
+                key = -1
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            if key in (ord("r"), ord("R")):
+                last = 0.0
+            if key == curses.KEY_RESIZE:
+                last = 0.0
+            time.sleep(0.1)
+
+    try:
+        curses.wrapper(run)
+    except KeyboardInterrupt:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # bench — tokens/sec across parameter sweeps
 # ---------------------------------------------------------------------------
@@ -1152,7 +1918,14 @@ def _bench_prompt(target_tokens: int, nonce: str) -> str:
     padding: list[str] = []
     while len(padding) < wanted:
         padding.extend(words)
-    return f"{nonce}{' '.join(padding[:wanted])}\n\nContinue the passage above."
+    # The task must demand *new* text. "Continue the passage" let the model
+    # copy the filler back out, which a speculative draft predicts perfectly —
+    # measured 100% draft acceptance on Nemotron, i.e. it was benchmarking
+    # copy speed, and every spec_draft_n_max looked better the longer it was.
+    return (f"{nonce}{' '.join(padding[:wanted])}\n\n"
+            "Ignore the passage above. Write an original short story, in "
+            "your own words, about a lighthouse keeper who finds a message "
+            "in a bottle. Do not reuse any sentence from the passage.")
 
 
 def _bench_request(model: str, prompt: str, max_tokens: int, temp: float,
@@ -1231,6 +2004,12 @@ def _bench_request(model: str, prompt: str, max_tokens: int, temp: float,
         "prefill_tps": timings.get("prompt_per_second"),
         "decode_tps": timings.get("predicted_per_second"),
         "e2e_tps": (gen / wall) if wall > 0 else None,
+        # Speculative decoding only (draft-mtp / draft-dflash / draft-simple):
+        # how many drafted tokens the target model accepted. This is the
+        # number a spec_draft_n_max sweep is really about — decode tok/s
+        # swings ±10% run to run with content, acceptance far less.
+        "draft_accept": ((timings["draft_n_accepted"] / timings["draft_n"])
+                         if timings.get("draft_n") else None),
     }
 
 
@@ -1400,7 +2179,7 @@ _BENCH_FIELDS = [
     "label", "gpu", "model", "params", "prompt_tokens_target", "prompt_tokens",
     "max_tokens", "concurrency", "runs", "load_s", "vram_gib", "ttft_ms",
     "prefill_tps", "decode_tps", "decode_tps_stdev", "throughput_tps",
-    "gen_tokens", "cached_tokens", "engine_build",
+    "draft_accept_pct", "gen_tokens", "cached_tokens", "engine_build",
     "modality", "image_size", "image_steps", "image_s", "images_per_min",
     "error",
 ]
@@ -1522,6 +2301,7 @@ _BENCH_METRICS = {
     "prefill_tps": ("PREFILL t/s", "higher", "{:.0f}"),
     "decode_tps": ("DECODE t/s", "higher", "{:.1f}"),
     "throughput_tps": ("TOTAL t/s", "higher", "{:.1f}"),
+    "draft_accept_pct": ("ACCEPT %", "higher", "{:.0f}"),
     "ttft_ms": ("TTFT ms", "lower", "{:.0f}"),
     "load_s": ("LOAD s", "lower", "{:.1f}"),
     "vram_gib": ("VRAM GiB", "lower", "{:.1f}"),
@@ -2065,6 +2845,9 @@ def cmd_bench(args: list[str]):
                         "decode_tps_stdev": (round(statistics.stdev(decodes), 2)
                                              if len(decodes) > 1 else None),
                         "throughput_tps": _bench_mean(batch_tps),
+                        "draft_accept_pct": _bench_mean(
+                            [s["draft_accept"] * 100 for s in samples
+                             if s.get("draft_accept") is not None]),
                         "gen_tokens": samples[0]["gen_tokens"],
                         # Max, not first: a cache hit on any run is what explains
                         # a prefill rate that looks impossibly good.
@@ -2212,6 +2995,9 @@ def _bench_report(records: list[dict], sweep_keys: list[str]):
         headers.append("VRAM GiB"); aligns.append("right")
     headers += ["TTFT ms", "PREFILL t/s", "DECODE t/s"]
     aligns += ["right", "right", "right"]
+    show_accept = any(r.get("draft_accept_pct") is not None for r in records)
+    if show_accept:
+        headers.append("ACCEPT %"); aligns.append("right")
     if show_conc:
         headers.append("TOTAL t/s"); aligns.append("right")
 
@@ -2234,6 +3020,10 @@ def _bench_report(records: list[dict], sweep_keys: list[str]):
             _bench_stat([s["prefill_tps"] for s in rec["_samples"]], "{:.0f}"),
             _color(_bench_stat([s["decode_tps"] for s in rec["_samples"]]), F_TEAL),
         ]
+        if show_accept:
+            row.append(_bench_stat(
+                [s["draft_accept"] * 100 for s in rec["_samples"]
+                 if s.get("draft_accept") is not None], "{:.0f}"))
         if show_conc:
             row.append(_bench_stat(rec["_batch_tps"]))
         rows.append(row)
@@ -2248,6 +3038,10 @@ def _bench_report(records: list[dict], sweep_keys: list[str]):
     if any(r.get("cached_tokens") for r in records):
         notes.append("Some prompts hit llama-server's KV cache, so PREFILL there "
                      "measures cached reuse, not real prompt processing.")
+    if show_accept:
+        notes.append("ACCEPT = drafted tokens the target model accepted "
+                     "(speculative decoding). Steadier than DECODE across runs — "
+                     "read a spec_draft_n_max sweep off this column.")
     if show_conc:
         notes.append("TOTAL = every request's tokens over the batch's wall time "
                      "(prefill included).")
@@ -3360,7 +4154,7 @@ def _fmt_duration(secs: int) -> str:
 # Commands whose first positional argument is a registered model name. Used by
 # the completer to offer model names at the right position.
 _MODEL_ARG_COMMANDS = {
-    "set", "show", "calibrate", "bench", "remove", "rm", "run", "load", "unload",
+    "set", "show", "calibrate", "probe", "bench", "remove", "rm", "run", "load", "unload",
     "stop", "reload", "logs", "pull", "generate", "gen",
 }
 
@@ -3438,7 +4232,10 @@ COMMANDS = {
     "set": cmd_set,
     "show": cmd_show,
     "calibrate": cmd_calibrate,
+    "probe": cmd_probe,
     "bench": cmd_bench,
+    "monitor": cmd_monitor,
+    "top": cmd_monitor,
     "config": cmd_config,
     "apikey": cmd_apikey,
     "remove": cmd_remove,
@@ -3485,7 +4282,8 @@ def main():
             ("add <name> <file>", "Register a local .gguf model"),
             ("set <name> <k>=<v> ...", "Configure parameters for a registered model"),
             ("show <name>", "Show a model's full configuration"),
-            ("calibrate <name>", "Recommend max ctx_size + mem_gb from your VRAM (dry-run)"),
+            ("calibrate <name> [--probe]", "Recommend max ctx_size + mem_gb (--probe: measure by loading)"),
+            ("probe <name>", "Smoke-test thinking, tool calling and vision with real requests"),
             ("bench <name>", "Measure tokens/sec, sweeping params like ctx_size"),
             ("config", "Show effective config + every available setting"),
             ("search <query>", "Search HuggingFace GGUF models"),
@@ -3494,6 +4292,7 @@ def main():
             ("run <name>", "Interactive chat with a model"),
             ("generate <name> \"<prompt>\"", "Generate an image with a diffusion model"),
             ("ps", "Show running model processes"),
+            ("monitor", "Live dashboard: GPU/CPU/RAM, loaded models, requests (alias: top)"),
             ("load <name>", "Pre-load a model into memory"),
             ("unload <name>", "Stop a running model"),
             ("reload <name>", "Restart a running model to apply registry param changes"),

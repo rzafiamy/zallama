@@ -6,6 +6,7 @@ Endpoints:
   POST   /api/models/add      — register a new model
   DELETE /api/models/{name}   — remove model from registry
   GET    /api/ps              — list running llama-server processes
+  GET    /api/requests        — in-flight + recent proxied requests (zallama monitor)
   POST   /api/models/{name}/load    — pre-load a model
   POST   /api/models/{name}/unload  — stop a running model
   POST   /api/models/{name}/reload  — restart a running model to apply param changes
@@ -184,6 +185,14 @@ async def remove_model(name: str, registry=Depends(get_registry), pm=Depends(get
 @router.get("/ps")
 async def list_running(pm=Depends(get_pm)):
     return {"processes": pm.list_running(), "memory": pm.memory_status()}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/requests  (in-flight + recent proxied requests, for `zallama monitor`)
+# ---------------------------------------------------------------------------
+@router.get("/requests")
+async def list_requests(limit: int = 50, pm=Depends(get_pm)):
+    return pm.request_log.snapshot(limit=max(1, min(limit, 200)))
 
 
 # ---------------------------------------------------------------------------

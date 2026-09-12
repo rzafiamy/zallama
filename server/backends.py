@@ -25,6 +25,7 @@ Each backend declares:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Protocol
 
@@ -230,7 +231,7 @@ class LlamaServerBackend:
     REQUEST_TUNABLE_PARAMS = {
         "temperature", "top_p", "top_k", "min_p",
         "presence_penalty", "repeat_penalty",
-        "reasoning_effort", "reasoning",
+        "reasoning_effort", "reasoning", "chat_template_kwargs",
     }
 
     def build_args(
@@ -276,6 +277,18 @@ class LlamaServerBackend:
 
         if "chat_template" in merged_params:
             args += ["--chat-template", str(merged_params["chat_template"])]
+
+        # Extra variables handed to the jinja chat template. Some templates
+        # gate their thinking on a variable of their own rather than the
+        # `reasoning_effort` llama-server sets natively — Muse-Glimmer reads
+        # `reasoning_strength` (default "high") and always opens a to=self
+        # channel unless it's "low"/"none"; `--reasoning off` can't touch that.
+        # Accepts a JSON string (what `zallama set` stores) or a mapping (a
+        # hand-edited registry.yaml).
+        ctk = merged_params.get("chat_template_kwargs")
+        if ctk:
+            args += ["--chat-template-kwargs",
+                     ctk if isinstance(ctk, str) else json.dumps(ctk)]
 
         return args
 

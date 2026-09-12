@@ -46,6 +46,8 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Fitting Your Models on One GPU](docs/vram-planning.md)
 - [Doubling Decode Speed with MTP](docs/mtp-speculative-decoding.md)
 - [What Qwen3-0.6B Can Actually Do in an Agentic Client](docs/qwen3-0.6b-agentic.md)
+- [MiniCPM5-2B as an Agentic Model](docs/minicpm5-agentic.md)
+- [Running a Small Model Beside a Big One](docs/two-model-agent-study.md)
 - [Model Tuning Log](docs/tuning-log.md)
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
@@ -322,10 +324,14 @@ generate <name> "<p>"  Generate an image with a diffusion model (alias: gen)
                        --output out.png --size 512x512 --steps 20
                        --cfg-scale 7.0 --negative-prompt "..."
 ps                     Show running model processes
+monitor                Live dashboard: GPU/CPU/RAM, loaded models, in-flight and
+                       recent requests with TTFT/prefill/decode (alias: top; --once)
 load <name>            Pre-load a model (start llama-server)
 unload <name>          Stop a running model (alias: stop)
 reload <name>          Restart a running model to apply registry param changes
 calibrate <name>       Recommend max ctx_size + mem_gb from your VRAM (dry-run)
+                       --probe [--margin GiB] [--min N] [--max N] [--apply]  measure by loading
+probe <name>           Smoke-test thinking, tool calling and vision with real requests
 bench <name>           Measure tokens/sec, sweeping params like ctx_size
                        --sweep k=v1,v2 --prompt-tokens N --concurrency N --out f
 logs <name>            Tail logs for a model
@@ -544,7 +550,7 @@ zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
 zallama bench --all --runs 5 --out bench.md
 ```
 
-Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `reasoning_effort`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`, `spec_draft_ngl`, `image_min_tokens`, `image_max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`.
+Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `reasoning_effort`, `chat_template_kwargs`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`, `spec_draft_ngl`, `image_min_tokens`, `image_max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`.
 
 Measured results from past sweeps — settings tried, tok/s and VRAM they measured — are kept in the [Model Tuning Log](docs/tuning-log.md), so a config doesn't get re-benchmarked from scratch every session.
 
@@ -603,8 +609,34 @@ The first file is the baseline; every other column shows its delta. **Only point
 - **PREFILL / DECODE come off llama.cpp's own clock** (its `timings` block), so they measure the engine, not your network. **TTFT and TOTAL are measured at the client** and include queueing and proxy overhead — which is what you want when the question is "how does this feel".
 - A combination that **fails to load** (a `ctx_size` that won't fit, say) is reported inline and skipped; the sweep carries on and the failure is recorded in the export with its error.
 - `--concurrency` above the model's `parallel` slots just queues. Sweep them together — `--sweep parallel=1,4 -c 4` — to see what batching actually buys.
+- **ACCEPT %** appears for models running speculative decoding (`spec_type` draft-mtp / draft-dflash / a `draft` artifact): the share of drafted tokens the target accepted. Read a `spec_draft_n_max` sweep off this column — it moves far less run to run than DECODE does. Anything near 100% means the model is copying its prompt, not generating.
 
 ---
+
+## 📈 Live Monitoring (`zallama monitor`)
+
+An htop-style view of the whole stack, refreshed every second (`q` quits, `r` refreshes, `--interval S`, `--once` prints a single frame for scripts):
+
+```
+ GPU  RTX 4090     util ████░░░░░░  38%   VRAM ██████████████████░░ 22.1/24.0 GiB  61°C  212W/450W
+ CPU               load ██░░░░░░░░  14%   RAM  ██░░░░░░░░░░░░░░░░░░  4.9/62.5 GiB
+
+ MODELS  3 loaded/4  •  declared 22.2/23.8 GB  •  measured 22.1 GiB
+   NAME                 STATE     VRAM  ACTIVE  IDLE   UP   BACKEND
+   nex:n2.5-mini        busy  21.4 GiB       1    2s   6s   llama-server
+   granite-embedding…   idle   0.7 GiB       0   40s   2m   embedding-server
+
+ IN FLIGHT  1
+       #  MODEL          ENDPOINT          ELAPSED    TTFT  TOKENS
+       7  nex:n2.5-mini  chat/completions     1.9s   158ms     337
+
+ RECENT  last 20  •  since 42m: 61 req, 1 err, 48,120 in / 9,312 out tokens
+   TIME     MODEL          ENDPOINT          PROMPT CACHE  OUT   TTFT  PREFILL  DECODE  ACC  TOTAL  ST
+   08:00:01 nex:n2.5-mini  chat/completions     13     0   18  221ms    248/s 183.9/s    —  221ms  ok
+   07:59:57 nex:n2.5-mini  chat/completions     25     0  400  158ms    194/s 194.8/s    —   2.2s  ok
+```
+
+The daemon records every proxied `/v1` request (`GET /api/requests`): TTFT is stamped on the first content delta of a stream, PREFILL/DECODE/CACHE come off the `timings` block llama.cpp appends to its response, ACC is draft acceptance for speculative models, and an in-flight streamed request shows how many tokens have gone by so far. The last 200 requests are kept in memory; nothing is written to disk.
 
 ## 🧠 Memory-Aware Eviction
 
@@ -617,6 +649,15 @@ zallama set qwen3.5-4b-q4_k_m mem_gb=4
 ```
 
 For a starting number without loading anything, `zallama calibrate <model>` reads the GGUF's own dimensions — counting only the layers that actually hold a KV cache, which on hybrid and sliding-window architectures is a fraction of the block count — and reports the largest `ctx_size` that still fits alongside the weights, the artifacts and a compute reserve. It writes nothing; it prints the `zallama set` line.
+
+For the real number, **`zallama calibrate <model> --probe`** loads the model instead of predicting: it bisects `ctx_size` between 4096 and the trained context (~6–10 loads, a minute or two), reads the card's actual free VRAM after each, and reports the largest value that still leaves `--margin` GiB free — by default the `services` group's memory budget, i.e. room for the embedding/ASR/TTS models this one has to coexist with. Everything the static estimate has to guess — compute buffers, an MTP or DFlash draft context's own KV cache, whether the mmproj sits on the GPU, a MoE's expert layout — is simply measured. It prints the measured VRAM slope in KiB/token too. Add `--apply` to write `ctx_size` and the measured `mem_gb` straight into the registry:
+
+```bash
+zallama calibrate nemotron:30b-a3b --probe --apply
+zallama calibrate Qwen3.8-27B-UD-Q5_K_M --probe --margin 1.5 --max 131072
+```
+
+And before trusting any of it, **`zallama probe <model>`** sends three short real requests — a trivial question, a tool definition, and (if the entry has an mmproj) a solid red image — and reports whether the model thinks before answering and what that costs, whether tool calls come back structured, and whether it sees. It also reads the chat template to say which thinking switch this model actually understands, because `reasoning: false` only works on templates with a `<think>` toggle; others read `reasoning_effort`, `enable_thinking` or their own variable via `chat_template_kwargs`.
 
 > **Measure it, don't guess it.** The `size × 1.2` fallback ignores the KV cache, the artifacts (`mmproj`, and the text encoders of image models) and the compute buffers. Real-world errors exceed 100% in **both** directions — a 4B model at a long context measured 12.9 GB against an estimate of 4.2 GB. A budget built on those estimates evicts models that would have fit *and* admits models that then OOM, so measure before enabling `mem_budget_gb`:
 >
