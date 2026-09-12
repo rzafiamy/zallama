@@ -507,3 +507,10 @@ h2:hover .anchor, h3:hover .anchor { opacity: 1; }
   .animate-bubble-1, .animate-bubble-2, .animate-bubble-3, .animate-float { animation: none; }
   html { scroll-behavior: auto; }
 }
+
+/* Metric tables: let long label sets wrap instead of squeezing the meaning column */
+.tbl.wrap td.mono {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 14rem;
+}

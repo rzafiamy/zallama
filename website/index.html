@@ -46,6 +46,7 @@
           <a href="#quickstart" class="hover:text-sky-600 transition-colors">Quickstart</a>
           <a href="#modalities" class="hover:text-sky-600 transition-colors">Modalities</a>
           <a href="#memory" class="hover:text-sky-600 transition-colors">Memory</a>
+          <a href="#operate" class="hover:text-sky-600 transition-colors">Operate</a>
           <a href="#api" class="hover:text-sky-600 transition-colors">API</a>
           <a href="./docs.html" class="hover:text-sky-600 transition-colors">Docs</a>
         </nav>
@@ -70,6 +71,7 @@
         <a href="#quickstart" class="px-3 py-2 rounded-xl hover:bg-sky-50">Quickstart</a>
         <a href="#modalities" class="px-3 py-2 rounded-xl hover:bg-sky-50">Modalities</a>
         <a href="#memory" class="px-3 py-2 rounded-xl hover:bg-sky-50">Memory</a>
+        <a href="#operate" class="px-3 py-2 rounded-xl hover:bg-sky-50">Operate</a>
         <a href="#api" class="px-3 py-2 rounded-xl hover:bg-sky-50">API</a>
         <a href="./docs.html" class="px-3 py-2 rounded-xl hover:bg-sky-50 text-sky-600">Docs →</a>
       </nav>
@@ -222,7 +224,7 @@
               </div>
               <div class="bg-white rounded-2xl border border-sky-100 p-3">
                 <div class="font-extrabold text-slate-800 mb-1">🧠 Memory budget</div>
-                <p class="text-slate-500 font-medium leading-snug">Set <span class="ic">mem_budget_gb</span>; LRU models are evicted so the next one fits. Pinned ones stay.</p>
+                <p class="text-slate-500 font-medium leading-snug">Set <span class="ic">mem_budget_gb</span>; LRU models of the same group are evicted so the next one fits. Pinned ones stay.</p>
               </div>
             </div>
           </div>
@@ -626,7 +628,7 @@ zallama zvec create notes</code></pre></div>
               <span class="text-gradient-fluent">go back to you.</span>
             </h2>
             <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium">
-              Three mechanisms keep your machine usable. An <strong>idle sweep</strong> unloads a model after <span class="ic">idle_timeout</span> seconds of silence. A <strong>count cap</strong> (<span class="ic">max_loaded_models</span>) limits how many run at once. And a <strong>memory budget</strong> (<span class="ic">mem_budget_gb</span>) evicts least-recently-used models until the incoming one fits.
+              Three mechanisms keep your machine usable. An <strong>idle sweep</strong> unloads a model after <span class="ic">idle_timeout</span> seconds of silence. A <strong>count cap</strong> (<span class="ic">max_loaded_models</span>) limits how many run at once. And a <strong>memory budget</strong> (<span class="ic">mem_budget_gb</span>) evicts least-recently-used models until the incoming one fits — only ever from the incoming model's own <strong>eviction group</strong>, so a chat model is never bumped by an embedding request.
             </p>
             <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium">
               Each model's cost comes from its declared <span class="ic">mem_gb</span>. If undeclared, it's estimated from file size — an estimate that is frequently off by 100% or more. So <strong>measure it</strong>:
@@ -766,8 +768,80 @@ zallama calibrate qwen3.5-4b-q4_k_m --probe --apply</code></pre></div>
  IN FLIGHT  1
        #  MODEL          ENDPOINT          ELAPSED    TTFT  TOKENS
        7  nex:n2.5-mini  chat/completions     1.9s   158ms     337</code></pre></div>
-            <p class="text-xs text-slate-500 font-semibold">TTFT is stamped on the first streamed delta; prefill/decode come off llama.cpp's own <span class="ic">timings</span>. The same data — plus lifecycle counters and histograms — is exposed for Prometheus at <span class="ic">GET /metrics</span> on the admin port.</p>
+            <p class="text-xs text-slate-500 font-semibold">TTFT is stamped on the first streamed delta; prefill/decode come off llama.cpp's own <span class="ic">timings</span>. The same data — plus lifecycle counters and histograms — is exposed for Prometheus at <span class="ic">GET /metrics</span> on the admin port — see <a href="#operate" class="text-sky-600 underline decoration-sky-300">Operate</a>.</p>
           </div>
+        </div>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- OPERATE: ADMIN PORT, PROMETHEUS, EVICTION GROUPS                 -->
+      <!-- ================================================================ -->
+      <section id="operate" class="reveal space-y-10">
+        <div class="text-center max-w-2xl mx-auto">
+          <div class="badge mb-4"><span>🛠️</span><span>Operate</span></div>
+          <h2 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-800">Built to be run, <span class="text-gradient-fluent">not just tried.</span></h2>
+          <p class="text-slate-500 mt-3 font-medium">A separate admin port, a management API, Prometheus metrics, and eviction rules that keep a big model from being bumped by a small one.</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <!-- Admin port -->
+          <div class="glass-card static rounded-3xl p-6 flex flex-col gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-11 h-11 rounded-2xl bg-sky-100 border border-sky-200 flex items-center justify-center text-xl">🧱</span>
+              <div>
+                <h3 class="font-extrabold text-slate-800">Two ports, one process</h3>
+                <div class="text-[11px] font-bold text-slate-400">inference :11435 · admin :11436</div>
+              </div>
+            </div>
+            <p class="text-sm text-slate-600 font-medium leading-relaxed">The inference port serves only <span class="ic">/v1/*</span>. Everything that <em>manages</em> the daemon — <span class="ic">/api/*</span> for <span class="ic">ps</span>, <span class="ic">load</span>, <span class="ic">pull</span>, <span class="ic">requests</span> — and <span class="ic">/metrics</span> sit on the admin port, which you can firewall separately or bind to a VPN interface with <span class="ic">admin_host</span>.</p>
+            <div class="code-wrap mt-auto"><pre><code><span class="c"># what the CLI calls under the hood</span>
+curl :11436/api/ps
+curl :11436/api/requests | jq '.[0]'
+curl -X POST :11436/api/models/llama3.2:3b/load</code></pre></div>
+          </div>
+
+          <!-- Prometheus -->
+          <div class="glass-card static rounded-3xl p-6 flex flex-col gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-11 h-11 rounded-2xl bg-sky-100 border border-sky-200 flex items-center justify-center text-xl">📈</span>
+              <div>
+                <h3 class="font-extrabold text-slate-800">Prometheus <span class="ic">/metrics</span></h3>
+                <div class="text-[11px] font-bold text-slate-400">unauthenticated · no extra dependency</div>
+              </div>
+            </div>
+            <p class="text-sm text-slate-600 font-medium leading-relaxed">Capacity vs. declared vs. measured VRAM, per-model lifecycle counters (starts, startup failures, crashes, evictions), token and timing totals, TTFT/duration histograms, whole-card GPU numbers — and one <span class="ic">zallama_model_param</span> series per effective launch parameter, so a graph can be joined to the <span class="ic">ctx_size</span> it was produced under.</p>
+            <div class="code-wrap mt-auto"><span class="code-label">promql</span><pre><code><span class="c"># free VRAM — what every 503 comes down to</span>
+zallama_gpu_memory_total_bytes - zallama_gpu_memory_used_bytes
+
+<span class="c"># restart loop</span>
+increase(zallama_model_start_failure_total[5m]) &gt; 2
+
+<span class="c"># honest decode tok/s over 5 min, per model</span>
+rate(zallama_completion_tokens_total[5m])
+  / rate(zallama_decode_seconds_total[5m])</code></pre></div>
+          </div>
+
+          <!-- Eviction groups -->
+          <div class="glass-card static rounded-3xl p-6 flex flex-col gap-4">
+            <div class="flex items-center gap-3">
+              <span class="w-11 h-11 rounded-2xl bg-sky-100 border border-sky-200 flex items-center justify-center text-xl">🗂️</span>
+              <div>
+                <h3 class="font-extrabold text-slate-800">Eviction groups</h3>
+                <div class="text-[11px] font-bold text-slate-400">primary vs. services</div>
+              </div>
+            </div>
+            <p class="text-sm text-slate-600 font-medium leading-relaxed">A model only ever evicts a model from its <strong>own group</strong>. Text and image models are <span class="ic">primary</span>; ASR, embedding, rerank and TTS are <span class="ic">services</span>. So a 20 GB chat model is never bumped because an embedding request came in — and small services trade one shared slot among themselves. Give a group its own memory cap, and let a busy backend finish streaming before it's reclaimed.</p>
+            <div class="code-wrap mt-auto"><span class="code-label">config.yaml</span><pre><code>llama_server:
+  evict_group_mem_budgets:
+    services: 1.5      <span class="c"># ASR + embed + rerank share 1.5 GB</span>
+  evict_drain_timeout: 30   <span class="c"># don't kill a mid-stream backend</span></code></pre></div>
+          </div>
+        </div>
+
+        <div class="text-center">
+          <a href="./docs.html#monitor" class="inline-flex items-center gap-2 px-5 py-3 text-sm font-bold rounded-2xl bg-white hover:bg-sky-50/50 text-sky-600 border-2 border-sky-200 hover:border-sky-300 transition-all">
+            📚 Every metric, query and admin endpoint in the docs
+          </a>
         </div>
       </section>
 
@@ -928,7 +1002,7 @@ zallama calibrate qwen3.5-4b-q4_k_m --probe --apply</code></pre></div>
           <a href="https://github.com/rzafiamy/zallama/blob/main/docs/monitoring.md" target="_blank" rel="noopener noreferrer" class="glass-card p-5 rounded-3xl block">
             <div class="text-xl mb-2">📈</div>
             <h3 class="font-extrabold text-slate-800 text-sm mb-1">Monitoring with Prometheus</h3>
-            <p class="text-xs text-slate-500 font-medium leading-relaxed">Every metric on <span class="ic">/metrics</span>, and the queries worth graphing.</p>
+            <p class="text-xs text-slate-500 font-medium leading-relaxed">Every metric on <span class="ic">/metrics</span>, the PromQL worth graphing, and alert suggestions.</p>
           </a>
           <a href="https://github.com/rzafiamy/zallama/blob/main/CONFIG.md" target="_blank" rel="noopener noreferrer" class="glass-card p-5 rounded-3xl block">
             <div class="text-xl mb-2">⚙️</div>
