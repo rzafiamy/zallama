@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Prometheus `GET /metrics`** — the daemon's monitoring state in text exposition format,
+  rendered by hand (no new dependency): registry/loaded counts, the memory budget vs.
+  declared vs. measured VRAM, per-instance VRAM / uptime / idle / in-flight, lifecycle
+  counters (`start`, `start_failure`, `crash`, `evict_capacity`, `evict_idle`, `unload` —
+  the first one would have shown the 13-in-2-minutes restart loop that motivated this),
+  per-model request/token/draft totals with prefill and decode seconds (so tok/s can be
+  averaged over any window), TTFT and duration histograms, whole-card GPU memory /
+  utilisation / temperature / power, and — for every registered model, loaded or not —
+  `zallama_model_info` plus one `zallama_model_param{model,param,value}` sample per
+  *effective* launch parameter (registry params over `default_params`, artifacts included;
+  numeric ones also as `zallama_model_param_value`), so a graph can be joined to the
+  `ctx_size` / `spec_type` / `cache_type_k` it was produced under and a re-tune is visible
+  as a label change. Unauthenticated, like `/health`. Metric reference and example queries
+  in `docs/monitoring.md`.
+
+### Changed
+- **Two listeners.** `/api/*` (model management, `ps`, `requests`) and `/metrics` moved off
+  the inference port onto a new admin listener: `zallama.admin_port` (default `port + 1`,
+  so 11435 → 11436) and `zallama.admin_host` (default: same as `host`), env
+  `ZALLAMA_ADMIN_PORT` / `ZALLAMA_ADMIN_HOST`. The inference port now serves only `/v1/*`,
+  `/health` and `/`. Both listeners run in one process on one event loop with a single
+  shared signal handler (uvicorn's per-server handler would otherwise leave one listener
+  alive after SIGTERM) and share the same API key. The CLI routes `/api/*` calls to the
+  admin port automatically (override: `ZALLAMA_ADMIN_HOST=http://host:port`); anything
+  else that called `/api/*` on the inference port — scripts, curl, dashboards — needs the
+  new port. `scripts/agentic_benchmark.py` gained `--admin-url`.
+- `/api/requests` records gain `prefill_ms`, `decode_ms`, `draft_n`, `draft_n_accepted`
+  (raw llama.cpp timings behind the existing rates).
+
 ## [1.15.0] - 2026-09-12
 
 ### Added

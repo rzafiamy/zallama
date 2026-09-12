@@ -417,6 +417,7 @@ For a one-off shell/session, without touching any file:
 
 ```bash
 ZALLAMA_HOST=0.0.0.0 ZALLAMA_PORT=11435 zallama serve
+ZALLAMA_ADMIN_PORT=11436 zallama serve      # /api/* + /metrics listener
 ZALLAMA_MODELS_DIR=/data/models zallama serve
 LLAMA_GPU_LAYERS=99 zallama serve
 ZALLAMA_EMBEDDING_MODEL=my-embed zallama serve
@@ -427,7 +428,9 @@ ZALLAMA_EMBEDDING_MODEL=my-embed zallama serve
 ```yaml
 zallama:
   host: "127.0.0.1"      # localhost only; set "0.0.0.0" to expose on the network
-  port: 11435
+  port: 11435            # inference: /v1/*
+  admin_port: 0          # admin: /api/* + /metrics (0 = port + 1, i.e. 11436)
+  admin_host: ""         # admin bind address ("" = same as host)
   models_dir: "~/.zallama/models"
   logs_dir: "~/.zallama/logs"
   api_key: ""            # if set, required as a Bearer token on /v1 and /api
@@ -450,6 +453,8 @@ llama_server:
 ```
 
 > **Security note:** Zallama binds to `127.0.0.1` by default. If you set `host: "0.0.0.0"` to expose it on your network, also set an `api_key` — the daemon has no auth otherwise.
+
+The daemon listens on **two ports**: the inference API (`/v1/*`) on `port`, and the management API (`/api/*` — `zallama ps`, `list`, `load`, `pull`…) plus the Prometheus `/metrics` endpoint on `admin_port`. Both share the same API key; `/metrics` and `/health` are the only unauthenticated paths. The split lets you expose inference to clients while keeping management and scraping on a port you firewall separately (or bind to a different interface with `admin_host`). The CLI finds the admin port from the same config; override with `ZALLAMA_ADMIN_HOST=http://host:port` if it runs elsewhere.
 
 ### Model registry reference (`models/registry.yaml`)
 
@@ -637,6 +642,19 @@ An htop-style view of the whole stack, refreshed every second (`q` quits, `r` re
 ```
 
 The daemon records every proxied `/v1` request (`GET /api/requests`): TTFT is stamped on the first content delta of a stream, PREFILL/DECODE/CACHE come off the `timings` block llama.cpp appends to its response, ACC is draft acceptance for speculative models, and an in-flight streamed request shows how many tokens have gone by so far. The last 200 requests are kept in memory; nothing is written to disk.
+
+### Prometheus (`GET /metrics`)
+
+The same data — plus lifecycle counters (starts, startup failures, crashes, evictions), per-model VRAM, token totals, TTFT/duration histograms and the whole-card GPU numbers — is exposed in Prometheus text format on the **admin port** (`http://host:11436/metrics` by default), unauthenticated so remote scrapers don't need the key. Point any Prometheus at it:
+
+```yaml
+scrape_configs:
+  - job_name: zallama
+    static_configs:
+      - targets: ["llm-box:11436"]
+```
+
+Metric names and useful queries are listed in [`docs/monitoring.md`](docs/monitoring.md).
 
 ## 🧠 Memory-Aware Eviction
 
@@ -1013,7 +1031,8 @@ If it must face the internet, keep Zallama on `127.0.0.1`, set an `api_key` anyw
 
 ```caddyfile
 llm.example.com {
-    # Only /v1 passes through; management API, docs, and root stay private
+    # Only /v1 passes through; the management API and /metrics live on the
+    # separate admin port (11436) and never reach the proxy at all
     @api path /v1/*
     reverse_proxy @api 127.0.0.1:11435
     respond 403

@@ -406,3 +406,8 @@ from the `text`/`embedding`/`rerank` tables above set there applies to every
 `llama_server.mem_budget_gb`, `.max_loaded_models`, `.idle_timeout`,
 `.port_start`, `.startup_timeout`, `.evict_drain_timeout` control process
 lifecycle, not per-model launch flags, and have no `params` equivalent.
+
+`zallama.port` is the inference listener (`/v1/*`); `zallama.admin_port`
+(default `port + 1`) carries the management API (`/api/*`) and Prometheus
+`/metrics`, optionally on its own interface via `zallama.admin_host`. See
+`docs/monitoring.md`.

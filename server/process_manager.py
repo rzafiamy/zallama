@@ -128,6 +128,15 @@ class ProcessManager:
         # Live + recent request metrics for `zallama monitor` (/api/requests).
         from .request_log import RequestLog
         self.request_log = RequestLog()
+        # Lifecycle counters for /metrics, keyed by event then model name. They
+        # deliberately outlive the instances they describe: the interesting
+        # question ("how many times did this model crash today?") is asked
+        # after the instance is gone. Events: start, start_failure (died or
+        # timed out before /health), crash (found dead on the next request),
+        # evict_capacity (LRU eviction to admit another model), evict_idle
+        # (idle sweep), unload (explicit stop via API/CLI).
+        from collections import Counter, defaultdict
+        self.lifecycle: dict[str, Counter] = defaultdict(Counter)
         self._mem_init_gb: float = float(ls.get("mem_init_gb", 2))      # fallback cost
         # How long eviction waits for a victim backend's in-flight requests to
         # finish before killing it anyway. 0 disables the wait (old behavior:
@@ -273,6 +282,7 @@ class ProcessManager:
                         self._instances.move_to_end(model_name)
                         return inst
                     logger.warning(f"Instance {model_name} died unexpectedly, restarting...")
+                    self.lifecycle["crash"][model_name] += 1
                     del self._instances[model_name]
 
             incoming_cost = self._estimate_cost(entry, model_path)
@@ -328,6 +338,7 @@ class ProcessManager:
             if model_name not in self._instances:
                 return False
             inst = self._instances.pop(model_name)
+        self.lifecycle["unload"][model_name] += 1
         await self._kill_instance(inst)
         return True
 
@@ -398,6 +409,7 @@ class ProcessManager:
             evicted = [self._instances.pop(name) for name in to_evict]
         for inst in evicted:
             logger.info(f"Evicting idle model: {inst.name}")
+            self.lifecycle["evict_idle"][inst.name] += 1
             await self._kill_instance(inst)
 
     # -----------------------------------------------------------------------
@@ -583,6 +595,7 @@ class ProcessManager:
                 f"'{victim_name}' ({victim.mem_gb:.1f}GB) to make room "
                 f"for incoming {incoming_cost:.1f}GB"
             )
+            self.lifecycle["evict_capacity"][victim_name] += 1
             evicted.append(victim)
         return evicted
 
@@ -665,7 +678,12 @@ class ProcessManager:
             mem_gb=mem_gb,
         )
 
-        await self._wait_healthy(inst)
+        try:
+            await self._wait_healthy(inst)
+        except Exception:
+            self.lifecycle["start_failure"][model_name] += 1
+            raise
+        self.lifecycle["start"][model_name] += 1
         logger.info(f"Model '{model_name}' is ready on port {port}")
         return inst
 

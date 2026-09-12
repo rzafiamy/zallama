@@ -68,32 +68,50 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-def _default_zallama_host() -> str:
-    """Base URL the CLI talks to, derived from config.yaml's zallama.host/port.
+def _default_hosts() -> tuple[str, str]:
+    """(inference URL, admin URL) the CLI talks to, from config.yaml.
 
-    ZALLAMA_HOST (full URL, e.g. "http://host:port") still wins if set — it's
-    the CLI's own override, distinct from the daemon's ZALLAMA_HOST/ZALLAMA_PORT
-    env vars which only set host/port fields inside load_config().
+    The daemon listens twice: /v1/* on zallama.port and /api/* + /metrics on
+    zallama.admin_port. ZALLAMA_HOST / ZALLAMA_ADMIN_HOST (full URLs, e.g.
+    "http://host:port") still win if set — they're the CLI's own overrides,
+    distinct from the daemon's ZALLAMA_HOST/ZALLAMA_PORT env vars which only
+    set host/port fields inside load_config(). With only ZALLAMA_HOST set the
+    admin URL is derived as its port + 1, mirroring the daemon's default.
     """
     env = os.environ.get("ZALLAMA_HOST")
-    if env:
-        return env
+    env_admin = os.environ.get("ZALLAMA_ADMIN_HOST")
     try:
         root = Path(__file__).resolve().parent
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
         from server.config import load_config
         cfg = load_config()["zallama"]
-        host = cfg["host"]
+        host, admin_host = cfg["host"], cfg["admin_host"]
         # A wildcard bind address isn't a valid address to connect *to*.
         if host in ("0.0.0.0", "::"):
             host = "127.0.0.1"
-        return f"http://{host}:{cfg['port']}"
+        if admin_host in ("0.0.0.0", "::"):
+            admin_host = "127.0.0.1"
+        inference = f"http://{host}:{cfg['port']}"
+        admin = f"http://{admin_host}:{cfg['admin_port']}"
     except Exception:
-        return "http://localhost:11435"
+        inference, admin = "http://localhost:11435", "http://localhost:11436"
+    if env:
+        inference = env
+        if not env_admin:
+            m = re.match(r"^(.*:)(\d+)/?$", env)
+            admin = f"{m.group(1)}{int(m.group(2)) + 1}" if m else env
+    if env_admin:
+        admin = env_admin
+    return inference, admin
 
 
-ZALLAMA_HOST = _default_zallama_host()
+ZALLAMA_HOST, ZALLAMA_ADMIN_HOST = _default_hosts()
+
+
+def _base_for(path: str) -> str:
+    """Which listener serves this path: /api/* and /metrics live on admin."""
+    return ZALLAMA_ADMIN_HOST if path.startswith(("/api/", "/metrics")) else ZALLAMA_HOST
 _VERSION_FILE = Path(__file__).resolve().parent / "version.txt"
 VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.is_file() else "1.11.0"
 
@@ -378,7 +396,8 @@ def _api(method: str, path: str, data: dict | None = None, stream=False):
     if not HAS_REQUESTS:
         _err("'requests' library not installed. Run: pip install requests")
         sys.exit(1)
-    url = f"{ZALLAMA_HOST}{path}"
+    base = _base_for(path)
+    url = f"{base}{path}"
     try:
         if method == "GET":
             r = requests.get(url, timeout=10, stream=stream)
@@ -390,7 +409,10 @@ def _api(method: str, path: str, data: dict | None = None, stream=False):
             raise ValueError(f"Unknown method: {method}")
         return r
     except requests.exceptions.ConnectionError:
-        _err(f"Cannot connect to Zallama at {ZALLAMA_HOST}")
+        _err(f"Cannot connect to Zallama at {base}")
+        if base == ZALLAMA_ADMIN_HOST and base != ZALLAMA_HOST:
+            _info("That's the admin listener (/api/*, /metrics) — zallama.admin_port in config.yaml, "
+                  "or the ZALLAMA_ADMIN_HOST env var for the CLI.")
         _info("Run 'zallama serve' to start the daemon.")
         sys.exit(1)
 
@@ -1674,8 +1696,8 @@ def _mon_num(v, fmt="{:.0f}") -> str:
 def _mon_fetch() -> tuple[dict | None, dict | None, str | None]:
     """One poll of the daemon: (/api/ps, /api/requests, error)."""
     try:
-        ps = requests.get(f"{ZALLAMA_HOST}/api/ps", timeout=3).json()
-        rq = requests.get(f"{ZALLAMA_HOST}/api/requests?limit=50", timeout=3)
+        ps = requests.get(f"{ZALLAMA_ADMIN_HOST}/api/ps", timeout=3).json()
+        rq = requests.get(f"{ZALLAMA_ADMIN_HOST}/api/requests?limit=50", timeout=3)
         # An older daemon (pre-monitor) has /api/ps but no /api/requests.
         rq = rq.json() if rq.status_code == 200 else {"active": [], "recent": [],
                                                        "totals": None}
@@ -3127,7 +3149,9 @@ def cmd_show(args: list[str]):
 # rather than only from config.py / config.yaml comments.
 _CONFIG_KEY_HELP = {
     "zallama.host": "Bind address (0.0.0.0 to expose on the network)",
-    "zallama.port": "Daemon port",
+    "zallama.port": "Inference port (/v1/*)",
+    "zallama.admin_port": "Admin port (/api/*, /metrics); 0 = port + 1",
+    "zallama.admin_host": "Admin bind address; empty = same as zallama.host",
     "zallama.models_dir": "Where models + registry.yaml live",
     "zallama.logs_dir": "Where per-model logs are written",
     "zallama.log_level": "Logging verbosity (debug/info/warning/error)",
@@ -4304,7 +4328,8 @@ def main():
         ]
         for cmd, desc in cmds:
             print(f"  {_color(cmd, CYAN):<35}{DIM}{desc}{RESET}")
-        print(f"\n{DIM}Daemon URL: {ZALLAMA_HOST}  (override with ZALLAMA_HOST env var){RESET}\n")
+        print(f"\n{DIM}Daemon URL: {ZALLAMA_HOST}  •  admin: {ZALLAMA_ADMIN_HOST}  "
+              f"(override with ZALLAMA_HOST / ZALLAMA_ADMIN_HOST env vars){RESET}\n")
         return
 
     cmd = sys.argv[1]

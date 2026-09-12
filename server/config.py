@@ -22,6 +22,12 @@ DEFAULTS: dict[str, Any] = {
     "zallama": {
         "host": "127.0.0.1",   # localhost by default; set 0.0.0.0 to expose
         "port": 11435,
+        # Admin/ops listener: /api/* (model management, ps, requests) and
+        # /metrics (Prometheus) live here, separate from the inference port so
+        # the two can be firewalled independently. 0 = zallama.port + 1.
+        # admin_host "" = same bind address as zallama.host.
+        "admin_port": 0,
+        "admin_host": "",
         "models_dir": "~/.zallama/models",
         "logs_dir": "~/.zallama/logs",
         "log_level": "info",
@@ -103,6 +109,8 @@ def load_config() -> dict[str, Any]:
     env_map = {
         "ZALLAMA_HOST": ("zallama", "host"),
         "ZALLAMA_PORT": ("zallama", "port"),
+        "ZALLAMA_ADMIN_PORT": ("zallama", "admin_port"),
+        "ZALLAMA_ADMIN_HOST": ("zallama", "admin_host"),
         "ZALLAMA_MODELS_DIR": ("zallama", "models_dir"),
         "ZALLAMA_LOGS_DIR": ("zallama", "logs_dir"),
         "ZALLAMA_LOG_LEVEL": ("zallama", "log_level"),
@@ -124,6 +132,12 @@ def load_config() -> dict[str, Any]:
                 node[path[-1]] = int(val)
             except ValueError:
                 node[path[-1]] = val
+
+    # Resolve the admin listener: defaults to the inference port + 1 on the same
+    # bind address, so a stock install gets 11435 (inference) / 11436 (admin).
+    z = cfg["zallama"]
+    z["admin_port"] = int(z.get("admin_port") or 0) or int(z["port"]) + 1
+    z["admin_host"] = str(z.get("admin_host") or "").strip() or z["host"]
 
     # Resolve paths
     cfg["zallama"]["models_dir"] = str(_expand_path(cfg["zallama"]["models_dir"]))

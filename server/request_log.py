@@ -13,6 +13,11 @@ Kept in memory only — a bounded deque — because the point is a live view,
 not an audit trail. Nothing here is on the hot path in any measurable way:
 the streaming parser looks at each SSE line once and gives up on anything
 that isn't JSON.
+
+Alongside the deque, `Aggregates` keeps monotonically growing per-model
+totals and latency histograms for `/metrics` (Prometheus). Those are the
+one thing here that *is* meant to outlive the last 200 requests: a scraper
+turns them into rates, so they must only ever go up.
 """
 from __future__ import annotations
 
@@ -40,6 +45,14 @@ class RequestRecord:
     prefill_tps: float | None = None
     decode_tps: float | None = None
     draft_accept: float | None = None
+    # Backend-side wall time (ms) for prefill and decode, off llama.cpp's
+    # `timings`; summed per model so a scraper can derive average tok/s over
+    # any window (rate(tokens)/rate(seconds)) rather than only the last value.
+    prefill_ms: float | None = None
+    decode_ms: float | None = None
+    # Raw speculative-decoding counts behind draft_accept, for the same reason.
+    draft_n: int | None = None
+    draft_n_accepted: int | None = None
     # Streaming only: tokens seen so far, so an in-flight row can show progress.
     tokens_so_far: int = 0
 
@@ -51,6 +64,51 @@ class RequestRecord:
         return d
 
 
+# Histogram bucket edges (seconds), Prometheus-style cumulative `le` buckets.
+TTFT_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30)
+DURATION_BUCKETS = (0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600)
+
+
+@dataclass
+class Histogram:
+    """Cumulative-bucket histogram in the Prometheus sense: `counts[i]` is
+    the number of observations <= `edges[i]`; +Inf is implied by `count`."""
+    edges: tuple[float, ...]
+    counts: list[int] = field(default_factory=list)
+    total: float = 0.0
+    count: int = 0
+
+    def __post_init__(self):
+        if not self.counts:
+            self.counts = [0] * len(self.edges)
+
+    def observe(self, value: float) -> None:
+        self.total += value
+        self.count += 1
+        for i, edge in enumerate(self.edges):
+            if value <= edge:
+                self.counts[i] += 1
+
+
+@dataclass
+class ModelAggregate:
+    """Everything /metrics reports for one model, all monotonic except `last_*`."""
+    requests: dict[tuple[str, str], int] = field(default_factory=dict)  # (endpoint, status) -> n
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    draft_generated: int = 0
+    draft_accepted: int = 0
+    prefill_seconds: float = 0.0
+    decode_seconds: float = 0.0
+    ttft: Histogram = field(default_factory=lambda: Histogram(TTFT_BUCKETS))
+    duration: dict[str, Histogram] = field(default_factory=dict)  # endpoint -> hist
+    # Most recent values, for the "what is it doing right now" gauges.
+    last_prefill_tps: float | None = None
+    last_decode_tps: float | None = None
+    last_draft_accept: float | None = None
+
+
 class RequestLog:
     def __init__(self, maxlen: int = 200):
         self._recent: deque[RequestRecord] = deque(maxlen=maxlen)
@@ -59,6 +117,7 @@ class RequestLog:
         self._totals = {"requests": 0, "errors": 0,
                         "prompt_tokens": 0, "completion_tokens": 0}
         self._started = time.time()
+        self.aggregates: dict[str, ModelAggregate] = {}
 
     # -- lifecycle ---------------------------------------------------------
     def start(self, model: str, endpoint: str, stream: bool = False) -> RequestRecord:
@@ -92,6 +151,45 @@ class RequestLog:
             self._totals["errors"] += 1
         self._totals["prompt_tokens"] += rec.prompt_tokens or 0
         self._totals["completion_tokens"] += rec.completion_tokens or 0
+        self._aggregate(rec)
+
+    def _aggregate(self, rec: RequestRecord) -> None:
+        agg = self.aggregates.get(rec.model)
+        if agg is None:
+            agg = self.aggregates[rec.model] = ModelAggregate()
+        key = (rec.endpoint, rec.status)
+        agg.requests[key] = agg.requests.get(key, 0) + 1
+        agg.prompt_tokens += rec.prompt_tokens or 0
+        agg.completion_tokens += rec.completion_tokens or 0
+        agg.cached_tokens += rec.cached_tokens or 0
+        agg.prefill_seconds += (rec.prefill_ms or 0) / 1000
+        agg.decode_seconds += (rec.decode_ms or 0) / 1000
+        if rec.draft_n:
+            agg.draft_generated += rec.draft_n
+            agg.draft_accepted += rec.draft_n_accepted or 0
+        if rec.ttft_ms is not None and rec.stream:
+            agg.ttft.observe(rec.ttft_ms / 1000)
+        if rec.duration_ms is not None:
+            hist = agg.duration.get(rec.endpoint)
+            if hist is None:
+                hist = agg.duration[rec.endpoint] = Histogram(DURATION_BUCKETS)
+            hist.observe(rec.duration_ms / 1000)
+        if rec.prefill_tps is not None:
+            agg.last_prefill_tps = rec.prefill_tps
+        if rec.decode_tps is not None:
+            agg.last_decode_tps = rec.decode_tps
+        if rec.draft_accept is not None:
+            agg.last_draft_accept = rec.draft_accept
+
+    def active_by_model(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for rec in self._active.values():
+            out[rec.model] = out.get(rec.model, 0) + 1
+        return out
+
+    @property
+    def started(self) -> float:
+        return self._started
 
     @staticmethod
     def apply_metrics(rec: RequestRecord, timings: dict, usage: dict) -> None:
@@ -108,7 +206,13 @@ class RequestLog:
         if timings.get("predicted_per_second"):
             rec.decode_tps = round(timings["predicted_per_second"], 1)
         if timings.get("draft_n"):
-            rec.draft_accept = round(timings.get("draft_n_accepted", 0) / timings["draft_n"], 3)
+            rec.draft_n = int(timings["draft_n"])
+            rec.draft_n_accepted = int(timings.get("draft_n_accepted", 0))
+            rec.draft_accept = round(rec.draft_n_accepted / rec.draft_n, 3)
+        if timings.get("prompt_ms") is not None:
+            rec.prefill_ms = float(timings["prompt_ms"])
+        if timings.get("predicted_ms") is not None:
+            rec.decode_ms = float(timings["predicted_ms"])
 
     # -- streaming parser --------------------------------------------------
     def make_sse_tap(self, rec: RequestRecord):

@@ -6,7 +6,9 @@
 
 zallama:
   host: "127.0.0.1"   # localhost only; set "0.0.0.0" to expose on the network
-  port: 11435
+  port: 11435           # inference listener: /v1/* (chat, embeddings, audio, images, zvec)
+  admin_port: 0         # admin listener: /api/* (model management) + /metrics (Prometheus); 0 = port + 1
+  admin_host: ""        # bind address for the admin listener; "" = same as host
   models_dir: "~/.zallama/models"   # model files AND registry.yaml live here
   logs_dir: "~/.zallama/logs"
   log_level: "info"

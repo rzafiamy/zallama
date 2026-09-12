@@ -257,10 +257,10 @@ def build_tasks():
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
-def unload_all_text_models(base, models, timeout=60):
+def unload_all_text_models(admin, models, timeout=60):
     for name in models:
         try:
-            requests.post(f"{base}/api/models/{name}/unload", timeout=timeout)
+            requests.post(f"{admin}/api/models/{name}/unload", timeout=timeout)
         except requests.RequestException:
             pass
 
@@ -403,11 +403,17 @@ def write_excel(path, models, tasks, results, meta):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default="http://localhost:11435")
+    ap.add_argument("--admin-url", default=None,
+                    help="admin listener for /api/* (default: base-url port + 1)")
     ap.add_argument("--models", nargs="*", default=DEFAULT_MODELS)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     base = args.base_url.rstrip("/")
+    admin = (args.admin_url or "").rstrip("/")
+    if not admin:
+        head, _, port = base.rpartition(":")
+        admin = f"{head}:{int(port) + 1}" if port.isdigit() else base
     out = args.out or f"agentic_benchmark_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
     tasks = build_tasks()
 
@@ -418,7 +424,7 @@ def main():
     for model in args.models:
         print(f"=== {model} ===")
         # Ensure only this text model is resident: unload every other text model.
-        unload_all_text_models(base, [m for m in args.models if m != model])
+        unload_all_text_models(admin, [m for m in args.models if m != model])
         time.sleep(1)
         for task in tasks:
             res = run_task(base, model, task)

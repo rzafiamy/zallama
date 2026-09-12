@@ -71,8 +71,17 @@ def zallama_host() -> str:
     return f"http://{host}:{cfg['port']}"
 
 
+def zallama_admin_host() -> str:
+    """/api/* lives on the admin listener (zallama.admin_port)."""
+    cfg = load_config()["zallama"]
+    host = cfg["admin_host"]
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    return f"http://{host}:{cfg['admin_port']}"
+
+
 def embedding_models(base: str) -> list[str]:
-    r = requests.get(f"{base}/api/models", timeout=10)
+    r = requests.get(f"{zallama_admin_host()}/api/models", timeout=10)
     r.raise_for_status()
     return [m["name"] for m in r.json().get("models", []) if m.get("modality") == "embedding"]
 

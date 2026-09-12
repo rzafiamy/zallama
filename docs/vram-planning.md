@@ -190,7 +190,7 @@ or make large models fail to allocate their KV cache. Stop the daemon, or
 unload everything first:
 
 ```bash
-curl -s -X POST localhost:11435/api/models/<name>/unload
+curl -s -X POST localhost:11436/api/models/<name>/unload   # admin port
 nvidia-smi --query-gpu=memory.free --format=csv   # confirm the card is empty
 ```
 
