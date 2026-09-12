@@ -2,15 +2,15 @@
 <html lang="en" class="scroll-smooth">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦙</text></svg>" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <title>Zallama Docs — Setup, CLI &amp; API Reference</title>
-    <meta name="description" content="Full documentation for Zallama: compiling llama.cpp/parakeet.cpp/kokoro.cpp from source, the CLI reference, systemd deployment, the memory eviction policy, and the OpenAI-compatible API reference." />
+    <title>Zallama Docs — Install, configure and run your local AI server</title>
+    <meta name="description" content="Complete Zallama documentation: installation, your first 5 minutes, CLI reference, configuration, benchmarking, monitoring, memory-aware eviction, vision, speech, image generation, RAG, the OpenAI-compatible API, deployment, security and troubleshooting." />
     <meta name="author" content="Rija Z." />
 
-    <meta property="og:title" content="Zallama Docs — Setup, CLI & API Reference" />
-    <meta property="og:description" content="Everything you need to build, run, and integrate Zallama: compilation steps, CLI reference, systemd deployment, and the full API reference." />
+    <meta property="og:title" content="Zallama Docs" />
+    <meta property="og:description" content="Everything you need to install, configure and run Zallama — a local, multimodal, memory-aware LLM server with an OpenAI-compatible API." />
     <meta property="og:type" content="website" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,295 +21,1003 @@
     <div class="absolute top-1/3 right-1/4 w-96 h-96 bg-sky-200/40 rounded-full blur-3xl -z-10 animate-bubble-2"></div>
     <div class="absolute bottom-1/4 left-1/3 w-80 h-80 bg-indigo-200/25 rounded-full blur-3xl -z-10 animate-bubble-3"></div>
 
-    <!-- Header / Navigation -->
+    <!-- HEADER -->
     <header class="sticky top-0 z-50 w-full glass-panel border-b border-sky-100 backdrop-blur-md">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <a href="./index.html" class="flex items-center gap-3">
-          <span class="text-3xl leading-none" aria-hidden="true">🦙</span>
+          <span class="w-10 h-10 rounded-xl bg-white border border-sky-100 shadow-md shadow-sky-300/30 flex items-center justify-center text-2xl leading-none transform hover:scale-110 transition-transform" aria-hidden="true">🦙</span>
           <div class="flex flex-col">
             <span class="font-extrabold text-xl leading-tight tracking-tight text-sky-600">Zallama</span>
             <span class="text-[9px] text-sky-400 -mt-0.5 font-bold tracking-wider uppercase">Documentation</span>
           </div>
+          <span data-version class="hidden sm:inline-block px-2.5 py-0.5 text-xs font-bold rounded-full bg-sky-100 text-sky-600 border border-sky-200">v1.16.0</span>
         </a>
 
-        <nav class="hidden md:flex items-center gap-6 text-sm font-bold text-slate-500">
+        <nav class="hidden lg:flex items-center gap-6 text-sm font-bold text-slate-500">
+          <a href="#install" class="hover:text-sky-600 transition-colors">Install</a>
           <a href="#quickstart" class="hover:text-sky-600 transition-colors">Quickstart</a>
-          <a href="#compiling" class="hover:text-sky-600 transition-colors">Compiling</a>
-          <a href="#cli-reference" class="hover:text-sky-600 transition-colors">CLI</a>
-          <a href="#eviction" class="hover:text-sky-600 transition-colors">Eviction Policy</a>
-          <a href="#systemd" class="hover:text-sky-600 transition-colors">Systemd</a>
-          <a href="#api-reference" class="hover:text-sky-600 transition-colors">API Reference</a>
+          <a href="#cli" class="hover:text-sky-600 transition-colors">CLI</a>
+          <a href="#config" class="hover:text-sky-600 transition-colors">Config</a>
+          <a href="#api" class="hover:text-sky-600 transition-colors">API</a>
+          <a href="#security" class="hover:text-sky-600 transition-colors">Security</a>
+          <a href="#troubleshooting" class="hover:text-sky-600 transition-colors">Troubleshooting</a>
         </nav>
 
-        <a href="./index.html" class="hidden sm:inline-flex items-center justify-center px-5 py-2.5 text-xs font-bold rounded-2xl bg-sky-500 hover:bg-sky-400 text-white transition-all shadow-md shadow-sky-500/25 bouncy-btn">
-          ← Back to Zallama
-        </a>
+        <div class="flex items-center gap-3">
+          <a href="https://github.com/rzafiamy/zallama" target="_blank" rel="noopener noreferrer" class="hidden sm:inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-2xl bg-white hover:bg-sky-50/50 text-sky-600 border-2 border-sky-200 hover:border-sky-300 transition-all">GitHub</a>
+          <a href="./index.html" class="inline-flex items-center justify-center px-5 py-2.5 text-xs font-bold rounded-2xl bg-sky-500 hover:bg-sky-400 text-white transition-all shadow-md shadow-sky-500/25 bouncy-btn">← Home</a>
+          <button id="mobile-nav-btn" class="lg:hidden w-10 h-10 rounded-xl border-2 border-sky-200 bg-white text-sky-600 flex items-center justify-center" aria-label="Open table of contents" aria-expanded="false">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" d="M4 7h16M4 12h16M4 17h16"/></svg>
+          </button>
+        </div>
       </div>
+      <nav id="mobile-nav" class="lg:hidden border-t border-sky-100 bg-white/95 px-4 py-3 grid grid-cols-2 gap-1 text-sm font-bold text-slate-600 max-h-[70vh] overflow-y-auto">
+        <a href="#overview" class="px-3 py-2 rounded-xl hover:bg-sky-50">Overview</a>
+        <a href="#install" class="px-3 py-2 rounded-xl hover:bg-sky-50">Installation</a>
+        <a href="#quickstart" class="px-3 py-2 rounded-xl hover:bg-sky-50">First 5 minutes</a>
+        <a href="#own-models" class="px-3 py-2 rounded-xl hover:bg-sky-50">Your own models</a>
+        <a href="#cli" class="px-3 py-2 rounded-xl hover:bg-sky-50">CLI reference</a>
+        <a href="#config" class="px-3 py-2 rounded-xl hover:bg-sky-50">Configuration</a>
+        <a href="#bench" class="px-3 py-2 rounded-xl hover:bg-sky-50">Benchmarking</a>
+        <a href="#monitor" class="px-3 py-2 rounded-xl hover:bg-sky-50">Monitoring</a>
+        <a href="#memory" class="px-3 py-2 rounded-xl hover:bg-sky-50">Memory eviction</a>
+        <a href="#vision" class="px-3 py-2 rounded-xl hover:bg-sky-50">Vision</a>
+        <a href="#asr" class="px-3 py-2 rounded-xl hover:bg-sky-50">Speech-to-text</a>
+        <a href="#tts" class="px-3 py-2 rounded-xl hover:bg-sky-50">Text-to-speech</a>
+        <a href="#image" class="px-3 py-2 rounded-xl hover:bg-sky-50">Image generation</a>
+        <a href="#architecture" class="px-3 py-2 rounded-xl hover:bg-sky-50">Architecture</a>
+        <a href="#rag" class="px-3 py-2 rounded-xl hover:bg-sky-50">RAG &amp; zvec</a>
+        <a href="#api" class="px-3 py-2 rounded-xl hover:bg-sky-50">OpenAI API</a>
+        <a href="#deploy" class="px-3 py-2 rounded-xl hover:bg-sky-50">Deployment</a>
+        <a href="#security" class="px-3 py-2 rounded-xl hover:bg-sky-50">Security</a>
+        <a href="#troubleshooting" class="px-3 py-2 rounded-xl hover:bg-sky-50">Troubleshooting</a>
+        <a href="#contributing" class="px-3 py-2 rounded-xl hover:bg-sky-50">Contributing</a>
+      </nav>
     </header>
 
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-24">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 lg:grid lg:grid-cols-12 lg:gap-10">
 
-      <!-- HERO -->
-      <section class="text-center max-w-3xl mx-auto pt-4 pb-4">
-        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white border border-sky-100 text-sky-500 text-xs font-bold mb-6 shadow-sm">
-          <span>📚</span>
-          <span>Developer Documentation</span>
-        </div>
-        <h1 class="text-4xl sm:text-5xl font-black tracking-tight leading-tight text-slate-800">
-          Build, Run, and Integrate <span class="text-gradient-fluent">Zallama</span>
-        </h1>
-        <p class="mt-6 text-base sm:text-lg text-slate-600 leading-relaxed font-medium">
-          Zallama wraps three separate C++ inference engines — <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">llama.cpp</code>, <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">parakeet.cpp</code>, and <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">kokoro.cpp</code> — behind one Python daemon and CLI. This page covers the full contract: compiling from source, the CLI commands, the memory eviction policy, systemd deployment, and the OpenAI-compatible API reference.
-        </p>
-      </section>
+      <!-- ============================================================== -->
+      <!-- SIDEBAR                                                        -->
+      <!-- ============================================================== -->
+      <aside class="hidden lg:block lg:col-span-3">
+        <nav class="docs-nav sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pr-2 glass-card static rounded-3xl p-3 space-y-0.5">
+          <div class="group-title">Start here</div>
+          <a href="#overview">Overview</a>
+          <a href="#install">Installation</a>
+          <a href="#quickstart">Your first 5 minutes</a>
+          <a href="#own-models">Models you already have</a>
+          <div class="group-title">Reference</div>
+          <a href="#cli">CLI reference</a>
+          <a href="#config">Configuration</a>
+          <a href="#api">OpenAI-compatible API</a>
+          <div class="group-title">Performance</div>
+          <a href="#bench">Benchmarking</a>
+          <a href="#monitor">Live monitoring</a>
+          <a href="#memory">Memory-aware eviction</a>
+          <div class="group-title">Modalities</div>
+          <a href="#vision">Vision</a>
+          <a href="#asr">Speech-to-text</a>
+          <a href="#tts">Text-to-speech</a>
+          <a href="#image">Image generation</a>
+          <a href="#rag">RAG: rerank &amp; zvec</a>
+          <a href="#architecture">Backends &amp; architecture</a>
+          <div class="group-title">Operate</div>
+          <a href="#deploy">Deployment (systemd)</a>
+          <a href="#security">Security</a>
+          <a href="#troubleshooting">Troubleshooting</a>
+          <a href="#contributing">Contributing &amp; license</a>
+          <a href="#guides">Further reading</a>
+        </nav>
+      </aside>
 
-      <!-- QUICKSTART -->
-      <section id="quickstart" class="reveal space-y-6">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">🚀</span>
-          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Quickstart</h2>
-        </div>
-        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
-          The installer compiles all three engines for your platform and registers Zallama as a systemd service. Run it with root access:
-        </p>
-        <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-xs font-mono overflow-x-auto shadow-inner"><code>git clone https://github.com/rzafiamy/zallama.git
-cd zallama
-sudo bash install.sh</code></pre>
-        <p class="text-xs text-slate-400 font-semibold max-w-3xl">
-          No root access, or want to compile engines individually / customize build flags? See <a href="#compiling" class="text-sky-600 underline decoration-sky-300">Compiling from source</a> below.
-        </p>
-      </section>
+      <!-- ============================================================== -->
+      <!-- CONTENT                                                        -->
+      <!-- ============================================================== -->
+      <main class="lg:col-span-9 space-y-20 prose-doc">
 
-      <!-- COMPILING FROM SOURCE -->
-      <section id="compiling" class="reveal space-y-6">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">🔧</span>
-          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Compiling &amp; Installation</h2>
-        </div>
-        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
-          Compile the C++ binaries for your platform, then run the unified Python-based daemon wrapper. Each build script is independent, so you can rebuild a single engine without touching the others.
-        </p>
+        <!-- HERO -->
+        <section class="pt-2">
+          <div class="badge mb-5"><span>📚</span><span>Complete documentation</span></div>
+          <h1 class="text-4xl sm:text-5xl font-black tracking-tight leading-tight text-slate-800">
+            Run Zallama <span class="text-gradient-fluent">your way.</span>
+          </h1>
+          <p class="mt-5 text-base sm:text-lg max-w-3xl">
+            Everything from the first <span class="ic">git clone</span> to a hardened, monitored, always-on daemon. Sections follow the order you'll actually meet things: install it, talk to a model, then tune, measure and expose it. Every code block has a copy button.
+          </p>
+          <div class="mt-6 flex flex-wrap gap-2">
+            <a href="#install" class="btn inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-2xl bg-sky-500 hover:bg-sky-400 text-white shadow-md shadow-sky-500/25 bouncy-btn transition-all no-underline">Install →</a>
+            <a href="#quickstart" class="btn inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-2xl bg-white hover:bg-sky-50/50 text-sky-600 border-2 border-sky-200 hover:border-sky-300 transition-all no-underline">First 5 minutes</a>
+            <a href="#cli" class="btn inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-2xl bg-white hover:bg-sky-50/50 text-sky-600 border-2 border-sky-200 hover:border-sky-300 transition-all no-underline">CLI reference</a>
+            <a href="#troubleshooting" class="btn inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-2xl bg-white hover:bg-sky-50/50 text-sky-600 border-2 border-sky-200 hover:border-sky-300 transition-all no-underline">Something's wrong</a>
+          </div>
+        </section>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <!-- Step 1 -->
-          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 1</span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">build-ggml-llama.cpp.sh</span>
-              </div>
-              <h3 class="text-base font-extrabold text-slate-800">Compile Llama Engine</h3>
-              <p class="text-xs text-slate-500 leading-relaxed font-medium">
-                Compiles <code class="bg-sky-50 px-1 py-0.5 rounded font-mono">llama.cpp</code> with CUDA support. You <strong>must</strong> pass a tag or branch name (e.g. <code class="text-sky-600 font-mono">b4600</code>).
-              </p>
+        <!-- ============================================================ -->
+        <!-- OVERVIEW                                                     -->
+        <!-- ============================================================ -->
+        <section id="overview" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🦙</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Overview<a class="anchor" href="#overview">#</a></h2>
+          </div>
+          <p>
+            <strong>Zallama</strong> is a local, multimodal, memory-aware LLM server. It is a small daemon that turns any <span class="ic">.gguf</span> model into a real, standing service on your machine — chat, vision, speech, embeddings, reranking, retrieval and image generation — all speaking the OpenAI API dialect your tools already know. Point your existing app at <span class="ic">http://localhost:11435</span> instead of <span class="ic">api.openai.com</span>, and nothing else has to change.
+          </p>
+          <p>
+            Under the hood it is a <strong>dynamic router and process manager</strong> for your GGUF models. Ask for a model, and Zallama starts the right backend (<span class="ic">llama-server</span>, <span class="ic">parakeet-server</span>, <span class="ic">kokoro-server</span>, <span class="ic">sd-server</span>), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a <span class="ic">modality</span> (<span class="ic">text</span>, <span class="ic">embedding</span>, <span class="ic">rerank</span>, <span class="ic">asr</span>, <span class="ic">tts</span>, <span class="ic">image</span>); new modalities are added as new backends, not as changes scattered across the codebase.
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div class="glass-card static p-5 rounded-3xl">
+              <div class="text-xl mb-2">🎯</div>
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">You decide</h3>
+              <p class="text-xs">Which models load, how much RAM/VRAM they get, when they sleep, and who's allowed to talk to them.</p>
             </div>
-            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>./build-ggml-llama.cpp.sh b4600</code></pre>
+            <div class="glass-card static p-5 rounded-3xl">
+              <div class="text-xl mb-2">🔌</div>
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">Drop-in</h3>
+              <p class="text-xs">A real OpenAI <span class="ic">/v1</span> surface, streaming included. Any SDK, LangChain or agentic client works with a base-URL change.</p>
+            </div>
+            <div class="glass-card static p-5 rounded-3xl">
+              <div class="text-xl mb-2">🔒</div>
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">Local by default</h3>
+              <p class="text-xs">Binds to <span class="ic">127.0.0.1</span>. Data never leaves your machine unless you deliberately expose it — with a key.</p>
+            </div>
+          </div>
+          <h3 class="text-lg font-extrabold text-slate-800">Requirements</h3>
+          <ul>
+            <li><strong>Python 3.10+</strong>.</li>
+            <li>A <span class="ic">llama-server</span> binary — built from <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> or placed in <span class="ic">./bin/llama-server</span>.</li>
+            <li><span class="ic">aria2c</span> — optional but recommended for fast downloads.</li>
+            <li>For <strong>ASR</strong> and <strong>TTS</strong>: their engines built (below) and <span class="ic">ffmpeg</span> installed.</li>
+            <li>For <strong>image generation</strong>: <span class="ic">sd-server</span> from stable-diffusion.cpp.</li>
+          </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- INSTALLATION                                                 -->
+        <!-- ============================================================ -->
+        <section id="install" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🛠️</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Installation<a class="anchor" href="#install">#</a></h2>
           </div>
 
-          <!-- Step 2 -->
-          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 2</span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">build-ggml-parakeet.cpp.sh</span>
-              </div>
-              <h3 class="text-base font-extrabold text-slate-800">Compile Parakeet ASR</h3>
-              <p class="text-xs text-slate-500 leading-relaxed font-medium">
-                Compiles the speech-to-text <code class="bg-sky-50 px-1 py-0.5 rounded font-mono">parakeet-server</code>, copies shared libraries, and patches paths via <code class="font-mono">patchelf</code>.
-              </p>
+          <h3 class="text-lg font-extrabold text-slate-800">1 · Clone the repository</h3>
+          <div class="code-wrap"><pre><code>git clone https://github.com/rzafiamy/zallama.git
+cd zallama</code></pre></div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">2 · Build the inference engines</h3>
+          <p>Helper scripts build each engine and install the binaries into <span class="ic">./bin/</span>. The clone and build happen in a temp directory, keeping your repo tree clean. Each takes a release tag or branch name:</p>
+          <div class="code-wrap"><pre><code><span class="c"># llama.cpp (text / chat / embeddings / vision)</span>
+./build-ggml-llama.cpp.sh b4600
+
+<span class="c"># parakeet.cpp (ASR / speech-to-text)</span>
+./build-ggml-parakeet.cpp.sh master
+
+<span class="c"># kokoro.cpp (TTS / voice synthesis)</span>
+./build-ggml-kokoro.cpp.sh v0.3.0
+
+<span class="c"># stable-diffusion.cpp (image generation)</span>
+./build-ggml-stable-diffusion.cpp.sh master</code></pre></div>
+          <div class="callout">
+            <span class="icon">💡</span>
+            <div>
+              All scripts default to a <strong>CUDA</strong> build. The parakeet and stable-diffusion scripts also copy shared libraries next to the binaries and set their <span class="ic">RPATH</span> to <span class="ic">$ORIGIN</span> (via <span class="ic">patchelf</span>) so they resolve at runtime.
             </div>
-            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>./build-ggml-parakeet.cpp.sh master</code></pre>
+          </div>
+          <div class="callout warn">
+            <span class="icon">⚠️</span>
+            <div>
+              <span class="ic">kokoro.cpp</span> requires <strong>CMake 3.29+</strong>. Ubuntu 24.04's apt package is 3.28 — install a newer CMake and run the script with <span class="ic">CMAKE_BIN=/path/to/cmake</span>.<br/>
+              <span class="ic">kokoro.cpp</span> v0.2.0+ picks up <strong>espeak-ng</strong> at runtime for grapheme-to-phoneme and is ~2.5x faster with it than with the bundled ByT5 phonemizer. The build script installs it; on a machine that only <em>runs</em> the binary: <span class="ic">sudo apt install -y libespeak-ng1 espeak-ng-data libpcaudio0 libsonic0</span>. <span class="ic">kokoro-server</span> logs which phonemizer it selected at startup.
+            </div>
           </div>
 
-          <!-- Step 3 -->
-          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 3</span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">build-ggml-kokoro.cpp.sh</span>
-              </div>
-              <h3 class="text-base font-extrabold text-slate-800">Compile Kokoro TTS</h3>
-              <p class="text-xs text-slate-500 leading-relaxed font-medium">
-                Compiles the speech synthesis <code class="bg-sky-50 px-1 py-0.5 rounded font-mono">kokoro-server</code> statically. ONNX Runtime is fetched and linked automatically.
-              </p>
+          <h3 class="text-lg font-extrabold text-slate-800">Optional · Use prebuilt packages</h3>
+          <p>To skip building from source, prebuilt packages are available from the shared Google Drive folder: <a href="https://drive.google.com/drive/folders/1B7AmE36r869kpMZbOatqMW-Dhedq2Sil?usp=sharing" target="_blank" rel="noopener noreferrer">prebuilt packages</a>. Download the one matching your platform/accelerator stack and copy the binaries into <span class="ic">./bin/</span>:</p>
+          <div class="code-wrap"><pre><code>mkdir -p ./bin
+cp /path/to/extracted/package/llama-server ./bin/
+
+<span class="c"># Optional modality backends</span>
+cp /path/to/extracted/package/parakeet-server ./bin/   <span class="c"># ASR</span>
+cp /path/to/extracted/package/kokoro-server ./bin/     <span class="c"># TTS</span>
+cp /path/to/extracted/package/sd-server ./bin/         <span class="c"># images</span></code></pre></div>
+          <p>At minimum, Zallama needs <span class="ic">llama-server</span> in <span class="ic">./bin/</span> or on your <span class="ic">PATH</span>. The installer checks <span class="ic">./bin/</span> first, so locally copied binaries are used automatically. See <a href="https://github.com/rzafiamy/zallama/blob/main/PREBUILT.md" target="_blank" rel="noopener noreferrer">PREBUILT.md</a> for package naming rules and the <span class="ic">prebuilt-cli.sh</span> helper, which detects your Ubuntu/CUDA setup, lists compatible packages, and installs the selected archive.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">3 · Run the installer</h3>
+          <div class="code-wrap"><pre><code>sudo bash install.sh</code></pre></div>
+          <p>The installer:</p>
+          <ol>
+            <li>Verifies Python 3 and installs <span class="ic">requirements.txt</span> into a project-local <span class="ic">.venv</span> (required on modern Debian/Ubuntu under <a href="https://peps.python.org/pep-0668/" target="_blank" rel="noopener noreferrer">PEP 668</a>).</li>
+            <li>Checks for a <span class="ic">llama-server</span> binary (<span class="ic">./bin</span>, or on <span class="ic">PATH</span>).</li>
+            <li>Makes the <span class="ic">zallama</span> CLI executable and creates <span class="ic">~/.zallama/{models,logs,bin}</span>.</li>
+            <li>Symlinks <span class="ic">zallama</span> into <span class="ic">/usr/local/bin</span> (or <span class="ic">~/.local/bin</span>) when possible.</li>
+            <li><strong>Installs a systemd service — only when run as root.</strong> See <a href="#deploy">Deployment</a>.</li>
+          </ol>
+          <div class="callout tip">
+            <span class="icon">✅</span>
+            <div><strong>No activation needed:</strong> the <span class="ic">zallama</span> launcher automatically re-execs into <span class="ic">.venv</span>, so <span class="ic">zallama serve</span> and every other command just work. Set <span class="ic">ZALLAMA_NO_VENV=1</span> to bypass and use the current interpreter.</div>
+          </div>
+          <p>To run <span class="ic">zallama</span> from anywhere without the symlink, add the repo to your <span class="ic">PATH</span>:</p>
+          <div class="code-wrap"><pre><code>export PATH="$PWD:$PATH"   <span class="c"># from the zallama checkout</span></code></pre></div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- QUICKSTART                                                   -->
+        <!-- ============================================================ -->
+        <section id="quickstart" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🚀</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Your first 5 minutes<a class="anchor" href="#quickstart">#</a></h2>
+          </div>
+          <p>This is the whole loop — start the daemon, pull a model, talk to it. Everything else on this page is a deeper look at one of these four steps.</p>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="glass-card static rounded-3xl p-5 space-y-3">
+              <div class="flex items-center gap-3"><span class="step-num">1</span><h3 class="font-extrabold text-slate-800">Wake the daemon</h3></div>
+              <div class="code-wrap"><pre><code>zallama serve</code></pre></div>
+              <p class="text-xs">Starts the FastAPI controller on <span class="ic">http://localhost:11435</span>. It sits quietly until a model is requested.</p>
             </div>
-            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>./build-ggml-kokoro.cpp.sh v0.1.0</code></pre>
+            <div class="glass-card static rounded-3xl p-5 space-y-3">
+              <div class="flex items-center gap-3"><span class="step-num">2</span><h3 class="font-extrabold text-slate-800">Pull a model</h3></div>
+              <div class="code-wrap"><pre><code><span class="c"># Friendly shorthand (Unsloth repo)</span>
+zallama pull llama3.2:3b
+
+<span class="c"># Any GGUF from HuggingFace</span>
+zallama pull unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf
+
+<span class="c"># Speech-to-text (auto-registered as asr)</span>
+zallama pull parakeet:0.6b
+zallama pull mudler/parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf</code></pre></div>
+            </div>
+            <div class="glass-card static rounded-3xl p-5 space-y-3">
+              <div class="flex items-center gap-3"><span class="step-num">3</span><h3 class="font-extrabold text-slate-800">Tune it to your hardware</h3></div>
+              <div class="code-wrap"><pre><code>zallama set qwen3.5-4b-q4_k_m reasoning=false ctx_size=8192
+zallama set llama3.2:1b n_gpu_layers=99</code></pre></div>
+              <p class="text-xs"><span class="ic">reasoning=false</span> skips thinking blocks; <span class="ic">n_gpu_layers=99</span> pushes everything to the GPU.</p>
+            </div>
+            <div class="glass-card static rounded-3xl p-5 space-y-3">
+              <div class="flex items-center gap-3"><span class="step-num">4</span><h3 class="font-extrabold text-slate-800">Talk to it</h3></div>
+              <div class="code-wrap"><pre><code>zallama run llama3.2:3b</code></pre></div>
+              <p class="text-xs">That's it. You now have a model running on hardware you control, answering only to you.</p>
+            </div>
+          </div>
+          <div class="callout">
+            <span class="icon">🎙️</span>
+            <div>Parakeet GGUF repos are auto-detected and registered on the ASR backend. For a raw HF path with an ambiguous name, force it with <span class="ic">zallama pull &lt;repo&gt;/&lt;file&gt;.gguf --type asr</span>.</div>
           </div>
 
-          <!-- Step 4 -->
-          <div class="glass-card p-6 rounded-3xl flex flex-col justify-between">
-            <div class="space-y-3">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-bold text-sky-600 tracking-wider uppercase">Step 4</span>
-                <span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-100 text-sky-600 border border-sky-200 font-mono font-bold">install.sh</span>
-              </div>
-              <h3 class="text-base font-extrabold text-slate-800">Setup Zallama System</h3>
-              <p class="text-xs text-slate-500 leading-relaxed font-medium">
-                Initializes the Python virtual environment, registers symlinks and shell completions, and installs an always-on daemon service. Run with root access.
-              </p>
-            </div>
-            <pre class="mt-4 bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>sudo bash install.sh</code></pre>
-          </div>
-        </div>
-      </section>
-
-      <!-- CLI REFERENCE -->
-      <section id="cli-reference" class="reveal space-y-6">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">💻</span>
-          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">CLI reference</h2>
-        </div>
-        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
-          Every part of the daemon can be driven from the command line. Try the interactive demo on the <a href="./index.html#terminal" class="text-sky-600 underline decoration-sky-300">home page</a> for a live replay of these commands.
-        </p>
-
-        <div class="glass-card rounded-3xl overflow-hidden">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm text-left">
-              <thead class="bg-sky-50/70 text-slate-500 text-xs uppercase font-extrabold tracking-wide">
-                <tr>
-                  <th class="px-5 py-3">Command</th>
-                  <th class="px-5 py-3">Description</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-sky-100 font-medium text-slate-700">
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama serve</td>
-                  <td class="px-5 py-3">Starts the daemon and its OpenAI-compatible gateway on <code class="text-[11px] bg-sky-50 px-1 rounded">http://127.0.0.1:11435</code> by default. Loads the registry and begins idle-sweep checks for the LRU eviction manager.</td>
-                </tr>
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama pull &lt;model&gt;</td>
-                  <td class="px-5 py-3">Downloads a model by preset ID (<code class="text-[11px] bg-sky-50 px-1 rounded">llama3.2:3b</code>, <code class="text-[11px] bg-sky-50 px-1 rounded">kokoro:82m</code>) or a direct Hugging Face repo/file path, using <code class="text-[11px] bg-sky-50 px-1 rounded">aria2c</code> when available.</td>
-                </tr>
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama run &lt;model&gt;</td>
-                  <td class="px-5 py-3">Pre-loads a model server and drops you into an interactive chat session against it — useful for quick manual testing outside the API.</td>
-                </tr>
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama ps</td>
-                  <td class="px-5 py-3">Lists currently loaded model servers with their port, memory footprint, uptime, and last-used timestamp — plus a total memory summary.</td>
-                </tr>
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">zallama set &lt;model&gt; &lt;key&gt;=&lt;value&gt;</td>
-                  <td class="px-5 py-3">Updates a model's registry parameters (e.g. <code class="text-[11px] bg-sky-50 px-1 rounded">reasoning=false</code>, <code class="text-[11px] bg-sky-50 px-1 rounded">ctx_size=8192</code>). Already-running models need a manual <code class="text-[11px] bg-sky-50 px-1 rounded">reload</code> to pick up changes.</td>
-                </tr>
+          <h3 class="text-lg font-extrabold text-slate-800">Shorthand presets</h3>
+          <p>These names resolve to well-known repositories and register the right modality for you:</p>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Preset</th><th>What it is</th><th>Modality</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">llama3.2:1b · llama3.2:3b · llama3.3:70b</td><td>Llama 3.2 / 3.3 Instruct (Q4_K_M)</td><td>text</td></tr>
+                <tr><td class="mono">qwen2.5:7b · qwen2.5-coder:7b · qwen2.5-coder:32b</td><td>Qwen 2.5 Instruct / Coder (Q4_K_M)</td><td>text</td></tr>
+                <tr><td class="mono">phi4:14b</td><td>Phi-4 14B Instruct (Q4_K_M)</td><td>text</td></tr>
+                <tr><td class="mono">deepseek-r1:1.5b · deepseek-r1:8b · deepseek-r1:32b</td><td>DeepSeek R1 distills — thinking models</td><td>text</td></tr>
+                <tr><td class="mono">nomic-embed:v1.5</td><td>Nomic Embed Text v1.5</td><td>embedding</td></tr>
+                <tr><td class="mono">bge-reranker:v2-m3</td><td>BGE Reranker v2-m3 (multilingual)</td><td>rerank</td></tr>
+                <tr><td class="mono">parakeet:0.6b · parakeet:1.1b</td><td>NVIDIA Parakeet TDT (English)</td><td>asr</td></tr>
+                <tr><td class="mono">kokoro:82m</td><td>Kokoro-82M, 54 voices across 8 languages</td><td>tts</td></tr>
+                <tr><td class="mono">sd:1.5 · sdxl:turbo · flux:schnell · flux:dev · flux:klein · qwen-image:20b</td><td>Diffusion models for stable-diffusion.cpp</td><td>image</td></tr>
               </tbody>
             </table>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- EVICTION POLICY -->
-      <section id="eviction" class="reveal space-y-6">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">⚖️</span>
-          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Memory eviction policy</h2>
-        </div>
-        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
-          Zallama tracks a single memory budget (RAM/VRAM, configurable) shared across every loaded model server. When a new model is requested and there isn't enough headroom, the manager evicts the <strong>Least-Recently-Used</strong> server first — repeating until either enough memory is free, or every other model has been evicted.
-        </p>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div class="glass-card p-6 rounded-3xl space-y-3">
-            <h3 class="font-extrabold text-slate-800 text-sm">How "recently used" is tracked</h3>
-            <p class="text-sm text-slate-600 leading-relaxed font-medium">Every request that reaches a model server bumps it to the front of the LRU queue. Idle servers sink toward eviction; hot servers stay resident even under memory pressure.</p>
+        <!-- ============================================================ -->
+        <!-- OWN MODELS                                                   -->
+        <!-- ============================================================ -->
+        <section id="own-models" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">📦</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Using models you already have<a class="anchor" href="#own-models">#</a></h2>
           </div>
-          <div class="glass-card p-6 rounded-3xl space-y-3">
-            <h3 class="font-extrabold text-slate-800 text-sm">When the budget itself shrinks</h3>
-            <p class="text-sm text-slate-600 leading-relaxed font-medium">Lowering the configured budget while models are loaded triggers the same eviction loop immediately, freeing servers until total usage fits under the new limit.</p>
+          <p>Zallama can serve GGUF files you already downloaded, but it won't auto-discover files sitting in a directory — a model has to be <strong>registered</strong> before it shows up in <span class="ic">zallama list</span> or <span class="ic">/v1/models</span>. This is deliberate: nothing runs, and no memory is claimed, until you say so.</p>
+          <p>Check where Zallama looks for models (default is <span class="ic">~/.zallama/models</span>):</p>
+          <div class="code-wrap"><pre><code>zallama config</code></pre></div>
+          <p>Copy a model there and register it:</p>
+          <div class="code-wrap"><pre><code>cp ~/Downloads/mistral-7b-q4.gguf ~/.zallama/models/
+zallama add mistral-7b ~/.zallama/models/mistral-7b-q4.gguf
+
+<span class="c"># Or register a file outside models_dir by absolute path</span>
+zallama add my-model /data/models/my-model-q4_k_m.gguf
+
+<span class="c"># Then run it like anything you pulled</span>
+zallama run mistral-7b</code></pre></div>
+          <p>For manual registry edits, relative paths resolve under <span class="ic">models_dir</span>:</p>
+          <div class="code-wrap"><span class="code-label">models/registry.yaml</span><pre><code>models:
+  - name: "mistral-7b"
+    file: "mistral-7b-q4.gguf"
+    params:
+      ctx_size: 8192
+      n_gpu_layers: 99</code></pre></div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Vision models need one extra file</h3>
+          <p>Copy the base GGUF <em>and</em> its projector, then register both together:</p>
+          <div class="code-wrap"><pre><code>cp ~/Downloads/qwen2.5-vl-7b-q4_k_m.gguf ~/.zallama/models/
+cp ~/Downloads/mmproj-qwen2.5-vl-7b-f16.gguf ~/.zallama/models/
+
+zallama add qwen2.5-vl-7b \
+  ~/.zallama/models/qwen2.5-vl-7b-q4_k_m.gguf \
+  --mmproj ~/.zallama/models/mmproj-qwen2.5-vl-7b-f16.gguf</code></pre></div>
+          <p>Or by hand:</p>
+          <div class="code-wrap"><span class="code-label">models/registry.yaml</span><pre><code>models:
+  - name: "qwen2.5-vl-7b"
+    file: "qwen2.5-vl-7b-q4_k_m.gguf"
+    modality: "text"
+    backend: "llama-server"
+    artifacts:
+      mmproj: "mmproj-qwen2.5-vl-7b-f16.gguf"
+    params:
+      ctx_size: 8192
+      n_gpu_layers: 99</code></pre></div>
+          <p>When the model loads, Zallama resolves both paths relative to <span class="ic">models_dir</span> and passes <span class="ic">--mmproj &lt;file&gt;</span> to <span class="ic">llama-server</span>. If <span class="ic">mmproj</span> is missing or not listed under <span class="ic">artifacts</span>, the model may still load for text, but image input won't work.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- CLI REFERENCE                                                -->
+        <!-- ============================================================ -->
+        <section id="cli" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🖥️</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">CLI reference<a class="anchor" href="#cli">#</a></h2>
           </div>
-        </div>
-        <div class="p-4 bg-sky-50/50 border-2 border-sky-100 rounded-3xl text-sm text-slate-700 font-semibold shadow-sm max-w-3xl">
-          🧪 <strong>Try it yourself:</strong> the <a href="./index.html#visualizer" class="text-sky-600 underline decoration-sky-300">interactive eviction visualizer</a> on the home page simulates this exact policy in the browser — drag the budget slider and load models to watch the LRU queue play out.
-        </div>
-      </section>
-
-      <!-- SYSTEMD -->
-      <section id="systemd" class="reveal space-y-6">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">⚙️</span>
-          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Systemd service setup</h2>
-        </div>
-        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
-          Run Zallama as an always-on backend service that boots up automatically with your server. A root <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">install.sh</code> run registers this for you; otherwise, create the unit file manually:
-        </p>
-
-        <div class="glass-card rounded-3xl overflow-hidden">
-          <div class="px-5 py-3 bg-sky-50/70 border-b border-sky-100 flex items-center justify-between">
-            <span class="text-xs font-extrabold text-slate-500 uppercase tracking-wide">/etc/systemd/system/zallama.service</span>
-          </div>
-          <pre class="p-5 overflow-x-auto text-xs font-mono text-slate-100 bg-slate-900 leading-relaxed"><code>[Unit]
-Description=Zallama — Local LLM Server
-After=network.target
-
-[Service]
-Type=simple
-User=cook
-WorkingDirectory=/home/cook/Documents/Dev/Dev-ai/zallama
-ExecStart=/home/cook/Documents/Dev/Dev-ai/zallama/zallama serve
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target</code></pre>
-        </div>
-
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div class="glass-card p-5 rounded-3xl">
-            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Activate</p>
-            <pre class="bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>sudo systemctl enable --now zallama</code></pre>
-          </div>
-          <div class="glass-card p-5 rounded-3xl">
-            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Follow logs</p>
-            <pre class="bg-slate-900 text-sky-300 rounded-xl p-3 font-mono text-[11px] overflow-x-auto shadow-inner"><code>journalctl -u zallama -f</code></pre>
-          </div>
-        </div>
-      </section>
-
-      <!-- API REFERENCE -->
-      <section id="api-reference" class="reveal space-y-6">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">🔌</span>
-          <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">OpenAI-compatible API reference</h2>
-        </div>
-        <p class="text-slate-600 leading-relaxed text-sm sm:text-base font-medium max-w-3xl">
-          Point any OpenAI SDK, LangChain, or agent framework at Zallama by setting the base URL to your daemon's address (default <code class="text-xs bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded-md text-sky-600 font-mono font-bold">http://localhost:11435/v1</code>). Try each endpoint live in the <a href="./index.html#usage" class="text-sky-600 underline decoration-sky-300">API playground</a> on the home page.
-        </p>
-
-        <div class="glass-card rounded-3xl overflow-hidden">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm text-left">
-              <thead class="bg-sky-50/70 text-slate-500 text-xs uppercase font-extrabold tracking-wide">
-                <tr>
-                  <th class="px-5 py-3">Endpoint</th>
-                  <th class="px-5 py-3">Modality</th>
-                  <th class="px-5 py-3">Description</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-sky-100 font-medium text-slate-700">
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">/v1/chat/completions</td>
-                  <td class="px-5 py-3">Text &amp; Vision</td>
-                  <td class="px-5 py-3">Standard chat completions, with streaming and thinking-block support for reasoning models. Accepts <code class="text-[11px] bg-sky-50 px-1 rounded">image_url</code> content blocks for vision-capable models bound to an <code class="text-[11px] bg-sky-50 px-1 rounded">mmproj</code> projector.</td>
-                </tr>
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">/v1/audio/transcriptions</td>
-                  <td class="px-5 py-3">ASR</td>
-                  <td class="px-5 py-3">Upload MP3, WebM, M4A, or FLAC audio; Zallama transcodes with <code class="text-[11px] bg-sky-50 px-1 rounded">ffmpeg</code> and transcribes with a Parakeet-backed model. Supports <code class="text-[11px] bg-sky-50 px-1 rounded">verbose_json</code> and word-level timestamps.</td>
-                </tr>
-                <tr>
-                  <td class="px-5 py-3 font-mono text-xs font-bold text-sky-600 whitespace-nowrap">/v1/audio/speech</td>
-                  <td class="px-5 py-3">TTS</td>
-                  <td class="px-5 py-3">Synthesizes speech from text with a Kokoro-backed model and streams back an audio file (e.g. MP3).</td>
-                </tr>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">serve</td><td>Start the Zallama daemon.</td></tr>
+                <tr><td class="mono">list</td><td>List registered models (alias <span class="ic">ls</span>).</td></tr>
+                <tr><td class="mono">add &lt;name&gt; &lt;file&gt;</td><td>Register a local <span class="ic">.gguf</span> model. <span class="ic">--mmproj</span> attaches a vision projector; <span class="ic">--modality image</span> registers diffusion weights.</td></tr>
+                <tr><td class="mono">set &lt;name&gt; &lt;k&gt;=&lt;v&gt;…</td><td>Configure parameters for a registered model. Saved to the registry, applied on next load.</td></tr>
+                <tr><td class="mono">show &lt;name&gt;</td><td>Print a model's registry entry.</td></tr>
+                <tr><td class="mono">pull &lt;name&gt; [--type T]</td><td>Pull a model from HF / Unsloth presets (uses <span class="ic">aria2c</span>). <span class="ic">--type</span> sets modality (<span class="ic">text|embedding|rerank|asr|tts|image</span>) for raw HF paths.</td></tr>
+                <tr><td class="mono">remove &lt;name&gt;</td><td>Remove a model from the registry (alias <span class="ic">rm</span>).</td></tr>
+                <tr><td class="mono">run &lt;name&gt;</td><td>Interactive chat with a model — streams reasoning in gray. Refuses image models and points you at <span class="ic">generate</span>.</td></tr>
+                <tr><td class="mono">generate &lt;name&gt; "&lt;prompt&gt;"</td><td>Generate an image with a diffusion model (alias <span class="ic">gen</span>). <span class="ic">--output out.png --size 512x512 --steps 20 --cfg-scale 7.0 --negative-prompt "…"</span></td></tr>
+                <tr><td class="mono">ps</td><td>Show running model processes, per-model memory and the budget.</td></tr>
+                <tr><td class="mono">monitor</td><td>Live dashboard: GPU/CPU/RAM, loaded models, in-flight and recent requests with TTFT/prefill/decode (alias <span class="ic">top</span>; <span class="ic">--once</span> for a single frame).</td></tr>
+                <tr><td class="mono">load &lt;name&gt;</td><td>Pre-load a model (start its backend).</td></tr>
+                <tr><td class="mono">unload &lt;name&gt;</td><td>Stop a running model (alias <span class="ic">stop</span>).</td></tr>
+                <tr><td class="mono">reload &lt;name&gt;</td><td>Restart a running model to apply registry param changes.</td></tr>
+                <tr><td class="mono">calibrate &lt;name&gt;</td><td>Recommend max <span class="ic">ctx_size</span> + <span class="ic">mem_gb</span> from your VRAM (dry-run). <span class="ic">--probe [--margin GiB] [--min N] [--max N] [--apply]</span> measures by loading.</td></tr>
+                <tr><td class="mono">probe &lt;name&gt;</td><td>Smoke-test thinking, tool calling and vision with real requests.</td></tr>
+                <tr><td class="mono">bench &lt;name&gt;</td><td>Measure tokens/sec, sweeping params. <span class="ic">--sweep k=v1,v2 --prompt-tokens N --concurrency N --out f</span></td></tr>
+                <tr><td class="mono">zvec …</td><td>Manage vector collections: <span class="ic">create</span>, <span class="ic">upsert</span>, <span class="ic">query</span>, <span class="ic">collections</span>. See <a href="#rag">RAG</a>.</td></tr>
+                <tr><td class="mono">apikey</td><td>Generate, hash or clear the API key. See <a href="#security">Security</a>.</td></tr>
+                <tr><td class="mono">config</td><td>Show the effective configuration, where it was loaded from, and the available keys.</td></tr>
+                <tr><td class="mono">logs &lt;name&gt;</td><td>Tail logs for a model.</td></tr>
+                <tr><td class="mono">health</td><td>Show daemon health status.</td></tr>
+                <tr><td class="mono">version</td><td>Show version info.</td></tr>
               </tbody>
             </table>
           </div>
-        </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div>
-            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Chat — cURL</p>
-            <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-[11px] font-mono overflow-x-auto shadow-inner h-full"><code>curl http://localhost:11435/v1/chat/completions \
+          <h3 class="text-lg font-extrabold text-slate-800">Tab completion</h3>
+          <p><span class="ic">./install.sh</span> installs <strong>bash</strong> and <strong>zsh</strong> completion automatically when it can write to the system completion directories. Once enabled, <kbd class="ic">TAB</kbd> completes both subcommands and <strong>registered model names</strong>:</p>
+          <div class="code-wrap"><pre><code>zallama r&lt;TAB&gt;          <span class="c"># → reload  remove  rm  run</span>
+zallama run &lt;TAB&gt;       <span class="c"># → completes from your registered models</span></code></pre></div>
+          <p>Completion reads the model list straight from <span class="ic">registry.yaml</span>, so it works even when the daemon isn't running. To install manually:</p>
+          <div class="code-wrap"><pre><code><span class="c"># bash</span>
+sudo cp completions/zallama.bash /usr/share/bash-completion/completions/zallama
+<span class="c"># zsh — copy into a dir on your $fpath, then run compinit</span>
+cp completions/_zallama ~/.zsh/completions/_zallama</code></pre></div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- CONFIGURATION                                                -->
+        <!-- ============================================================ -->
+        <section id="config" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">⚙️</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Configuration<a class="anchor" href="#config">#</a></h2>
+          </div>
+          <p>There are two layers, and they change on different timescales:</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="glass-card static p-5 rounded-3xl">
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">🌐 Global daemon config</h3>
+              <p class="text-xs"><span class="ic">config/config.yaml</span> — host, port, timeouts, memory budgets, defaults. <strong>Read once at startup.</strong> Restart the daemon after editing.</p>
+            </div>
+            <div class="glass-card static p-5 rounded-3xl">
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">📒 Per-model registry</h3>
+              <p class="text-xs"><span class="ic">models/registry.yaml</span> — one entry per model. <strong>Hot-reloaded from disk on every request.</strong> A running model keeps its launch params until you <span class="ic">reload</span> it.</p>
+            </div>
+          </div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">See what's active</h3>
+          <div class="code-wrap"><pre><code>zallama config</code></pre></div>
+          <p>Shows the effective configuration, where it was loaded from, and the available keys.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Change global settings</h3>
+          <div class="code-wrap"><pre><code>mkdir -p ~/.zallama
+cp config/config.example.yaml ~/.zallama/config.yaml
+$EDITOR ~/.zallama/config.yaml</code></pre></div>
+          <p>Zallama looks for the first existing config file, in order:</p>
+          <ol>
+            <li><span class="ic">&lt;repo&gt;/config/config.yaml</span></li>
+            <li><span class="ic">~/.zallama/config.yaml</span></li>
+            <li><span class="ic">/etc/zallama/config.yaml</span></li>
+          </ol>
+          <p>Anything omitted falls back to built-in defaults. <strong>Restart the daemon</strong> after editing <span class="ic">config.yaml</span> — global config is read at startup:</p>
+          <div class="code-wrap"><pre><code>systemctl restart zallama</code></pre></div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Change per-model settings</h3>
+          <p>Prefer the CLI over hand-editing the registry:</p>
+          <div class="code-wrap"><pre><code>zallama set &lt;model&gt; &lt;key&gt;=&lt;value&gt; [&lt;key&gt;=&lt;value&gt; ...]
+zallama set llama3.2:1b ctx_size=8192 n_gpu_layers=99
+zallama set my-reranker modality=rerank
+zallama show llama3.2:1b</code></pre></div>
+          <p>Per-model changes are saved to the registry and apply on the model's next load. If it's already running, its process keeps the params it launched with — reload it to pick up the change:</p>
+          <div class="code-wrap"><pre><code>zallama reload &lt;model&gt;</code></pre></div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Environment overrides</h3>
+          <p>For a one-off shell/session, without touching any file:</p>
+          <div class="code-wrap"><pre><code>ZALLAMA_HOST=0.0.0.0 ZALLAMA_PORT=11435 zallama serve
+ZALLAMA_ADMIN_PORT=11436 zallama serve      <span class="c"># /api/* + /metrics listener</span>
+ZALLAMA_MODELS_DIR=/data/models zallama serve
+LLAMA_GPU_LAYERS=99 zallama serve
+ZALLAMA_EMBEDDING_MODEL=my-embed zallama serve</code></pre></div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Global settings reference</h3>
+          <div class="code-wrap"><span class="code-label">config/config.yaml</span><pre><code>zallama:
+  host: "127.0.0.1"      <span class="c"># localhost only; set "0.0.0.0" to expose on the network</span>
+  port: 11435            <span class="c"># inference: /v1/*</span>
+  admin_port: 0          <span class="c"># admin: /api/* + /metrics (0 = port + 1, i.e. 11436)</span>
+  admin_host: ""         <span class="c"># admin bind address ("" = same as host)</span>
+  models_dir: "~/.zallama/models"
+  logs_dir: "~/.zallama/logs"
+  api_key: ""            <span class="c"># if set, required as a Bearer token on /v1 and /api</span>
+  request_timeout: 600   <span class="c"># seconds for non-streaming upstream proxy calls</span>
+
+llama_server:
+  binary: ""             <span class="c"># Auto-detects in ./bin/llama-server or PATH</span>
+  port_start: 8100       <span class="c"># Backends spawn on ports 8100, 8101, etc.</span>
+  startup_timeout: 60    <span class="c"># Seconds to wait for a backend's /health</span>
+  idle_timeout: 300      <span class="c"># Auto-unload model after 300s of inactivity (0 to disable)</span>
+  max_loaded_models: 0   <span class="c"># Max concurrently loaded models; evicts LRU (0 = unlimited)</span>
+  mem_budget_gb: 0       <span class="c"># Memory budget (GB); evicts LRU to fit a model's mem_gb (0 = unlimited)</span>
+  mem_init_gb: 2         <span class="c"># Fallback per-model cost when mem_gb is undeclared &amp; file size unknown</span>
+  default_params:
+    ctx_size: 8192
+    n_gpu_layers: 99     <span class="c"># Attempt full GPU offload by default</span>
+    threads: 8
+    flash_attn: true
+    parallel: 1          <span class="c"># Single-session slot allocation (avoids context limits)</span>
+
+rag:
+  embedding_model: ""    <span class="c"># default model for /v1/embeddings and zvec</span>
+  rerank_model: ""       <span class="c"># default reranker</span>
+  zvec_dir: "~/.zallama/zvec"
+  default_top_k: 5</code></pre></div>
+          <div class="callout warn">
+            <span class="icon">🔐</span>
+            <div><strong>Security note:</strong> Zallama binds to <span class="ic">127.0.0.1</span> by default. If you set <span class="ic">host: "0.0.0.0"</span> to expose it on your network, also set an API key — the daemon has no auth otherwise.</div>
+          </div>
+          <p>The daemon listens on <strong>two ports</strong>: the inference API (<span class="ic">/v1/*</span>) on <span class="ic">port</span>, and the management API (<span class="ic">/api/*</span> — <span class="ic">ps</span>, <span class="ic">list</span>, <span class="ic">load</span>, <span class="ic">pull</span>…) plus the Prometheus <span class="ic">/metrics</span> endpoint on <span class="ic">admin_port</span>. Both share the same API key; <span class="ic">/metrics</span> and <span class="ic">/health</span> are the only unauthenticated paths. The split lets you expose inference to clients while keeping management and scraping on a port you firewall separately (or bind to a different interface with <span class="ic">admin_host</span>). The CLI finds the admin port from the same config; override with <span class="ic">ZALLAMA_ADMIN_HOST=http://host:port</span> if it runs elsewhere.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Model registry reference</h3>
+          <div class="code-wrap"><span class="code-label">models/registry.yaml</span><pre><code>models:
+  <span class="c"># Standard text/chat model</span>
+  - name: "qwen3.5-4b-q4_k_m"
+    file: "/home/cook/.zallama/models/Qwen3.5-4B-Q4_K_M.gguf"
+    description: "Downloaded from unsloth/Qwen3.5-4B-GGUF"
+    params:
+      ctx_size: 8192
+      n_gpu_layers: 99
+      reasoning: false   <span class="c"># Bypasses thinking blocks for immediate responses</span>
+
+  <span class="c"># Vision (multimodal) model — attach an mmproj projector via `artifacts`</span>
+  - name: "qwen2-vl-7b"
+    file: "Qwen2-VL-7B-Instruct-Q4_K_M.gguf"   <span class="c"># relative paths resolve under models_dir</span>
+    modality: "text"     <span class="c"># vision is served on /v1/chat/completions (default modality)</span>
+    backend: "llama-server"
+    artifacts:
+      mmproj: "mmproj-Qwen2-VL-7B-Instruct-f16.gguf"
+    params:
+      ctx_size: 8192
+      n_gpu_layers: 99
+
+  <span class="c"># ASR (speech-to-text) model — runs on parakeet-server</span>
+  - name: "tdt-0.6b-v3-q8_0"
+    file: "tdt-0.6b-v3-q8_0.gguf"
+    modality: "asr"
+    backend: "parakeet-server"
+    description: "Parakeet TDT 0.6B v3 (multilingual ASR)"
+    mem_gb: 1.3
+    pinned: true
+    params:
+      threads: 4</code></pre></div>
+          <div class="callout">
+            <span class="icon">🔄</span>
+            <div><strong>Applying changes:</strong> the registry reloads from disk automatically, so adding, editing, or removing an entry takes effect on the next request — no daemon restart. The one exception is a model that's <strong>already running</strong>: its backend keeps the params it launched with, so run <span class="ic">zallama reload &lt;name&gt;</span>. (Changes to <span class="ic">config.yaml</span> are read only at startup and do require <span class="ic">systemctl restart zallama</span>.)</div>
+          </div>
+          <p>Each entry may declare:</p>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">modality</td><td><span class="ic">text</span> (default), <span class="ic">embedding</span>, <span class="ic">rerank</span>, <span class="ic">asr</span>, <span class="ic">tts</span>, or <span class="ic">image</span>. Determines which endpoints the model may serve; requests to a mismatched endpoint return a clear <span class="ic">400</span>. (Legacy embedding models registered as <span class="ic">text</span> with <span class="ic">params: embedding: true</span> are still treated as <span class="ic">embedding</span> at runtime.)</td></tr>
+                <tr><td class="mono">backend</td><td>Which engine runs the model (default <span class="ic">llama-server</span>). New backends resolve their own binary from <span class="ic">./bin/&lt;name&gt;</span>, <span class="ic">~/.zallama/bin/&lt;name&gt;</span>, or <span class="ic">PATH</span>.</td></tr>
+                <tr><td class="mono">artifacts</td><td>Extra files beyond the primary GGUF (e.g. <span class="ic">mmproj</span> for vision, <span class="ic">draft</span> for a separate draft model, <span class="ic">vae</span>/<span class="ic">t5xxl</span>/<span class="ic">clip_l</span> for diffusion). Paths are absolute or relative to <span class="ic">models_dir</span>.</td></tr>
+                <tr><td class="mono">mem_gb</td><td>Declared memory footprint, used by memory-aware eviction. If omitted, it's estimated from the GGUF file size — an estimate that is frequently off by 100% or more, so <a href="#memory">measure it</a>.</td></tr>
+                <tr><td class="mono">pinned</td><td><span class="ic">true</span> keeps the model loaded for the daemon's lifetime: pre-warmed at startup, exempt from both idle sweep and eviction. Intended for small always-on services (ASR, TTS), not for large models.</td></tr>
+                <tr><td class="mono">params</td><td>Launch parameters for the backend. Any llama-server flag is fair game: <span class="ic">ctx_size</span>, <span class="ic">n_gpu_layers</span>, <span class="ic">threads</span>, <span class="ic">batch_size</span>, <span class="ic">ubatch_size</span>, <span class="ic">flash_attn</span>, <span class="ic">parallel</span>, <span class="ic">cache_type_k</span>/<span class="ic">cache_type_v</span>, <span class="ic">n_cpu_moe</span>, <span class="ic">reasoning</span>, <span class="ic">reasoning_effort</span>, <span class="ic">chat_template_kwargs</span>, <span class="ic">spec_type</span>, <span class="ic">spec_draft_n_max</span>, <span class="ic">spec_draft_ngl</span>, sampling defaults… Full list per modality/backend: <a href="https://github.com/rzafiamy/zallama/blob/main/CONFIG.md" target="_blank" rel="noopener noreferrer">CONFIG.md</a>.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Useful <span class="ic">params</span> for making a model fit on a busy GPU — <span class="ic">cache_type_k</span>/<span class="ic">cache_type_v</span> (quantize the KV cache), <span class="ic">ctx_size</span>, <span class="ic">n_cpu_moe</span> (keep the expert weights of the first N layers in system RAM, MoE models only) and <span class="ic">n_gpu_layers</span> — are covered with measured trade-offs in <a href="https://github.com/rzafiamy/zallama/blob/main/docs/vram-planning.md" target="_blank" rel="noopener noreferrer">Fitting Your Models on One GPU</a>. For diffusion models, see <a href="https://github.com/rzafiamy/zallama/blob/main/docs/sd-tuning.md" target="_blank" rel="noopener noreferrer">Tuning Image Generation</a>.</p>
+          <p>If your GGUF carries a baked-in MTP head — llama.cpp logs its tensors as <span class="ic">unused tensor blk.N.nextn.* -- ignoring</span> until you switch it on — <span class="ic">spec_type: draft-mtp</span> roughly doubles decode speed for about 1 GiB of VRAM. See <a href="https://github.com/rzafiamy/zallama/blob/main/docs/mtp-speculative-decoding.md" target="_blank" rel="noopener noreferrer">Doubling Decode Speed with MTP</a>. For a model with no baked-in head but a genuinely separate draft checkpoint, register it as the <span class="ic">draft</span> artifact and set <span class="ic">spec_type: draft-simple</span> instead; <span class="ic">spec_draft_ngl</span> caps how much of the draft model rides on VRAM.</p>
+          <p>Sampling knobs — <span class="ic">temperature</span>, <span class="ic">top_p</span>, <span class="ic">top_k</span>, <span class="ic">min_p</span>, <span class="ic">presence_penalty</span>, <span class="ic">repeat_penalty</span> — are also settable per-model. They become the launch defaults, so a chat request that sets its own value always wins; the registry value only applies when the request leaves the field out.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- BENCHMARKING                                                 -->
+        <!-- ============================================================ -->
+        <section id="bench" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">📊</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Benchmarking (<span class="ic">zallama bench</span>)<a class="anchor" href="#bench">#</a></h2>
+          </div>
+          <p><span class="ic">zallama calibrate</span> tells you what <em>fits</em>. <span class="ic">zallama bench</span> tells you what it <em>costs</em> — in tokens/sec, VRAM, and latency — for any combination of parameters you care to compare.</p>
+          <div class="code-wrap"><pre><code><span class="p">$</span> zallama bench qwen3.5-4b-q4_k_m
+
+┌───────────────────────────────────────────────────────────────────────┐
+│ PROMPT │ GEN │ LOAD s │ VRAM GB │ TTFT ms │ PREFILL t/s │ DECODE t/s  │
+├────────┼─────┼────────┼─────────┼─────────┼─────────────┼─────────────┤
+│    469 │ 128 │    1.5 │     4.8 │  118 ±2 │    8925 ±20 │  179.8 ±0.2 │
+└───────────────────────────────────────────────────────────────────────┘</code></pre></div>
+          <p>Three numbers, three different questions:</p>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <tbody>
+                <tr><td class="mono">PREFILL t/s</td><td>How fast it <em>reads</em>. Dominates long-prompt / RAG workloads. Tuned by <span class="ic">batch_size</span>, <span class="ic">ubatch_size</span>, <span class="ic">n_gpu_layers</span>.</td></tr>
+                <tr><td class="mono">DECODE t/s</td><td>How fast it <em>writes</em>. The number people mean by "tokens/sec". Tuned by quantization, <span class="ic">n_gpu_layers</span>, <span class="ic">flash_attn</span>.</td></tr>
+                <tr><td class="mono">TTFT ms</td><td>How fast it <em>answers</em>. What an interactive user actually feels.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><span class="ic">LOAD s</span> and <span class="ic">VRAM GB</span> come along for free — which is how you find out that doubling <span class="ic">ctx_size</span> cost you 400 MB of VRAM and bought nothing.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Sweeping parameters</h3>
+          <p><span class="ic">--sweep &lt;param&gt;=&lt;v1&gt;,&lt;v2&gt;</span> is repeatable and builds a full grid. Each combination is written to the registry, the model is <strong>restarted</strong> so the backend actually launches with it, and your original parameters are <strong>restored when the run ends</strong> — including on Ctrl-C.</p>
+          <div class="code-wrap"><pre><code><span class="c"># Does a bigger context slow generation down? What does it cost in VRAM?</span>
+zallama bench qwen3.5-4b-q4_k_m --sweep ctx_size=4096,16384,65536
+
+<span class="c"># What does thinking cost, at short and long prompts?</span>
+zallama bench qwen3.5-4b-q4_k_m --sweep reasoning=on,off -p 512,8192
+
+<span class="c"># Find the offload cliff on a small GPU</span>
+zallama bench qwen3.5-9b-q4_k_m --sweep n_gpu_layers=0,20,40,99
+
+<span class="c"># Quantized KV cache: how much ctx does the VRAM buy back?</span>
+zallama bench qwen3.5-4b-q4_k_m --sweep cache_type_k=f16,q8_0,q4_0
+zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
+
+<span class="c"># Compare models head to head, and keep the numbers</span>
+zallama bench --all --runs 5 --out bench.md</code></pre></div>
+          <p>Anything llama-server takes is fair game: <span class="ic">ctx_size</span>, <span class="ic">reasoning</span>, <span class="ic">reasoning_effort</span>, <span class="ic">chat_template_kwargs</span>, <span class="ic">n_gpu_layers</span>, <span class="ic">threads</span>, <span class="ic">batch_size</span>, <span class="ic">ubatch_size</span>, <span class="ic">flash_attn</span>, <span class="ic">parallel</span>, <span class="ic">cache_type_k</span>, <span class="ic">cache_type_v</span>, <span class="ic">spec_type</span>, <span class="ic">spec_draft_n_max</span>, <span class="ic">spec_draft_ngl</span>, <span class="ic">image_min_tokens</span>, <span class="ic">image_max_tokens</span>, <span class="ic">temperature</span>, <span class="ic">top_p</span>, <span class="ic">top_k</span>, <span class="ic">min_p</span>, <span class="ic">presence_penalty</span>, <span class="ic">repeat_penalty</span>.</p>
+          <p>Measured results from past sweeps are kept in the <a href="https://github.com/rzafiamy/zallama/blob/main/docs/tuning-log.md" target="_blank" rel="noopener noreferrer">Model Tuning Log</a>, so a config doesn't get re-benchmarked from scratch every session.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Options</h3>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Flag</th><th>Default</th><th></th></tr></thead>
+              <tbody>
+                <tr><td class="mono">-p, --prompt-tokens N[,N]</td><td class="mono">512</td><td>Prompt sizes to send</td></tr>
+                <tr><td class="mono">-n, --max-tokens N</td><td class="mono">128</td><td>Tokens to generate per request</td></tr>
+                <tr><td class="mono">-c, --concurrency N[,N]</td><td class="mono">1</td><td>Simultaneous requests — adds a <strong>TOTAL t/s</strong> throughput column</td></tr>
+                <tr><td class="mono">-r, --runs N</td><td class="mono">3</td><td>Measured runs per point (reported as mean ± stdev)</td></tr>
+                <tr><td class="mono">--warmup N</td><td class="mono">1</td><td>Discarded runs per point</td></tr>
+                <tr><td class="mono">--natural</td><td>off</td><td>Let the model stop on its own; by default <span class="ic">ignore_eos</span> pins every run to exactly <span class="ic">--max-tokens</span> so rates compare identical work</td></tr>
+                <tr><td class="mono">--reuse-cache</td><td>off</td><td>Measure the <em>warm</em> prefill path; by default each prompt is uniquely prefixed so llama-server can't reuse its KV cache</td></tr>
+                <tr><td class="mono">--all</td><td></td><td>Bench every registered text model</td></tr>
+                <tr><td class="mono">-o, --out FILE</td><td></td><td>Write <span class="ic">.json</span>, <span class="ic">.csv</span> or <span class="ic">.md</span> — format from the extension</td></tr>
+                <tr><td class="mono">--label NAME</td><td>GPU name</td><td>Names this machine in the export</td></tr>
+                <tr><td class="mono">--keep</td><td>off</td><td>Leave the last swept params in the registry</td></tr>
+                <tr><td class="mono">--dry-run</td><td></td><td>Print the matrix and exit</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Comparing two machines</h3>
+          <p>A tokens/sec number means nothing without the GPU, driver and llama.cpp build behind it, so every <span class="ic">.json</span> export carries them. Run the same command on each box, then compare:</p>
+          <div class="code-wrap"><pre><code><span class="c"># on each machine — identical workload, one file each</span>
+zallama bench Qwen3.6-35B-A3B-UD-Q4_K_M \
+  --sweep ctx_size=32768 --sweep reasoning=on,off \
+  -p 32000 -n 256 --runs 3 --out $(hostname).json
+
+zallama bench --compare rtx4090.json rtx3090.json</code></pre></div>
+          <div class="code-wrap"><pre><code> Machines
+│ LABEL   │ GPU                     │ VRAM GiB │ DRIVER     │ CPU                │ POINTS │
+│ rtx4090 │ NVIDIA GeForce RTX 4090 │ 24.0     │ 570.172.08 │ Core(TM) i9-14900K │ 2      │
+│ rtx3090 │ NVIDIA GeForce RTX 3090 │ 24.0     │ 570.172.08 │ Core(TM) i9-14900K │ 2      │
+
+ DECODE t/s  (higher is better, % vs rtx4090)
+│ POINT                                     │ rtx4090 (base) │ rtx3090      │
+│ …· reasoning=on · prompt 32000 · gen 256  │          182.2 │ 113.0 (-38%) │
+│ …· reasoning=off · prompt 32000 · gen 256 │          181.6 │ 112.6 (-38%) │</code></pre></div>
+          <p>The first file is the baseline; every other column shows its delta. <strong>Only points with identical model, swept params, prompt size, max-tokens and concurrency are put side by side</strong> — anything unmatched is reported, never silently averaged in. If the exports came from different llama.cpp builds you get a warning, because part of the gap is then the engine rather than the hardware. <span class="ic">--metric</span> picks which tables to print: <span class="ic">prefill_tps</span>, <span class="ic">decode_tps</span>, <span class="ic">throughput_tps</span>, <span class="ic">ttft_ms</span>, <span class="ic">load_s</span>, <span class="ic">vram_gib</span>, <span class="ic">gen_tokens</span>.</p>
+          <div class="callout">
+            <span class="icon">🧪</span>
+            <div>Comparing two GPUs <strong>in the same box</strong> needs the daemon pinned to one of them: set <span class="ic">CUDA_VISIBLE_DEVICES=0</span> in the service environment, restart, bench, then repeat with <span class="ic">=1</span>.</div>
+          </div>
+          <div class="callout">
+            <span class="icon">🧠</span>
+            <div><strong>On <span class="ic">reasoning=on/off</span>:</strong> it will not move decode tok/s — the chat template changes, the arithmetic doesn't. What it changes is <em>how many tokens</em> the model emits before answering. To measure that cost, add <span class="ic">--natural</span> and compare the <span class="ic">gen_tokens</span> metric.</div>
+          </div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Reading the results</h3>
+          <ul>
+            <li><strong>PREFILL / DECODE come off llama.cpp's own clock</strong> (its <span class="ic">timings</span> block), so they measure the engine, not your network. <strong>TTFT and TOTAL are measured at the client</strong> and include queueing and proxy overhead — which is what you want when the question is "how does this feel".</li>
+            <li>A combination that <strong>fails to load</strong> (a <span class="ic">ctx_size</span> that won't fit, say) is reported inline and skipped; the sweep carries on and the failure is recorded in the export with its error.</li>
+            <li><span class="ic">--concurrency</span> above the model's <span class="ic">parallel</span> slots just queues. Sweep them together — <span class="ic">--sweep parallel=1,4 -c 4</span> — to see what batching actually buys.</li>
+            <li><strong>ACCEPT %</strong> appears for models running speculative decoding: the share of drafted tokens the target accepted. Read a <span class="ic">spec_draft_n_max</span> sweep off this column. Anything near 100% means the model is copying its prompt, not generating.</li>
+          </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- MONITORING                                                   -->
+        <!-- ============================================================ -->
+        <section id="monitor" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">📈</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Live monitoring (<span class="ic">zallama monitor</span>)<a class="anchor" href="#monitor">#</a></h2>
+          </div>
+          <p>An htop-style view of the whole stack, refreshed every second (<kbd class="ic">q</kbd> quits, <kbd class="ic">r</kbd> refreshes, <span class="ic">--interval S</span>, <span class="ic">--once</span> prints a single frame for scripts):</p>
+          <div class="code-wrap"><pre><code> GPU  RTX 4090     util ████░░░░░░  38%   VRAM ██████████████████░░ 22.1/24.0 GiB  61°C  212W/450W
+ CPU               load ██░░░░░░░░  14%   RAM  ██░░░░░░░░░░░░░░░░░░  4.9/62.5 GiB
+
+ MODELS  3 loaded/4  •  declared 22.2/23.8 GB  •  measured 22.1 GiB
+   NAME                 STATE     VRAM  ACTIVE  IDLE   UP   BACKEND
+   nex:n2.5-mini        busy  21.4 GiB       1    2s   6s   llama-server
+   granite-embedding…   idle   0.7 GiB       0   40s   2m   embedding-server
+
+ IN FLIGHT  1
+       #  MODEL          ENDPOINT          ELAPSED    TTFT  TOKENS
+       7  nex:n2.5-mini  chat/completions     1.9s   158ms     337
+
+ RECENT  last 20  •  since 42m: 61 req, 1 err, 48,120 in / 9,312 out tokens
+   TIME     MODEL          ENDPOINT          PROMPT CACHE  OUT   TTFT  PREFILL  DECODE  ACC  TOTAL  ST
+   08:00:01 nex:n2.5-mini  chat/completions     13     0   18  221ms    248/s 183.9/s    —  221ms  ok
+   07:59:57 nex:n2.5-mini  chat/completions     25     0  400  158ms    194/s 194.8/s    —   2.2s  ok</code></pre></div>
+          <p>The daemon records every proxied <span class="ic">/v1</span> request (<span class="ic">GET /api/requests</span>): TTFT is stamped on the first content delta of a stream, PREFILL/DECODE/CACHE come off the <span class="ic">timings</span> block llama.cpp appends to its response, ACC is draft acceptance for speculative models, and an in-flight streamed request shows how many tokens have gone by so far. The last 200 requests are kept in memory; nothing is written to disk.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Prometheus (<span class="ic">GET /metrics</span>)</h3>
+          <p>The same data — plus lifecycle counters (starts, startup failures, crashes, evictions), per-model VRAM, token totals, TTFT/duration histograms and the whole-card GPU numbers — is exposed in Prometheus text format on the <strong>admin port</strong> (<span class="ic">http://host:11436/metrics</span> by default), unauthenticated so remote scrapers don't need the key:</p>
+          <div class="code-wrap"><span class="code-label">prometheus.yml</span><pre><code>scrape_configs:
+  - job_name: zallama
+    static_configs:
+      - targets: ["llm-box:11436"]</code></pre></div>
+          <p>Metric names and useful queries are listed in <a href="https://github.com/rzafiamy/zallama/blob/main/docs/monitoring.md" target="_blank" rel="noopener noreferrer">docs/monitoring.md</a>.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- MEMORY                                                       -->
+        <!-- ============================================================ -->
+        <section id="memory" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🧠</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Memory-aware eviction<a class="anchor" href="#memory">#</a></h2>
+          </div>
+          <p>Beyond the time-based idle sweep and the <span class="ic">max_loaded_models</span> count cap, Zallama can keep total loaded-model memory within a budget. Set <span class="ic">mem_budget_gb</span> and, before starting a model, Zallama evicts least-recently-used instances until the incoming model fits.</p>
+          <p>Each model's cost is taken from its declared <span class="ic">mem_gb</span>; if undeclared, it's estimated from the GGUF file size (≈ size × 1.2 for KV-cache overhead), falling back to <span class="ic">mem_init_gb</span> when the size is unknown. Declaring <span class="ic">mem_gb</span> is recommended for accuracy:</p>
+          <div class="code-wrap"><pre><code>zallama set qwen3.5-4b-q4_k_m mem_gb=4</code></pre></div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Calibrate: predict, then measure</h3>
+          <p>For a starting number without loading anything, <span class="ic">zallama calibrate &lt;model&gt;</span> reads the GGUF's own dimensions — counting only the layers that actually hold a KV cache, which on hybrid and sliding-window architectures is a fraction of the block count — and reports the largest <span class="ic">ctx_size</span> that still fits alongside the weights, the artifacts and a compute reserve. It writes nothing; it prints the <span class="ic">zallama set</span> line.</p>
+          <p>For the real number, <strong><span class="ic">zallama calibrate &lt;model&gt; --probe</span></strong> loads the model instead of predicting: it bisects <span class="ic">ctx_size</span> between 4096 and the trained context (~6–10 loads, a minute or two), reads the card's actual free VRAM after each, and reports the largest value that still leaves <span class="ic">--margin</span> GiB free — by default the <span class="ic">services</span> group's memory budget, i.e. room for the embedding/ASR/TTS models this one has to coexist with. Everything the static estimate has to guess — compute buffers, an MTP or DFlash draft context's own KV cache, whether the mmproj sits on the GPU, a MoE's expert layout — is simply measured. Add <span class="ic">--apply</span> to write <span class="ic">ctx_size</span> and the measured <span class="ic">mem_gb</span> straight into the registry:</p>
+          <div class="code-wrap"><pre><code>zallama calibrate nemotron:30b-a3b --probe --apply
+zallama calibrate Qwen3.8-27B-UD-Q5_K_M --probe --margin 1.5 --max 131072</code></pre></div>
+          <p>And before trusting any of it, <strong><span class="ic">zallama probe &lt;model&gt;</span></strong> sends three short real requests — a trivial question, a tool definition, and (if the entry has an mmproj) a solid red image — and reports whether the model thinks before answering and what that costs, whether tool calls come back structured, and whether it sees. It also reads the chat template to say which thinking switch this model actually understands, because <span class="ic">reasoning: false</span> only works on templates with a <span class="ic">&lt;think&gt;</span> toggle; others read <span class="ic">reasoning_effort</span>, <span class="ic">enable_thinking</span> or their own variable via <span class="ic">chat_template_kwargs</span>.</p>
+          <div class="callout warn">
+            <span class="icon">📏</span>
+            <div><strong>Measure it, don't guess it.</strong> The <span class="ic">size × 1.2</span> fallback ignores the KV cache, the artifacts (<span class="ic">mmproj</span>, the text encoders of image models) and the compute buffers. Real-world errors exceed 100% in <strong>both</strong> directions — a 4B model at a long context measured 12.9 GB against an estimate of 4.2 GB. A budget built on those estimates evicts models that would have fit <em>and</em> admits models that then OOM, so measure before enabling <span class="ic">mem_budget_gb</span>: <span class="ic">python3 scripts/measure_vram.py --write</span> (run it on an idle GPU).</div>
+          </div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Keeping a model resident: <span class="ic">pinned</span></h3>
+          <p>A model with <span class="ic">pinned: true</span> in its registry entry is <strong>pre-loaded when the daemon starts and never evicted</strong>. It exists for small, latency-sensitive backends that would otherwise be evicted by every chat request and reloaded on the next call — ASR and TTS in particular, where a ~1 GB model turns a 780 ms round trip into an 80 ms one.</p>
+          <div class="code-wrap"><span class="code-label">models/registry.yaml</span><pre><code>- name: tdt-0.6b-v3-q8_0
+  modality: asr
+  backend: parakeet-server
+  mem_gb: 1.3
+  pinned: true</code></pre></div>
+          <p>Two things to know. Pinned models <strong>still count against <span class="ic">max_loaded_models</span></strong>, so size that cap as <em>(pinned services) + (concurrent big models)</em> — with one pinned TTS and <span class="ic">max_loaded_models: 1</span>, the only slot is permanently taken and every other model thrashes. And when the cap is reached but everything loaded is pinned, Zallama logs a warning and admits the incoming model <strong>over budget</strong> rather than killing a warm pinned instance.</p>
+          <p>Pinning a small model can make your largest one unloadable. <a href="https://github.com/rzafiamy/zallama/blob/main/docs/vram-planning.md" target="_blank" rel="noopener noreferrer">Fitting Your Models on One GPU</a> works through that arithmetic and the levers — KV quantization, <span class="ic">ctx_size</span>, MoE expert offload (<span class="ic">n_cpu_moe</span>), <span class="ic">mmproj</span> — with measured numbers for each.</p>
+          <p>Inspect current usage and headroom any time with <span class="ic">zallama ps</span> (or <span class="ic">GET /api/ps</span>):</p>
+          <div class="code-wrap"><pre><code>NAME                      PORT     MEM      UPTIME       LAST USED
+─────────────────────────────────────────────────────────────────────────
+qwen3.5-4b-q4_k_m         8100     4.0GB    3m12s        8s ago
+
+Memory: 4.0GB / 12.0GB used  •  8.0GB free  •  1 loaded</code></pre></div>
+          <div class="callout">
+            <span class="icon">ℹ️</span>
+            <div><span class="ic">mem_gb</span> is a declared/estimated budget for scheduling, not a hard GPU/VRAM measurement. For subprocess backends like <span class="ic">llama-server</span>, the OS — not Zallama — owns actual memory; the budget governs <em>how many</em> models Zallama keeps resident.</div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- VISION                                                       -->
+        <!-- ============================================================ -->
+        <section id="vision" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">👁️</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Vision (multimodal) models<a class="anchor" href="#vision">#</a></h2>
+          </div>
+          <p>Vision models run on <span class="ic">llama-server</span> with a multimodal projector (<span class="ic">mmproj</span>). Register the base GGUF and point an <span class="ic">mmproj</span> artifact at the projector file:</p>
+          <div class="code-wrap"><pre><code>zallama add qwen2-vl-7b ~/.zallama/models/Qwen2-VL-7B-Instruct-Q4_K_M.gguf \
+  --mmproj ~/.zallama/models/mmproj-Qwen2-VL-7B-Instruct-f16.gguf</code></pre></div>
+          <p>Zallama passes <span class="ic">--mmproj &lt;file&gt;</span> to the backend automatically, and image input flows through the standard OpenAI <span class="ic">/v1/chat/completions</span> endpoint (<span class="ic">image_url</span> message content):</p>
+          <div class="code-wrap"><pre><code>curl http://localhost:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen2-vl-7b",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What is in this image?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}}
+      ]
+    }]
+  }'</code></pre></div>
+          <p>Run <span class="ic">zallama probe qwen2-vl-7b</span> to confirm the model actually sees — it sends a solid red image and checks the answer.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- ASR                                                          -->
+        <!-- ============================================================ -->
+        <section id="asr" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🎙️</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Speech-to-text (ASR)<a class="anchor" href="#asr">#</a></h2>
+          </div>
+          <p>Audio transcription runs on the <strong><span class="ic">parakeet-server</span></strong> backend (<a href="https://github.com/mudler/parakeet.cpp" target="_blank" rel="noopener noreferrer">parakeet.cpp</a>) and is exposed at the OpenAI-compatible <span class="ic">POST /v1/audio/transcriptions</span> endpoint.</p>
+          <ol>
+            <li><strong>Build the binary</strong> (installs <span class="ic">parakeet-server</span> into <span class="ic">./bin/</span>):
+              <div class="code-wrap mt-2"><pre><code>./build-ggml-parakeet.cpp.sh master</code></pre></div>
+            </li>
+            <li><strong>Pull a model</strong> (auto-registered as <span class="ic">modality: asr</span>, <span class="ic">backend: parakeet-server</span>):
+              <div class="code-wrap mt-2"><pre><code>zallama pull parakeet:0.6b                                   <span class="c"># English (TDT 0.6B v2)</span>
+zallama pull mudler/parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf  <span class="c"># Multilingual v3 (incl. French)</span></code></pre></div>
+            </li>
+            <li><strong>Transcribe</strong> — upload any audio format; Zallama transcodes it to WAV via <span class="ic">ffmpeg</span> before forwarding:
+              <div class="code-wrap mt-2"><pre><code>curl http://localhost:11435/v1/audio/transcriptions \
+  -F model=tdt-0.6b-v3-q8_0 \
+  -F file=@speech.mp3 \
+  -F response_format=text</code></pre></div>
+            </li>
+          </ol>
+          <p><span class="ic">response_format</span> accepts <span class="ic">text</span>, <span class="ic">json</span>, or <span class="ic">verbose_json</span> (with <span class="ic">-F 'timestamp_granularities[]=word'</span> for per-word timing).</p>
+          <div class="callout">
+            <span class="icon">🌍</span>
+            <div><strong>Language support is a property of the model, not Zallama.</strong> <span class="ic">ctc-0.6b</span> / <span class="ic">tdt-0.6b-v2</span> are <strong>English-only</strong>; for French and other languages use the multilingual <a href="https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3" target="_blank" rel="noopener noreferrer">Parakeet TDT 0.6B v3</a> (25 European languages, automatic language detection).<br/><span class="ic">ffmpeg</span> is only needed for non-WAV uploads. Without it, WAV uploads still work and other formats return a clear <span class="ic">415</span>.</div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- TTS                                                          -->
+        <!-- ============================================================ -->
+        <section id="tts" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🗣️</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Text-to-speech (TTS)<a class="anchor" href="#tts">#</a></h2>
+          </div>
+          <p>Speech synthesis runs on the <strong><span class="ic">kokoro-server</span></strong> backend (<a href="https://github.com/rzafiamy/kokoro.cpp" target="_blank" rel="noopener noreferrer">kokoro.cpp</a>) and is exposed at the OpenAI-compatible <span class="ic">POST /v1/audio/speech</span> endpoint.</p>
+          <ol>
+            <li><strong>Build the binary</strong> (installs <span class="ic">kokoro-server</span> and <span class="ic">kokoro-cli</span> into <span class="ic">./bin/</span>):
+              <div class="code-wrap mt-2"><pre><code>./build-ggml-kokoro.cpp.sh v0.3.0</code></pre></div>
+            </li>
+            <li><strong>Pull a model</strong> (auto-registered as <span class="ic">modality: tts</span>, <span class="ic">backend: kokoro-server</span>):
+              <div class="code-wrap mt-2"><pre><code>zallama pull kokoro:82m     <span class="c"># Kokoro-82M, 54 voices across 8 languages</span></code></pre></div>
+            </li>
+            <li><strong>Synthesize</strong> — the response is a WAV stream:
+              <div class="code-wrap mt-2"><pre><code>curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kokoro:82m","input":"Bonjour, comment allez-vous ?"}' \
+  -o speech.wav</code></pre></div>
+            </li>
+          </ol>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Voice selection</h3>
+          <p>Kokoro takes no language argument — it phonemizes according to the <strong>voice prefix</strong> (<span class="ic">ff_siwis</span> → French, <span class="ic">af_heart</span> → American English, <span class="ic">if_sara</span> → Italian, …). Sending French text with an English voice therefore reads it with English sounds. So when a request names <strong>no</strong> voice, Zallama guesses the language from the text and picks that language's voice. Precedence:</p>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <tbody>
+                <tr><td class="mono">1. voice in the request</td><td>Always wins — auto-selection never overrides an explicit choice.</td></tr>
+                <tr><td class="mono">2. detected language</td><td><span class="ic">fr</span> → <span class="ic">ff_siwis</span>, <span class="ic">en</span> → <span class="ic">af_heart</span>, plus <span class="ic">es</span>/<span class="ic">it</span>/<span class="ic">pt</span>/<span class="ic">hi</span>/<span class="ic">ja</span>/<span class="ic">zh</span>.</td></tr>
+                <tr><td class="mono">3. registry voice param</td><td>Used when the language can't be determined.</td></tr>
+                <tr><td class="mono">4. kokoro's default</td><td>When no registry default is set either.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Detection is a small built-in heuristic, not a language identifier: CJK and Devanagari are settled by script, the Latin languages by function-word frequency. It deliberately answers "unknown" for very short inputs — <em>"Merci"</em> and <em>"Mercy"</em> are not distinguishable in five letters — and falls through to your registry default there. Pin <span class="ic">voice</span> in the request whenever you need a guaranteed result:</p>
+          <div class="code-wrap"><pre><code>curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kokoro:82m","input":"Bonjour !","voice":"ff_siwis"}' \
+  -o speech.wav</code></pre></div>
+          <div class="callout">
+            <span class="icon">⚡</span>
+            <div>Install <strong>espeak-ng</strong> (see <a href="#install">Installation</a>) — without it kokoro falls back to a bundled phonemizer that is ~2.5x slower.</div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- IMAGE GENERATION                                             -->
+        <!-- ============================================================ -->
+        <section id="image" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🎨</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Image generation (Stable Diffusion)<a class="anchor" href="#image">#</a></h2>
+          </div>
+          <p>Text-to-image runs on the <strong><span class="ic">sd-server</span></strong> backend (<a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noopener noreferrer">stable-diffusion.cpp</a>) and is exposed at the OpenAI-compatible <span class="ic">POST /v1/images/generations</span> endpoint.</p>
+          <ol>
+            <li><strong>Build the binary</strong> (installs <span class="ic">sd-server</span> and the <span class="ic">sd</span> CLI into <span class="ic">./bin/</span>). Builds with CUDA when <span class="ic">nvcc</span> is found and falls back to a CPU build otherwise:
+              <div class="code-wrap mt-2"><pre><code>./build-ggml-stable-diffusion.cpp.sh master</code></pre></div>
+            </li>
+            <li><strong>Pull a model</strong> (auto-registered as <span class="ic">modality: image</span>, <span class="ic">backend: sd-server</span>):
+              <div class="code-wrap mt-2"><pre><code>zallama pull sd:1.5         <span class="c"># Stable Diffusion v1.5</span>
+zallama pull sdxl:turbo     <span class="c"># SDXL Turbo — few-step, near real-time</span>
+zallama pull flux:klein     <span class="c"># FLUX Klein (compact 4-bit, fast 4-step generation)</span>
+zallama pull qwen-image:20b <span class="c"># Qwen-Image 20B (MMDiT image generation)</span>
+
+<span class="c"># Already have weights locally? Register them directly:</span>
+zallama add sd15 /path/to/v1-5-pruned-emaonly.safetensors --modality image</code></pre></div>
+            </li>
+            <li><strong>Generate</strong> — from the CLI or over HTTP:
+              <div class="code-wrap mt-2"><pre><code>zallama generate sd:1.5 "a lighthouse at dawn, cinematic" --output dawn.png --size 512x512 --steps 20
+
+curl http://localhost:11435/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model":"sd:1.5","prompt":"a lighthouse at dawn","size":"512x512","response_format":"b64_json"}'</code></pre></div>
+            </li>
+          </ol>
+          <p>Diffusion weights ship as <span class="ic">.safetensors</span> / <span class="ic">.ckpt</span> rather than GGUF, and the downloader accepts those extensions for image repos. Generation knobs (<span class="ic">steps</span>, <span class="ic">cfg_scale</span>, <span class="ic">sampler</span>, <span class="ic">negative_prompt</span>) can be set once per model and reused for every request — the daemon applies those registry values to any request that does not specify them. Auxiliary weights (<span class="ic">vae</span>, <span class="ic">taesd</span>, <span class="ic">control_net</span>, <span class="ic">clip_l</span>, <span class="ic">clip_g</span>, <span class="ic">t5xxl</span>) are passed to <span class="ic">sd-server</span> at launch when registered as artifacts on the model.</p>
+          <div class="code-wrap"><pre><code>zallama set sd:1.5 steps=25 cfg_scale=7.5</code></pre></div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="glass-card static p-5 rounded-3xl">
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">⚡ Speed</h3>
+              <p class="text-xs"><span class="ic">diffusion_fa</span> (flash attention in the diffusion model) is the one switch that is always worth it — <strong>1.73x</strong> on FLUX at 1024×1024, measured. <span class="ic">fa</span> adds nothing on top, and <span class="ic">vae_conv_direct</span> costs <strong>2.7x</strong> the wall time for 0.5 GiB. On ~20 steps and up, <span class="ic">cache_mode</span> (<span class="ic">easycache</span>, <span class="ic">dbcache</span>, <span class="ic">taylorseer</span>, <span class="ic">spectrum</span>) reuses block activations across timesteps.</p>
+            </div>
+            <div class="glass-card static p-5 rounded-3xl">
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">🧮 VRAM: text encoder first</h3>
+              <p class="text-xs">A FLUX stack spends more on <span class="ic">t5xxl_fp16.safetensors</span> (9.8 GB) than on Q4_0 diffusion weights (6.8 GB). Registering a quantized encoder instead takes the resident stack from 17.0 to <strong>11.8 GiB</strong> with no visible quality change — the difference between an image model that evicts your text model on every request and one that sits beside it.</p>
+            </div>
+            <div class="glass-card static p-5 rounded-3xl">
+              <h3 class="font-extrabold text-slate-800 text-sm mb-1">🖼️ Large images</h3>
+              <p class="text-xs">The VAE decode buffer grows with the square of the image size and is allocated <em>after</em> the whole stack is resident, so a generation can sample every step and then die at the final decode. <span class="ic">vae_tiling</span> decodes in patches — 0.5 GiB saved for 20 % of the clock, measured. Turn it on when you need the room.</p>
+            </div>
+          </div>
+          <div class="code-wrap"><pre><code>zallama set flux:klein diffusion_fa=true vae_tiling=false
+zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false</code></pre></div>
+          <p>The other memory switches are <span class="ic">max_vram</span> + <span class="ic">stream_layers</span> (graph-cut segmented execution — prefer these over <span class="ic">offload_to_cpu</span>), <span class="ic">auto_fit</span>, <span class="ic">taesd</span> (tiny autoencoder, far faster decode), <span class="ic">eager_load</span>, <span class="ic">mmap</span>, and <span class="ic">backend</span> for per-component placement (e.g. <span class="ic">backend=te=cpu</span>). Tile geometry is tunable with <span class="ic">vae_tile_size</span>, <span class="ic">vae_tile_overlap</span> and <span class="ic">vae_relative_tile_size</span>. Full measured write-up: <a href="https://github.com/rzafiamy/zallama/blob/main/docs/sd-tuning.md" target="_blank" rel="noopener noreferrer">Tuning Image Generation</a>.</p>
+          <div class="callout">
+            <span class="icon">🚫</span>
+            <div>Image models are not chat models: <span class="ic">zallama run &lt;name&gt;</span> refuses them and points you at <span class="ic">zallama generate</span>.</div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- ARCHITECTURE                                                 -->
+        <!-- ============================================================ -->
+        <section id="architecture" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🧩</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Backends &amp; modalities (architecture)<a class="anchor" href="#architecture">#</a></h2>
+          </div>
+          <p>Zallama separates the <strong>generic process lifecycle</strong> (spawn, health-check, port assignment, LRU eviction, kill) from <strong>engine-specific logic</strong> (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a <span class="ic">Backend</span> abstraction in <a href="https://github.com/rzafiamy/zallama/blob/main/server/backends.py" target="_blank" rel="noopener noreferrer"><span class="ic">server/backends.py</span></a>.</p>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Backend class</th><th>Binary</th><th>Modality</th><th>Endpoint</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">LlamaServerBackend</td><td class="mono">llama-server</td><td>text (+ vision via mmproj)</td><td class="mono">/v1/chat/completions · /v1/completions</td></tr>
+                <tr><td class="mono">EmbeddingServerBackend</td><td class="mono">llama-server --embedding</td><td>embedding</td><td class="mono">/v1/embeddings</td></tr>
+                <tr><td class="mono">RerankServerBackend</td><td class="mono">llama-server --reranking</td><td>rerank</td><td class="mono">/v1/rerank</td></tr>
+                <tr><td class="mono">ParakeetServerBackend</td><td class="mono">parakeet-server</td><td>asr</td><td class="mono">/v1/audio/transcriptions</td></tr>
+                <tr><td class="mono">KokoroServerBackend</td><td class="mono">kokoro-server</td><td>tts</td><td class="mono">/v1/audio/speech</td></tr>
+                <tr><td class="mono">SdServerBackend</td><td class="mono">sd-server</td><td>image</td><td class="mono">/v1/images/generations</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>This is the seam for new modalities. Each one arrived as a new <span class="ic">Backend</span> subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- RAG                                                          -->
+        <!-- ============================================================ -->
+        <section id="rag" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🔎</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">RAG: reranking &amp; the zvec vector store<a class="anchor" href="#rag">#</a></h2>
+          </div>
+          <p>Zallama ships everything needed for retrieval-augmented generation locally: an embedding model (via <span class="ic">/v1/embeddings</span>), a <strong>reranker</strong>, and <strong>zvec</strong> — an in-process vector store. No external vector database server to run.</p>
+          <div class="callout">
+            <span class="icon">📚</span>
+            <div><strong>zvec</strong> is backed by the <a href="https://zvec.org" target="_blank" rel="noopener noreferrer">zvec</a> library (Alibaba, Apache-2.0), an embedded HNSW-indexed vector database. It runs inside the Zallama daemon — each collection is a directory under <span class="ic">rag.zvec_dir</span> (default <span class="ic">~/.zallama/zvec</span>), tracked by a small <span class="ic">collections.json</span> manifest. Installed with the rest of the deps (<span class="ic">pip install -r requirements.txt</span>).</div>
+          </div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">One-command setup</h3>
+          <p><span class="ic">zallama pull</span> has shorthands for an embedding model and a reranker that write the correct registry entries (the <span class="ic">embedding-server</span> and <span class="ic">rerank-server</span> backends) for you:</p>
+          <div class="code-wrap"><pre><code>zallama pull nomic-embed:v1.5      <span class="c"># embedding model → /v1/embeddings</span>
+zallama pull bge-reranker:v2-m3    <span class="c"># reranker        → /v1/rerank</span></code></pre></div>
+          <p>Then point the <span class="ic">rag</span> config block at them (or use the matching env vars):</p>
+          <div class="code-wrap"><span class="code-label">config/config.yaml</span><pre><code>rag:
+  embedding_model: "nomic-embed:v1.5"
+  rerank_model: "bge-reranker:v2-m3"</code></pre></div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Reranking — <span class="ic">POST /v1/rerank</span></h3>
+          <p>Reranking scores how relevant each document is to a query using a cross-encoder model. It runs on <span class="ic">llama-server</span> in <span class="ic">--reranking</span> mode via the <span class="ic">rerank-server</span> backend:</p>
+          <div class="code-wrap"><pre><code>curl http://localhost:11435/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bge-reranker-v2-m3",
+    "query": "How do I unload a model?",
+    "documents": ["zallama unload &lt;name&gt; stops a model", "zallama pull fetches a model"],
+    "top_n": 2,
+    "return_documents": true
+  }'</code></pre></div>
+          <p>Returns a Cohere/Jina-style <span class="ic">{ "results": [{ "index", "relevance_score", "document"? }] }</span>, sorted by score.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">zvec vector store</h3>
+          <p>zvec stores documents and their embeddings (HNSW index, persisted under <span class="ic">rag.zvec_dir</span>). It embeds and searches by calling Zallama's own <span class="ic">/v1/embeddings</span>, so it just needs a default embedding model — set <span class="ic">rag.embedding_model</span> (or <span class="ic">ZALLAMA_EMBEDDING_MODEL</span>). A query can optionally rerank its candidates.</p>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">POST /v1/zvec/collections</td><td>Create a collection (<span class="ic">name</span>, optional <span class="ic">embedding_model</span>, <span class="ic">dim</span>)</td></tr>
+                <tr><td class="mono">GET /v1/zvec/collections</td><td>List collections</td></tr>
+                <tr><td class="mono">DELETE /v1/zvec/collections/{name}</td><td>Delete a collection</td></tr>
+                <tr><td class="mono">POST /v1/zvec/{name}/upsert</td><td>Add/replace documents (auto-embedded)</td></tr>
+                <tr><td class="mono">POST /v1/zvec/{name}/query</td><td>Semantic search (<span class="ic">query</span>, <span class="ic">top_k</span>, <span class="ic">filter</span>, optional <span class="ic">rerank_model</span>)</td></tr>
+                <tr><td class="mono">POST /v1/zvec/{name}/delete</td><td>Delete documents by <span class="ic">ids</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="code-wrap"><pre><code><span class="c"># From the CLI</span>
+zallama zvec create notes                       <span class="c"># uses rag.embedding_model</span>
+zallama zvec upsert notes ./docs.txt            <span class="c"># one document per line (or a JSON array)</span>
+zallama zvec query notes "how to unload a model" --top-k 3 --rerank bge-reranker-v2-m3
+zallama zvec collections
+
+<span class="c"># Or over HTTP</span>
+curl http://localhost:11435/v1/zvec/notes/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "how to unload a model", "top_k": 3, "rerank_model": "bge-reranker-v2-m3"}'</code></pre></div>
+          <p>Configure defaults in the <span class="ic">rag</span> block of <span class="ic">config/config.yaml</span> (<span class="ic">embedding_model</span>, <span class="ic">rerank_model</span>, <span class="ic">zvec_dir</span>, <span class="ic">default_top_k</span>).</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- API                                                          -->
+        <!-- ============================================================ -->
+        <section id="api" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🌐</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">OpenAI-compatible API<a class="anchor" href="#api">#</a></h2>
+          </div>
+          <p>Zallama acts as a standard OpenAI-compatible API gateway. Specify the model you want in the request body, and Zallama handles loading and routing automatically — meaning any OpenAI SDK, LangChain, or existing integration can point here with a one-line base-URL change.</p>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Endpoint</th><th>Port</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">GET /v1/models</td><td class="mono">11435</td><td>Registered models</td></tr>
+                <tr><td class="mono">POST /v1/chat/completions</td><td class="mono">11435</td><td>Chat, streaming, tool calls, reasoning, vision (<span class="ic">image_url</span> parts)</td></tr>
+                <tr><td class="mono">POST /v1/completions</td><td class="mono">11435</td><td>Raw completions</td></tr>
+                <tr><td class="mono">POST /v1/embeddings</td><td class="mono">11435</td><td>Embeddings (<span class="ic">modality: embedding</span>)</td></tr>
+                <tr><td class="mono">POST /v1/rerank</td><td class="mono">11435</td><td>Cross-encoder reranking</td></tr>
+                <tr><td class="mono">POST /v1/audio/transcriptions</td><td class="mono">11435</td><td>Speech-to-text (multipart upload)</td></tr>
+                <tr><td class="mono">POST /v1/audio/speech</td><td class="mono">11435</td><td>Text-to-speech (WAV stream)</td></tr>
+                <tr><td class="mono">POST /v1/images/generations</td><td class="mono">11435</td><td>Image generation (<span class="ic">b64_json</span>)</td></tr>
+                <tr><td class="mono">/v1/zvec/*</td><td class="mono">11435</td><td>Vector store (see <a href="#rag">RAG</a>)</td></tr>
+                <tr><td class="mono">GET /health</td><td class="mono">both</td><td>Daemon health — unauthenticated</td></tr>
+                <tr><td class="mono">/api/*</td><td class="mono">11436</td><td>Management: <span class="ic">ps</span>, <span class="ic">list</span>, <span class="ic">load</span>, <span class="ic">unload</span>, <span class="ic">pull</span>, <span class="ic">requests</span> — what the CLI calls</td></tr>
+                <tr><td class="mono">GET /metrics</td><td class="mono">11436</td><td>Prometheus text format — unauthenticated</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="code-wrap"><pre><code>curl http://localhost:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "qwen3.5-4b-q4_k_m",
@@ -317,45 +1025,219 @@ WantedBy=multi-user.target</code></pre>
       {"role": "user", "content": "Tell me a joke."}
     ],
     "stream": true
-  }'</code></pre>
-          </div>
-          <div>
-            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Transcription — cURL</p>
-            <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-[11px] font-mono overflow-x-auto shadow-inner h-full"><code>curl http://localhost:11435/v1/audio/transcriptions \
-  -F "model=tdt-0.6b-v3-q8_0" \
-  -F "file=@speech.mp3" \
-  -F "response_format=verbose_json" \
-  -F "timestamp_granularities[]=word"</code></pre>
-          </div>
-          <div>
-            <p class="text-xs font-extrabold text-slate-500 uppercase tracking-wide mb-2">Speech — cURL</p>
-            <pre class="bg-slate-900 text-slate-100 rounded-2xl p-4 text-[11px] font-mono overflow-x-auto shadow-inner h-full"><code>curl http://localhost:11435/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "kokoro:82m",
-    "input": "Hello world, this is a local voice generated by Zallama.",
-    "voice": "af_bella"
-  }' \
-  --output speech.mp3</code></pre>
-          </div>
-        </div>
+  }'</code></pre></div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="code-wrap"><span class="code-label">python</span><pre><code>from openai import OpenAI
 
-        <div class="p-4 bg-amber-50/70 border-2 border-amber-100 rounded-3xl text-sm text-slate-700 font-semibold shadow-sm max-w-3xl">
-          ⚠️ <strong>Model IDs are registry keys:</strong> the <code class="text-xs bg-white/60 px-1.5 py-0.5 rounded-md font-mono font-bold">model</code> field must match an entry already pulled into <code class="text-xs bg-white/60 px-1.5 py-0.5 rounded-md font-mono font-bold">registry.yaml</code> via <code class="text-xs bg-white/60 px-1.5 py-0.5 rounded-md font-mono font-bold">zallama pull</code>. Requesting an unregistered model returns an error instead of a silent fallback.
-        </div>
-      </section>
+client = OpenAI(
+    base_url="http://localhost:11435/v1",
+    api_key="not-needed-on-localhost",
+)
 
-    </main>
+stream = client.chat.completions.create(
+    model="qwen3.5-4b-q4_k_m",
+    messages=[{"role": "user", "content": "Tell me a joke."}],
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="")</code></pre></div>
+            <div class="code-wrap"><span class="code-label">node.js</span><pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://localhost:11435/v1",
+  apiKey: "not-needed-on-localhost",
+});
+
+const stream = await client.chat.completions.create({
+  model: "qwen3.5-4b-q4_k_m",
+  messages: [{ role: "user", content: "Tell me a joke." }],
+  stream: true,
+});
+for await (const chunk of stream)
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");</code></pre></div>
+          </div>
+          <p>With an API key set, add <span class="ic">Authorization: Bearer &lt;key&gt;</span> to every request (see <a href="#security">Security</a>). Interactive examples for every endpoint live on the <a href="./index.html#api">home page playground</a>.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- DEPLOYMENT                                                   -->
+        <!-- ============================================================ -->
+        <section id="deploy" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🚀</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Deployment (systemd)<a class="anchor" href="#deploy">#</a></h2>
+          </div>
+          <p>For an always-on daemon, install Zallama as a systemd service. Running the installer <strong>as root</strong> writes the unit automatically; otherwise install it manually:</p>
+          <div class="code-wrap"><pre><code>sudo tee /etc/systemd/system/zallama.service &gt;/dev/null &lt;&lt;EOF
+[Unit]
+Description=Zallama — Local LLM Server
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$PWD
+ExecStart=$PWD/zallama serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now zallama
+systemctl status zallama</code></pre></div>
+          <div class="callout">
+            <span class="icon">ℹ️</span>
+            <div><span class="ic">install.sh</span> only installs the unit when run as root (<span class="ic">sudo bash install.sh</span>), and it does <strong>not</strong> enable/start it for you — run <span class="ic">sudo systemctl enable --now zallama</span> afterwards. Tail logs with <span class="ic">journalctl -u zallama -f</span>.</div>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- SECURITY                                                     -->
+        <!-- ============================================================ -->
+        <section id="security" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🔐</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Security<a class="anchor" href="#security">#</a></h2>
+          </div>
+          <p>Owning your AI means owning the responsibility for it running safely. Zallama defaults to <strong>localhost-only</strong> (<span class="ic">host: 127.0.0.1</span>) with no authentication, which is safe for single-user local use — and gets more deliberate the further you push it outward.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">API key</h3>
+          <p>Set <span class="ic">host: "0.0.0.0"</span> <strong>only together with</strong> an API key. The easiest and safest way is the CLI:</p>
+          <div class="code-wrap"><pre><code>zallama apikey                     <span class="c"># generate a key valid 30 days (default)</span>
+zallama apikey --expires 90d       <span class="c"># or 12h / 45m / 2026-09-01 / never</span>
+zallama apikey hash &lt;your-key&gt;     <span class="c"># keep a key you chose yourself</span>
+zallama apikey clear               <span class="c"># disable auth</span></code></pre></div>
+          <p><span class="ic">zallama apikey</span> generates a 256-bit random key, writes <strong>only its SHA-256 hash</strong> (plus the expiry instant) into <span class="ic">config.yaml</span>, chmods the file to 600, and prints the key <strong>once</strong> — it cannot be recovered afterwards, so store it in your password manager. Restart the daemon to apply. Expired keys are rejected with a 401 until you issue a new one.</p>
+          <p>With a key set, everything except <span class="ic">/</span> and <span class="ic">/health</span> — including the API docs — requires an <span class="ic">Authorization: Bearer &lt;key&gt;</span> header, verified hash-to-hash with a constant-time comparison:</p>
+          <div class="code-wrap"><pre><code>curl http://localhost:11435/v1/models -H "Authorization: Bearer $YOUR_KEY"</code></pre></div>
+          <p>A plaintext <span class="ic">api_key</span> config value is still honored for backward compatibility, but <span class="ic">api_key_sha256</span> is preferred and wins if both are set. CORS allows all origins but does <strong>not</strong> send credentials.</p>
+          <div class="callout danger">
+            <span class="icon">⚠️</span>
+            <div>The management API (<span class="ic">/api</span>) can register models pointing at arbitrary file paths and spawn backend processes. <strong>Treat the API key like a shell credential.</strong></div>
+          </div>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Remote access: prefer a VPN</h3>
+          <p>For personal remote access, the most secure option is to <strong>not expose Zallama publicly at all</strong>: keep <span class="ic">host: 127.0.0.1</span> and bind to a WireGuard/Tailscale interface, reaching it over the VPN. Zero public attack surface, no TLS or auth to configure.</p>
+
+          <h3 class="text-lg font-extrabold text-slate-800">Public exposure: reverse proxy</h3>
+          <p>If it must face the internet, keep Zallama on <span class="ic">127.0.0.1</span>, set an API key anyway (defense in depth), and put a TLS-terminating proxy in front. Example with Caddy (automatic Let's Encrypt certificates), exposing <strong>only</strong> the OpenAI-compatible inference surface:</p>
+          <div class="code-wrap"><span class="code-label">Caddyfile</span><pre><code>llm.example.com {
+    <span class="c"># Only /v1 passes through; the management API and /metrics live on the</span>
+    <span class="c"># separate admin port (11436) and never reach the proxy at all</span>
+    @api path /v1/*
+    reverse_proxy @api 127.0.0.1:11435
+    respond 403
+
+    request_body {
+        max_size 25MB   <span class="c"># enough for audio uploads; tune down if text-only</span>
+    }
+}</code></pre></div>
+          <p>Additional layers worth adding:</p>
+          <ul>
+            <li><strong>Firewall:</strong> allow only 80/443 inbound (<span class="ic">ufw allow 80,443/tcp</span> then <span class="ic">ufw enable</span>).</li>
+            <li><strong>Ban abusive clients:</strong> fail2ban or CrowdSec keyed on repeated 401/403 responses.</li>
+            <li><strong>mTLS:</strong> if your clients support client certificates, require them at the proxy — anonymous scanners can't even complete a TLS handshake.</li>
+            <li><strong>systemd sandboxing:</strong> run as an unprivileged user with the hardening options below.</li>
+          </ul>
+          <div class="code-wrap"><span class="code-label">zallama.service</span><pre><code>[Service]
+User=zallama
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/zallama/.zallama
+PrivateTmp=yes</code></pre></div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- TROUBLESHOOTING                                              -->
+        <!-- ============================================================ -->
+        <section id="troubleshooting" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🔧</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Troubleshooting<a class="anchor" href="#troubleshooting">#</a></h2>
+          </div>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Symptom</th><th>Likely cause / fix</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">Cannot connect to Zallama at ...</td><td>Daemon isn't running — start it with <span class="ic">zallama serve</span> (or <span class="ic">systemctl start zallama</span>).</td></tr>
+                <tr><td class="mono">llama-server binary not found</td><td>Build/place it at <span class="ic">./bin/llama-server</span>, or set <span class="ic">llama_server.binary</span> in <span class="ic">config/config.yaml</span>.</td></tr>
+                <tr><td class="mono">parakeet-server binary not found</td><td>Build it: <span class="ic">./build-ggml-parakeet.cpp.sh master</span> (installs into <span class="ic">./bin/</span>).</td></tr>
+                <tr><td class="mono">libggml*.so: cannot open shared object file</td><td>The parakeet binary can't find its shared libs. Re-run <span class="ic">./build-ggml-parakeet.cpp.sh master</span> (it copies the <span class="ic">.so</span> files and sets <span class="ic">RPATH=$ORIGIN</span>), or <span class="ic">apt install patchelf</span> and <span class="ic">patchelf --set-rpath '$ORIGIN' bin/parakeet-server bin/libggml*.so.*.*</span>.</td></tr>
+                <tr><td class="mono">ASR: "accepts WAV uploads only"</td><td>Non-WAV upload and <span class="ic">ffmpeg</span> is missing — <span class="ic">apt install ffmpeg</span> (Zallama auto-transcodes once present).</td></tr>
+                <tr><td class="mono">ASR transcribes gibberish for non-English</td><td>The model is English-only (<span class="ic">ctc-0.6b</span> / <span class="ic">tdt-0.6b-v2</span>). Use multilingual <span class="ic">tdt-0.6b-v3</span> instead.</td></tr>
+                <tr><td class="mono">Model fails to start / startup timeout</td><td>Check <span class="ic">zallama logs &lt;model&gt;</span>. Often a bad GGUF path, too-high <span class="ic">n_gpu_layers</span>, or <span class="ic">ctx_size</span> exceeding VRAM — run <span class="ic">zallama calibrate &lt;model&gt;</span>.</td></tr>
+                <tr><td class="mono">Models keep getting unloaded</td><td>Increase <span class="ic">idle_timeout</span>, <span class="ic">max_loaded_models</span>, or <span class="ic">mem_budget_gb</span>; pin small services with <span class="ic">pinned: true</span>.</td></tr>
+                <tr><td class="mono">400 "modality ... cannot serve"</td><td>You called an endpoint the model's <span class="ic">modality</span> doesn't support (e.g. a vision-only flow on the wrong route).</td></tr>
+                <tr><td class="mono">401 Invalid or missing API key</td><td><span class="ic">api_key</span> is set — pass <span class="ic">Authorization: Bearer &lt;key&gt;</span>. Expired? Issue a new one with <span class="ic">zallama apikey</span>.</td></tr>
+                <tr><td class="mono">Browser app gets a CORS error (works from curl)</td><td>If <strong>nginx/Caddy adds its own <span class="ic">Access-Control-*</span> headers</strong>, remove them — Zallama already sends <span class="ic">Access-Control-Allow-Origin: *</span>, and duplicate headers make Firefox/Safari reject the response. Don't add CORS handling at the proxy; just <span class="ic">proxy_pass</span>.</td></tr>
+                <tr><td class="mono">systemd service missing after install</td><td><span class="ic">install.sh</span> only installs it as root — run <span class="ic">sudo bash install.sh</span> then <span class="ic">sudo systemctl enable --now zallama</span>.</td></tr>
+                <tr><td class="mono">error: externally-managed-environment</td><td>PEP 668 — don't <span class="ic">pip install</span> system-wide. Re-run <span class="ic">sudo bash install.sh</span> (it uses <span class="ic">.venv</span>). If venv creation fails: <span class="ic">sudo apt install python3-venv python3-full</span>.</td></tr>
+                <tr><td class="mono">No module named 'fastapi' on serve</td><td>The <span class="ic">.venv</span> is missing or incomplete — re-run <span class="ic">sudo bash install.sh</span>.</td></tr>
+                <tr><td class="mono">/api/* calls fail after upgrading to 1.16</td><td>Management endpoints and <span class="ic">/metrics</span> moved to the <strong>admin port</strong> (<span class="ic">11436</span> by default). Scripts and dashboards that called them on <span class="ic">11435</span> need the new port; the CLI finds it automatically.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- CONTRIBUTING                                                 -->
+        <!-- ============================================================ -->
+        <section id="contributing" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🤝</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Contributing &amp; license<a class="anchor" href="#contributing">#</a></h2>
+          </div>
+          <p>Contributions are welcome! A good shape for a PR:</p>
+          <ol>
+            <li>Fork and branch from <span class="ic">main</span>.</li>
+            <li>Keep changes focused; match the surrounding code style.</li>
+            <li>For a new <strong>backend/modality</strong>, add a <span class="ic">Backend</span> subclass in <span class="ic">server/backends.py</span> and the matching endpoint proxy — the process manager and registry schema should not need changes.</li>
+            <li>Update <a href="https://github.com/rzafiamy/zallama/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer"><span class="ic">CHANGELOG.md</span></a> under <span class="ic">[Unreleased]</span>.</li>
+            <li>Open a PR describing the change and how you tested it.</li>
+          </ol>
+          <p>Zallama is released under the <a href="https://github.com/rzafiamy/zallama/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a>. © 2026 Rija Z.</p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- FURTHER READING                                              -->
+        <!-- ============================================================ -->
+        <section id="guides" class="doc-section reveal space-y-6">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">📖</span>
+            <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800">Further reading<a class="anchor" href="#guides">#</a></h2>
+          </div>
+          <p>Measured write-ups from the repository:</p>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <a href="https://github.com/rzafiamy/zallama/blob/main/CONFIG.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">⚙️ Registry Parameter Reference</div><div class="text-xs text-slate-500 font-medium mt-1">Every <span class="ic">params</span> key per modality/backend.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/PREBUILT.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">📦 Prebuilt packages</div><div class="text-xs text-slate-500 font-medium mt-1">Package naming rules and the <span class="ic">prebuilt-cli.sh</span> helper.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/vram-planning.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">🧮 Fitting Your Models on One GPU</div><div class="text-xs text-slate-500 font-medium mt-1">KV quantization, ctx_size, MoE offload, mmproj — measured.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/mtp-speculative-decoding.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">⚡ Doubling Decode Speed with MTP</div><div class="text-xs text-slate-500 font-medium mt-1">Baked-in draft heads and <span class="ic">spec_type</span>.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/sd-tuning.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">🎨 Tuning Image Generation</div><div class="text-xs text-slate-500 font-medium mt-1">What each sd-server switch buys and costs.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/monitoring.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">📈 Monitoring with Prometheus</div><div class="text-xs text-slate-500 font-medium mt-1">Metric names and useful queries.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/qwen3-0.6b-agentic.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">🤏 What Qwen3-0.6B Can Actually Do</div><div class="text-xs text-slate-500 font-medium mt-1">A tiny model in an agentic client.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/minicpm5-agentic.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">🤖 MiniCPM5-2B as an Agentic Model</div><div class="text-xs text-slate-500 font-medium mt-1">Tool calling and reasoning with a 2B model.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/two-model-agent-study.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">👯 A Small Model Beside a Big One</div><div class="text-xs text-slate-500 font-medium mt-1">Two models on one card — the memory arithmetic.</div></a>
+            <a href="https://github.com/rzafiamy/zallama/blob/main/docs/tuning-log.md" target="_blank" rel="noopener noreferrer" class="btn glass-card p-4 rounded-2xl block"><div class="font-extrabold text-slate-800 text-sm">📓 Model Tuning Log</div><div class="text-xs text-slate-500 font-medium mt-1">Settings tried, tok/s and VRAM measured, across models.</div></a>
+          </div>
+        </section>
+
+      </main>
+    </div>
 
     <!-- FOOTER -->
     <footer class="border-t border-sky-100 bg-white/80 mt-24">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex flex-col sm:flex-row items-center justify-between gap-6 text-sm text-slate-400 font-bold">
         <div class="flex items-center gap-3">
           <span class="text-2xl opacity-80">🦙</span>
-          <span>© 2026 Zallama. Released under the MIT License.</span>
+          <span>© 2026 Rija Z. Zallama is released under the <a href="https://github.com/rzafiamy/zallama/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" class="hover:text-sky-500 underline decoration-sky-300">MIT License</a>.</span>
         </div>
         <div class="flex gap-6">
           <a href="./index.html" class="hover:text-sky-500 transition-colors">Home</a>
+          <a href="https://github.com/rzafiamy/zallama/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="hover:text-sky-500 transition-colors">Changelog</a>
           <a href="https://github.com/rzafiamy/zallama" target="_blank" rel="noopener noreferrer" class="hover:text-sky-500 transition-colors">GitHub</a>
         </div>
       </div>
