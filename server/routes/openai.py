@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 import unicodedata
 import uuid
@@ -157,6 +158,13 @@ async def _to_wav(data: bytes) -> bytes:
     WAV input still goes through ffmpeg so it gets the silence clamp too (see
     _SILENCE_CAP_SEC); it is only passed through untouched when ffmpeg is
     missing, which keeps WAV-only deployments working as before.
+
+    Output goes to a seekable temp file rather than stdout (`pipe:1`): ffmpeg
+    can only backpatch the RIFF/`data` chunk sizes if it can seek back after
+    writing, so a piped WAV carries `0xFFFFFFFF` placeholder sizes (plus a
+    LIST/INFO chunk) instead of real ones. parakeet-server's WAV reader
+    tolerates that; audio.cpp's does not (`failed to read WAV data chunk`) —
+    write a real file so every downstream ASR backend gets a canonical WAV.
     """
     have_ffmpeg = shutil.which("ffmpeg") is not None
     if not have_ffmpeg:
@@ -167,23 +175,38 @@ async def _to_wav(data: bytes) -> bytes:
             detail="Audio is not WAV and ffmpeg is not installed to convert it. "
                    "Upload a WAV file or install ffmpeg.",
         )
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-        "-i", "pipe:0",
-        *_silence_filter(),
-        "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    out, err = await proc.communicate(input=data)
-    if proc.returncode != 0 or not out:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not decode/convert audio to WAV: "
-                   f"{err.decode('utf-8', 'ignore').strip()[:300]}",
+    fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0",
+            *_silence_filter(),
+            "-ar", "16000", "-ac", "1", "-f", "wav", "-y", tmp_path,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-    return out
+        _, err = await proc.communicate(input=data)
+        if proc.returncode != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not decode/convert audio to WAV: "
+                       f"{err.decode('utf-8', 'ignore').strip()[:300]}",
+            )
+        with open(tmp_path, "rb") as f:
+            out = f.read()
+        if not out:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not decode/convert audio to WAV: ffmpeg produced no output",
+            )
+        return out
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def _model_info(entry: dict, running: set[str], pm) -> dict:

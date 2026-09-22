@@ -308,6 +308,25 @@ class LlamaServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# llama-server backend built from a third-party fork (experimental quant
+# kernels, new backends, …), kept fully separate from the mainline binary
+# ---------------------------------------------------------------------------
+class LlamaForkServerBackend(LlamaServerBackend):
+    """A llama-server binary built from a third-party llama.cpp fork.
+
+    Identical launch args to LlamaServerBackend, but resolves a differently
+    named binary (llama-fork-server) so a fork's custom kernels — e.g. a
+    vendor's proprietary GGUF tensor types not yet upstreamed — never touch
+    the production llama-server every other model depends on. Build with
+    build-llamacpp-fork.sh (installs into ~/.zallama/bin/llama-fork-server);
+    opt a model in with `zallama set <model> backend=llama-fork-server`.
+    """
+    name = "llama-fork-server"
+    binary_name = "llama-fork-server"
+    modalities = {TEXT}
+
+
+# ---------------------------------------------------------------------------
 # llama-server backend in reranking mode (cross-encoder relevance scoring)
 # ---------------------------------------------------------------------------
 class RerankServerBackend(LlamaServerBackend):
@@ -438,6 +457,82 @@ class ParakeetServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# audiocpp-server backend (ASR — Voxtral Mini 4B Realtime, via audio.cpp)
+# ---------------------------------------------------------------------------
+class AudioCppServerBackend:
+    """mirek190/audio.cpp's server — OpenAI-compatible speech-to-text.
+
+    Exposes POST /v1/audio/transcriptions (multipart, same contract as
+    parakeet-server) plus a true-streaming POST /v1/audio/transcriptions/live
+    (not proxied by zallama today) and GET /health. Build it with
+    build-ggml-audio.cpp.sh, which installs `audiocpp-server` into ./bin/.
+
+    Unlike parakeet-server, audiocpp_server is config-file driven: it takes a
+    JSON file listing the models it serves rather than a bare --model flag.
+    --host/--port/--backend/--device/--threads/--busy-timeout-ms are still real
+    CLI overrides (see app/server/main.cpp upstream), so we write a small
+    single-model config once per model and drive host/port/etc. from the CLI
+    exactly like every other backend here.
+    """
+    name = "audiocpp-server"
+    binary_name = "audiocpp-server"
+    modalities = {ASR}
+
+    # Params that take a value: registry/config key -> CLI flag.
+    _PARAM_MAP = {
+        "threads": "--threads",
+        "device": "--device",
+        "busy_timeout_ms": "--busy-timeout-ms",
+    }
+
+    def _write_config(self, name: str, model_path: Path) -> Path:
+        """Write (or refresh) the single-model JSON config audiocpp_server needs.
+
+        Stored as a sibling of the model directory rather than inside it, so
+        it never gets mistaken for one of the model's own files.
+        """
+        config_path = model_path.parent / f".audiocpp-{name}.json"
+        config = {
+            "models": [
+                {
+                    "id": name,
+                    "family": "voxtral_realtime",
+                    "path": str(model_path),
+                    "task": "asr",
+                    "mode": "streaming",
+                }
+            ]
+        }
+        config_path.write_text(json.dumps(config, indent=2))
+        return config_path
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        config_path = self._write_config(entry["name"], model_path)
+        args = [
+            binary,
+            "--config", str(config_path),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+            "--backend", "cuda",
+        ]
+        for key, flag in self._PARAM_MAP.items():
+            if key in merged_params:
+                args += [flag, str(merged_params[key])]
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # kokoro-server backend (TTS / text-to-speech)
 # ---------------------------------------------------------------------------
 class KokoroServerBackend:
@@ -479,6 +574,47 @@ class KokoroServerBackend:
         return [
             binary,
             "--model", str(resource_dir),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
+# voxtral-tts-server backend (TTS — Voxtral-4B-TTS-2603)
+# ---------------------------------------------------------------------------
+class VoxtralTtsServerBackend:
+    """Our own thin server on top of mudler/voxtral-tts.c.
+
+    Exposes POST /v1/audio/speech (JSON in, WAV out) and GET /health — same
+    contract as kokoro-server, same pure-CLI launch shape. Build it with
+    build-voxtral-tts.sh, which applies patches/voxtral-tts-server.cpp onto a
+    clean clone of mudler/voxtral-tts.c and installs `voxtral-tts-server` into
+    ./bin/.
+
+    (mudler/voxtral-tts.c's own CLI takes -d <dir> for the model directory;
+    our server wraps the same tts_load()/tts_generate() API behind
+    --model/--host/--port instead, and exits loudly if the model fails to
+    load rather than falling back to silence.)
+    """
+    name = "voxtral-tts-server"
+    binary_name = "voxtral-tts-server"
+    modalities = {TTS}
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        return [
+            binary,
+            "--model", str(model_path),
             "--host", "127.0.0.1",
             "--port", str(port),
         ]
@@ -723,10 +859,13 @@ class SdServerBackend:
 # ---------------------------------------------------------------------------
 _BACKENDS: dict[str, Backend] = {
     LlamaServerBackend.name: LlamaServerBackend(),
+    LlamaForkServerBackend.name: LlamaForkServerBackend(),
     EmbeddingServerBackend.name: EmbeddingServerBackend(),
     RerankServerBackend.name: RerankServerBackend(),
     ParakeetServerBackend.name: ParakeetServerBackend(),
+    AudioCppServerBackend.name: AudioCppServerBackend(),
     KokoroServerBackend.name: KokoroServerBackend(),
+    VoxtralTtsServerBackend.name: VoxtralTtsServerBackend(),
     SdServerBackend.name: SdServerBackend(),
 }
 

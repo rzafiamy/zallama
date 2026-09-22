@@ -755,6 +755,33 @@ curl http://localhost:11435/v1/audio/transcriptions \
 >
 > **`ffmpeg`** is only needed for non-WAV uploads. Without it, WAV uploads still work and other formats return a clear `415`.
 
+### Streaming ASR — Voxtral Mini 4B Realtime
+
+Mistral's streaming ASR model isn't in mainline llama.cpp yet, but
+[mirek190/audio.cpp](https://github.com/mirek190/audio.cpp) ships a native,
+GGUF-backed server for it. Runs on the **`audiocpp-server`** backend —
+explicit `backend: audiocpp-server` in the registry entry, since
+`parakeet-server` stays the default for `modality: asr`.
+
+**1. Build the binary** (installs `audiocpp-server` into `./bin/`):
+```bash
+./build-ggml-audio.cpp.sh
+```
+
+**2. Download the model** — just the `.gguf` (config/tokenizer metadata is
+embedded in it), from HF
+[`audio-cpp/audio.cpp-gguf`](https://huggingface.co/audio-cpp/audio.cpp-gguf)
+(prefix `Voxtral-Mini-4B-Realtime-2602-GGUF/`, `q8_0` recommended, ~5.1 GB) —
+into its own directory, then register it:
+```bash
+zallama set voxtral-realtime backend=audiocpp-server modality=asr \
+  file=/bank2/zallama/models/Voxtral-Mini-4B-Realtime-2602-GGUF
+```
+
+Same `POST /v1/audio/transcriptions` contract as parakeet-server. audio.cpp
+also exposes a true-streaming `POST /v1/audio/transcriptions/live` upstream
+that zallama doesn't proxy today.
+
 ---
 
 ## 🗣️ Text-to-Speech (TTS)
@@ -803,6 +830,47 @@ curl http://localhost:11435/v1/audio/speech \
 ```
 
 > Install **espeak-ng** (see [Installation](#2-build-the-inference-engines)) — without it kokoro falls back to a bundled phonemizer that is ~2.5x slower.
+
+### Voxtral-4B-TTS
+
+Mistral's TTS model has no mature native server yet, so this ships a thin
+server of our own (`patches/voxtral-tts-server.cpp`, ~150 lines) on top of
+[mudler/voxtral-tts.c](https://github.com/mudler/voxtral-tts.c)'s real
+pure-C/CUDA inference engine — same `--model`/`--host`/`--port` CLI and
+`POST /v1/audio/speech` contract as kokoro-server. Runs on the
+**`voxtral-tts-server`** backend — explicit `backend: voxtral-tts-server` in
+the registry entry, since `kokoro-server` stays the default for `modality: tts`.
+
+**1. Build the binary** (installs `voxtral-tts-server` into `./bin/`):
+```bash
+./build-voxtral-tts.sh
+```
+
+**2. Download the model** — `consolidated.safetensors` (~8 GB) + `tekken.json`
++ the `voice_embedding/` directory (one `.pt` per built-in voice — required
+for named voices like `fr_female` to resolve) from HF
+[`mistralai/Voxtral-4B-TTS-2603`](https://huggingface.co/mistralai/Voxtral-4B-TTS-2603)
+— into a directory, then register it:
+```bash
+zallama set voxtral-4b-tts backend=voxtral-tts-server modality=tts \
+  file=/bank2/zallama/models/Voxtral-4B-TTS-2603
+```
+
+**3. Synthesize:**
+```bash
+curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"voxtral-4b-tts","input":"Bonjour, comment allez-vous ?","voice":"fr_female"}' \
+  -o speech.wav
+```
+
+`speed` isn't supported by the engine and is silently ignored if sent.
+
+> **License:** the model weights are Mistral's, under
+> [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) —
+> **non-commercial use only**. Unlike some third-party wrappers of the same
+> engine, this server has no silent fallback: a model that fails to load
+> aborts startup instead of serving silent audio.
 
 ---
 

@@ -257,6 +257,36 @@ upload.
 
 ---
 
+## `asr` (backend: `audiocpp-server`) — Voxtral Mini 4B Realtime
+
+Source: `AudioCppServerBackend`, wrapping [mirek190/audio.cpp](https://github.com/mirek190/audio.cpp)'s
+server. Build with `./build-ggml-audio.cpp.sh`. Set `backend: audiocpp-server`
+explicitly on the registry entry — `parakeet-server` stays the default for
+`modality: asr`.
+
+`/v1/audio/transcriptions` (same multipart contract as parakeet-server, so
+zallama's existing route proxies it unchanged). audio.cpp also exposes a true
+streaming `POST /v1/audio/transcriptions/live` endpoint upstream, which
+zallama does not proxy today.
+
+audio.cpp's server is config-file driven rather than pure-CLI: the backend
+writes a small single-model JSON config as a sibling of the model directory
+(`<model_dir_parent>/.audiocpp-<name>.json`) on every spawn, then drives
+host/port/backend/etc. from real CLI overrides.
+
+| key | CLI flag |
+|---|---|
+| `threads` | `--threads` |
+| `device` | `--device` |
+| `busy_timeout_ms` | `--busy-timeout-ms` |
+
+`file` must point at a **directory** containing the `.gguf` (config/tokenizer
+metadata is embedded in the GGUF itself — the HF repo
+`audio-cpp/audio.cpp-gguf`'s `Voxtral-Mini-4B-Realtime-2602-GGUF/` prefix
+ships no separate sidecar files).
+
+---
+
 ## `tts` (backend: `kokoro-server`)
 
 Source: `KokoroServerBackend`. `/v1/audio/speech`, JSON in / WAV out.
@@ -273,6 +303,34 @@ fields; the registry's `params.voice`/`params.speed` are applied by the
 
 `file` for a kokoro entry must point at the model's **resource directory**
 (two ONNX models + a voice pack), not a single weights file.
+
+---
+
+## `tts` (backend: `voxtral-tts-server`) — Voxtral-4B-TTS-2603
+
+Source: `VoxtralTtsServerBackend`, a thin server of ours
+(`patches/voxtral-tts-server.cpp`) on top of
+[mudler/voxtral-tts.c](https://github.com/mudler/voxtral-tts.c)'s real C/CUDA
+inference engine. Build with `./build-voxtral-tts.sh`. Set
+`backend: voxtral-tts-server` explicitly — `kokoro-server` stays the default
+for `modality: tts`.
+
+Same CLI shape and endpoint contract as `kokoro-server`: `--model`/`--host`/
+`--port`, `POST /v1/audio/speech` (JSON in: `input`, optional `voice` —
+`speed` isn't supported by the engine and is ignored if sent), `GET /health`.
+No launch-time params beyond the path.
+
+`file` must point at the model directory containing `consolidated.safetensors`
++ `tekken.json`.
+
+> **License:** Voxtral-4B-TTS-2603 weights are Mistral AI's, under
+> [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) —
+> **non-commercial use only**. The server code here (and the upstream engine
+> it wraps) is MIT.
+>
+> Unlike some third-party wrappers of the same engine, this server has **no
+> silent fallback**: if the model fails to load, the process exits non-zero
+> instead of serving silent audio.
 
 ---
 
