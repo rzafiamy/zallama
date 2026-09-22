@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`build-llamacpp-fork.sh` is now in the repo.** The `llama-fork-server` backend added in
+  1.17.0 pointed at this script, but it had not been committed. It also now links
+  statically (`BUILD_SHARED_LIBS=OFF`): the shared build left `llama-fork-server` with a
+  RUNPATH into `~/.cache/llamacpp-forks/<fork>/build/bin`, so clearing that cache silently
+  broke the backend. Rebuild an existing fork with the same command to pick this up.
+  Documented in the README's build section.
+
 ## [1.17.0] - 2026-09-22
 
 ### Added

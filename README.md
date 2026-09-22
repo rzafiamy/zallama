@@ -113,9 +113,14 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 # stable-diffusion.cpp (Image generation) — requires a release tag/branch name
 ./build-ggml-stable-diffusion.cpp.sh master
+
+# Optional: a third-party llama.cpp fork, as a separate llama-fork-server binary
+./build-llamacpp-fork.sh https://github.com/PrismML-Eng/llama.cpp prism
 ```
 
 > All scripts default to a **CUDA** build. The parakeet and stable-diffusion scripts also copy shared libraries next to the binaries and set their `RPATH` to `$ORIGIN` (via `patchelf`) so they resolve at runtime.
+>
+> **llama.cpp forks.** Some models need a fork's kernels before they are upstreamed (e.g. PrismML's ternary `PQ2_0` quants). `build-llamacpp-fork.sh <git-url> [branch] [install-dir]` builds any fork as `llama-fork-server` / `llama-fork-cli` in `~/.zallama/bin/`, statically linked so it shares nothing with the mainline `llama-server` (sources are cached in `~/.cache/llamacpp-forks`; rerun to update). Only models that opt in use it: `zallama set <model> backend=llama-fork-server`. Env overrides: `BUILD_ROOT`, `JOBS`, `CUDA=ON|OFF`.
 >
 > `kokoro.cpp` requires **CMake 3.29+**. Ubuntu 24.04's apt package is 3.28 — install a newer CMake and run the script with `CMAKE_BIN=/path/to/cmake`.
 >
