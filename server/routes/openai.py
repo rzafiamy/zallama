@@ -11,6 +11,7 @@ Implements:
   POST /v1/audio/transcriptions   (ASR — multipart upload, parakeet-server)
   POST /v1/audio/speech           (TTS — JSON audio output, kokoro-server)
   POST /v1/images/generations     (Image generation — JSON output, sd-server)
+  POST /v1/images/edits           (Image editing — multipart upload, sd-server)
 """
 from __future__ import annotations
 
@@ -701,4 +702,60 @@ async def images_generations(
         content=content,
         status_code=resp.status_code,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/images/edits  (Image editing via sd-server)
+# ---------------------------------------------------------------------------
+@router.post("/images/edits")
+async def images_edits(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Proxy an OpenAI-style image edit to a diffusion backend (sd-server).
+
+    Multipart in, JSON out, same contract as OpenAI: `model`, `prompt`, one or
+    more `image[]` (or legacy `image`) uploads, optional `mask`, `n`, `size`.
+    sd-server's own /v1/images/edits already speaks this dialect — the first
+    image becomes the init image and every image is also passed as a reference,
+    which is what edit models (Qwen-Image, Flux Kontext) condition on — so the
+    form is re-encoded and forwarded as-is. Sampling knobs are not OpenAI edit
+    fields; they come from the model's launch params, or per request via a
+    `<sd_cpp_extra_args>{...}</sd_cpp_extra_args>` block inside `prompt`.
+    """
+    # Same single-parse / rebuild-the-multipart approach as audio_transcriptions.
+    form = await request.form()
+    model_name = (form.get("model") or "").strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="'model' field is required")
+
+    inst = await _resolve_instance(
+        model_name, pm, registry, endpoint="images/edits"
+    )
+    inst.touch()
+
+    files = []
+    data = {}
+    for key, value in form.multi_items():
+        if hasattr(value, "read") and hasattr(value, "filename"):
+            content = await value.read()
+            files.append((key, (value.filename or key, content,
+                                value.content_type or "application/octet-stream")))
+        elif key != "model":
+            data[key] = value
+
+    upstream_url = f"{inst.base_url}/v1/images/edits"
+    async with pm.serving(inst, "images/edits"):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(upstream_url, data=data, files=files)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"sd-server error: {e}")
+    try:
+        content = resp.json()
+    except ValueError:
+        content = {"error": {"message": resp.text or "sd-server returned a non-JSON response",
+                             "type": "upstream_error"}}
+    return JSONResponse(content=content, status_code=resp.status_code)
 

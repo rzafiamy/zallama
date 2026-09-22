@@ -99,6 +99,7 @@ ENDPOINT_MODALITY = {
     "audio/transcriptions": ASR,
     "audio/speech": TTS,
     "images/generations": IMAGE,
+    "images/edits": IMAGE,
     "rerank": RERANK,
 }
 
@@ -629,7 +630,8 @@ class VoxtralTtsServerBackend:
 class SdServerBackend:
     """stable-diffusion.cpp server — OpenAI-compatible image generation.
 
-    Exposes POST /v1/images/generations (JSON in, JSON with b64_json/url out) and GET
+    Exposes POST /v1/images/generations (JSON in, JSON with b64_json/url out),
+    POST /v1/images/edits (multipart, OpenAI shape) and GET
     /health. Build it with build-ggml-stable-diffusion.cpp.sh, which installs
     `sd-server` into ./bin/.
     """

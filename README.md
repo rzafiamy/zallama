@@ -74,7 +74,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🔌 **A real OpenAI `/v1` surface** | Chat, Completions, Embeddings — streaming included — so existing SDKs and tools just work. |
 | 👁️ **Vision** | Attach an `mmproj` projector and send images straight through `/v1/chat/completions`. |
 | 🎙️ **Speech-to-text** | `/v1/audio/transcriptions`, any input format auto-transcoded via `ffmpeg`, multilingual models supported. |
-| 🎨 **Image Generation** | `/v1/images/generations` powered by `sd-server` (stable-diffusion.cpp), plus `zallama generate` CLI. |
+| 🎨 **Image Generation** | `/v1/images/generations` and `/v1/images/edits` powered by `sd-server` (stable-diffusion.cpp), plus `zallama generate` CLI. |
 | 🔎 **RAG, built in** | A reranker at `/v1/rerank` plus **zvec**, an embedded HNSW vector store — no external vector DB to run. |
 | 🧩 **Pluggable backends** | Each model declares a `modality` + `backend`; new engines slot in without touching the core. |
 | ⚙️ **Config, not code** | Context size, GPU offload, batching — all YAML, all per-model, all hot-reloadable. |
@@ -924,6 +924,32 @@ zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
 ```
 The other memory switches are `max_vram` + `stream_layers` (graph-cut segmented execution — prefer these over `offload_to_cpu`), `auto_fit`, `taesd` (tiny autoencoder, far faster decode), `eager_load`, `mmap`, and `backend` for per-component placement (e.g. `backend=te=cpu`). Tile geometry is tunable with `vae_tile_size`, `vae_tile_overlap` and `vae_relative_tile_size`. Full measured write-up: [Tuning Image Generation](docs/sd-tuning.md).
 
+### Image editing — `POST /v1/images/edits`
+
+The OpenAI edits contract: `multipart/form-data` with `model`, `prompt`, one or more `image[]` uploads (legacy single `image` also accepted), and optional `mask`, `n`, `size`. The form is forwarded to `sd-server`'s own `/v1/images/edits`, which makes the first image the init image and passes every image as a reference — what edit-capable models (Qwen-Image 2.1, Flux Kontext) condition on.
+```bash
+curl http://localhost:11435/v1/images/edits \
+  -F model=qwen-image:2.1 \
+  -F 'prompt=Put sunglasses on the sloth and make the background a sunny beach' \
+  -F 'image[]=@sloth.png' -F size=1024x1024 \
+  | jq -r '.data[0].b64_json' | base64 -d > edited.png
+```
+The OpenAI SDK works unchanged: `client.images.edit(model="qwen-image:2.1", image=[open("sloth.png", "rb")], prompt=...)`. Sampling knobs are not OpenAI edit fields, so they come from the model's registry `params`; to override one per request, embed a native block in the prompt: `... <sd_cpp_extra_args>{"sample_params":{"sample_steps":30}}</sd_cpp_extra_args>`.
+
+**Qwen-Image 2.1** (needs stable-diffusion.cpp `master` from 2026-09-20 or later — rebuild with `./build-ggml-stable-diffusion.cpp.sh master`). The [unsloth GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF) is the denoiser only; it takes the VAE and a Qwen3-VL-8B text encoder as artifacts, and the encoder's vision projector as `llm_vision` — without it the model cannot see the images it is asked to edit. Q8_0 at 1024×1024 / 20 steps: ~28 s on an RTX 4090, ~15 GB resident.
+```yaml
+- name: qwen-image:2.1
+  file: qwen-image-2.1-Q8_0.gguf                      # unsloth/Qwen-Image-2.1-GGUF
+  modality: image
+  backend: sd-server
+  mem_gb: 15.0
+  artifacts:
+    vae: qwen_image_2.1_vae_bf16.safetensors          # unsloth/Qwen-Image-2.1-FP8, vae/
+    llm: Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf         # unsloth/Qwen3-VL-8B-Instruct-GGUF
+    llm_vision: mmproj-BF16-Qwen3-VL-8B-Instruct.gguf # same repo, mmproj-BF16.gguf
+  params: {steps: 20, cfg_scale: 6.0, sampler: euler, diffusion_fa: true, eager_load: true}
+```
+
 > Image models are not chat models: `zallama run <name>` refuses them and points you at `zallama generate`.
 
 ---
@@ -932,7 +958,7 @@ The other memory switches are `max_vram` + `stream_layers` (graph-cut segmented 
 
 Zallama separates the **generic process lifecycle** (spawn, health-check, port assignment, LRU eviction, kill) from **engine-specific logic** (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a `Backend` abstraction in [`server/backends.py`](server/backends.py).
 
-This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation (`/v1/images/generations`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
+This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation and editing (`/v1/images/generations`, `/v1/images/edits`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
 
 ---
 
