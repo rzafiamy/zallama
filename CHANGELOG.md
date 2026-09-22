@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-09-22
+
+### Added
+- **`POST /v1/images/edits`** — the OpenAI image-edit contract (`multipart/form-data`:
+  `model`, `prompt`, one or more `image[]` or the legacy `image`, optional `mask`, `n`,
+  `size`), proxied to `sd-server`'s own edits route. The first image is the init image and
+  every image is passed as a reference, which is what edit models condition on. The OpenAI
+  SDK's `client.images.edit(...)` works unchanged. Sampling knobs are not OpenAI edit
+  fields: they come from the model's registry `params`, or per request via a
+  `<sd_cpp_extra_args>{...}</sd_cpp_extra_args>` block inside `prompt`.
+- **Qwen-Image 2.1** documented end to end: the unsloth GGUF denoiser plus VAE, a
+  Qwen3-VL-8B `llm` text encoder and its mmproj as `llm_vision` (without it the model cannot
+  see the images it is asked to edit). Q8_0 at 1024×1024 / 20 steps is ~28 s on an
+  RTX 4090, ~15 GB resident. Needs stable-diffusion.cpp `master` from 2026-09-20 or later.
+- **`audiocpp-server` backend (ASR)** — Voxtral Mini 4B Realtime through audio.cpp's
+  server, built by `build-ggml-audio.cpp.sh` with only the `voxtral_realtime` family
+  compiled in.
+- **`voxtral-tts-server` backend (TTS)** — Voxtral-4B-TTS-2603 through a thin HTTP server of
+  ours (`patches/voxtral-tts-server.cpp`) on top of mudler/voxtral-tts.c, built by
+  `build-voxtral-tts.sh`.
+- **`llama-fork-server` backend (text)** — the same launch args as `llama-server` but a
+  separately named binary, so a third-party llama.cpp fork's kernels never touch the
+  production `llama-server`. Opt in per model with `backend=llama-fork-server`.
+
+### Fixed
+- `/v1/audio/transcriptions` transcodes into a real, seekable WAV file instead of piping
+  ffmpeg's output: a piped WAV carries `0xFFFFFFFF` chunk sizes, which parakeet tolerated
+  but audio.cpp rejects (`failed to read WAV data chunk`).
+
 ## [1.16.0] - 2026-09-12
 
 ### Added
@@ -567,7 +596,9 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.15.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.17.0...HEAD
+[1.17.0]: https://github.com/rzafiamy/zallama/compare/v1.16.0...v1.17.0
+[1.16.0]: https://github.com/rzafiamy/zallama/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/rzafiamy/zallama/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/rzafiamy/zallama/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/rzafiamy/zallama/compare/v1.12.0...v1.13.0
