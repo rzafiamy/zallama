@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-09-23
+
 ### Fixed
 - **`build-llamacpp-fork.sh` is now in the repo.** The `llama-fork-server` backend added in
   1.17.0 pointed at this script, but it had not been committed. It also now links
@@ -604,7 +606,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.17.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.17.1...HEAD
+[1.17.1]: https://github.com/rzafiamy/zallama/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/rzafiamy/zallama/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/rzafiamy/zallama/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/rzafiamy/zallama/compare/v1.14.0...v1.15.0
