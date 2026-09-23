@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-09-23
+
 ### Added
 - **`convert-hf-to-gguf.sh`** — converts a Hugging Face safetensors model (repo id or local
   directory) into a GGUF that `llama-server` can load. The converter is pinned to the llama.cpp
@@ -616,7 +618,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.17.1...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.18.0...HEAD
+[1.18.0]: https://github.com/rzafiamy/zallama/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/rzafiamy/zallama/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/rzafiamy/zallama/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/rzafiamy/zallama/compare/v1.15.0...v1.16.0
