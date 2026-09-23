@@ -128,6 +128,22 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 > `sudo apt install -y libespeak-ng1 espeak-ng-data libpcaudio0 libsonic0`.
 > `kokoro-server` logs which phonemizer it selected at startup (`phonemizer: espeak-ng` vs `phonemizer: ByT5 (bundled)`).
 
+### Optional: convert a safetensors model to GGUF
+
+Some models — often fine-tunes — are only published as Hugging Face safetensors. `convert-hf-to-gguf.sh` turns one into a GGUF that `llama-server` can load:
+
+```bash
+./convert-hf-to-gguf.sh wayfind/metask-jev-4b-policy-mix q8_0    # or a local directory
+zallama add metask-jev-4b /path/to/models/metask-jev-4b-policy-mix-Q8_0.gguf
+```
+
+- **Pinned to your runtime.** The converter comes from llama.cpp at the exact commit of `./bin/llama-server` (read from `--version`), so the file matches the engine that will serve it.
+- **Fails fast.** The architecture in `config.json` is checked against that converter before any weights are downloaded; an unsupported model stops in seconds with a pointer to rebuild llama.cpp.
+- **Off the system disk.** Weights download into `models_dir/.hf-staging/` and are removed after a successful conversion (`KEEP_SOURCE=1` keeps them). The converter checkout and its CPU-only torch venv live in `~/.cache/zallama/convert`.
+- **Missing MTP heads.** Qwen3.5/3.6 configs declare `mtp_num_hidden_layers`, but fine-tunes usually lose those tensors when a LoRA is merged; converting anyway gives a GGUF that fails with `tensor 'blk.N.attn_norm.weight' not found`. The script reads the safetensors headers and passes `--no-mtp` when the head is declared but absent.
+
+Output types: `q8_0` (default), `f16`, `bf16`, `f32`, `auto`. Smaller quants need `llama-quantize` on the result. Only the text model is converted; a vision tower needs a separate `--mmproj` conversion.
+
 ### Optional: use prebuilt packages
 
 To skip building from source, prebuilt packages are available from the shared Google Drive folder:

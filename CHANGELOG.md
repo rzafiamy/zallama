@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`convert-hf-to-gguf.sh`** — converts a Hugging Face safetensors model (repo id or local
+  directory) into a GGUF that `llama-server` can load. The converter is pinned to the llama.cpp
+  commit of `./bin/llama-server`; the architecture is checked before any weights are
+  downloaded; weights stage under `models_dir/.hf-staging/` and are removed afterwards; a CPU
+  torch venv is cached in `~/.cache/zallama/convert`. Detects Qwen3.5/3.6 checkpoints whose
+  config declares an MTP head the weights no longer contain (common after a LoRA merge) and
+  converts them with `--no-mtp`, which otherwise yields a GGUF that fails to load with
+  `tensor 'blk.N.attn_norm.weight' not found`. Documented in the README's install section.
+
 ## [1.17.1] - 2026-09-23
 
 ### Fixed
