@@ -257,6 +257,48 @@ upload.
 
 ---
 
+## `asr` (backend: `parakeet-rs-server`) — ASR + speaker diarization
+
+Source: `ParakeetRsServerBackend`, wrapping `parakeet-rs-server` from
+[rzafiamy/parakeet-rs](https://github.com/rzafiamy/parakeet-rs) (`server/`).
+Build with `./build-parakeet-rs.sh`. Set `backend: parakeet-rs-server`
+explicitly — `parakeet-server` stays the default for `modality: asr`.
+
+Serves `/v1/audio/transcriptions` (`json`, `text`, `verbose_json`, `srt`,
+`vtt`, `diarized_json`; `diarize=true`; `stream=true`) and
+`/v1/audio/diarize` (`json` or `rttm`). Uploads are forwarded untouched —
+no WAV transcode, no `ZALLAMA_ASR_SILENCE_CAP` clamp — because the server
+decodes every format itself and must see the original timing.
+
+`file` is the ONNX model **directory** (`encoder-model.onnx` [+ `.data`],
+`decoder_joint-model.onnx`, `vocab.txt`). The diarization model is an
+artifact:
+
+| artifact | CLI flag |
+|---|---|
+| `diarization` | `--diarization-model` (Nemotron-3 Diarization `.onnx`) |
+
+| key | CLI flag | default |
+|---|---|---|
+| `threads` | `--threads` | min(8, cores) |
+| `device` | `--device` (`auto`, `cpu`, `cuda`) | `auto` |
+| `device_id` | `--device-id` | 0 |
+| `gpu_mem_limit_mb` | `--gpu-mem-limit-mb` (per ONNX session) | 0 = none |
+| `diarization_device` | `--diarization-device` (`auto` follows `device`) | `auto` |
+| `diar_onset` / `diar_offset` | `--diar-onset` / `--diar-offset` | 0.5 / 0.5 |
+| `diar_min_duration_on` / `diar_min_duration_off` | `--diar-min-duration-on` / `-off` (s) | 0 / 0 |
+| `max_chunk_secs` | `--max-chunk-secs` | 120 |
+| `split_silence_secs` | `--split-silence-secs` (0 = off) | 1.0 |
+| `max_audio_secs` | `--max-audio-secs` (0 = unlimited) | 0 |
+| `max_upload_mb` | `--max-upload-mb` | 512 |
+| `max_queue` | `--max-queue` | 16 |
+
+`mem_gb`: fp16 on CUDA peaks at 2.1 GB with `diarization_device: cpu` and
+2.6 GB with diarization on the GPU (the fp32 export needs about twice that).
+CPU entries use no VRAM, so leave `mem_gb` unset there.
+
+---
+
 ## `asr` (backend: `audiocpp-server`) — Voxtral Mini 4B Realtime
 
 Source: `AudioCppServerBackend`, wrapping [mirek190/audio.cpp](https://github.com/mirek190/audio.cpp)'s

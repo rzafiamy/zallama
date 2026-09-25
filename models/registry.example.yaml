@@ -86,6 +86,26 @@ models:
     params:
       threads: 4
 
+  # --- ASR + speaker diarization: parakeet-rs-server ---------------------------
+  # Same Parakeet TDT v3 model on ONNX Runtime, plus NVIDIA Nemotron-3
+  # Diarization: response_format=diarized_json, /v1/audio/diarize, srt/vtt,
+  # stream=true. Build with build-parakeet-rs.sh. `file` is the ONNX model
+  # directory; convert it to fp16 for GPU (see README). With `device: cpu` it
+  # uses no VRAM at ~39x realtime; drop `mem_gb` in that case.
+  - name: parakeet-tdt-v3
+    file: parakeet-tdt-0.6b-v3-onnx-fp16
+    modality: asr
+    backend: parakeet-rs-server
+    description: "Parakeet TDT 0.6B v3 + Nemotron-3 speaker diarization"
+    artifacts:
+      diarization: nemotron-3-diarization/nemotron3_diar_v3.onnx
+    mem_gb: 2.2        # measured peak: fp16 on CUDA, diarization on CPU
+    evict_group: services
+    params:
+      device: cuda
+      diarization_device: cpu   # 0.45 GB less VRAM; 57x instead of 101x realtime
+      threads: 8
+
   # --- RAG: embedding model ---------------------------------------------------
   # Runs llama-server in --embedding mode via the embedding-server backend and
   # serves POST /v1/embeddings. zvec uses this to embed & search documents; set

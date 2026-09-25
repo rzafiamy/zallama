@@ -8,7 +8,8 @@ Implements:
   POST /v1/completions        (streaming + non-streaming)
   POST /v1/embeddings
   POST /v1/rerank                 (cross-encoder reranking, llama-server --reranking)
-  POST /v1/audio/transcriptions   (ASR — multipart upload, parakeet-server)
+  POST /v1/audio/transcriptions   (ASR — multipart upload, parakeet-server / parakeet-rs-server)
+  POST /v1/audio/diarize          (speaker diarization — multipart upload, parakeet-rs-server)
   POST /v1/audio/speech           (TTS — JSON audio output, kokoro-server)
   POST /v1/images/generations     (Image generation — JSON output, sd-server)
   POST /v1/images/edits           (Image editing — multipart upload, sd-server)
@@ -464,60 +465,108 @@ async def audio_transcriptions(
     pm=Depends(get_pm),
     registry=Depends(get_registry),
 ):
-    """Proxy an OpenAI-style transcription to an ASR backend (parakeet-server).
+    """Proxy an OpenAI-style transcription to an ASR backend.
 
-    Unlike the JSON endpoints, this is multipart/form-data: the client uploads
-    an audio file plus fields (model, response_format, ...). We read `model`
-    from the form to pick the instance, then forward the raw multipart body and
-    its Content-Type upstream untouched so the file boundary is preserved.
+    Multipart in; the upstream body and content type come straight back, so
+    every response_format the backend supports (json / text / verbose_json,
+    and srt / vtt / diarized_json on parakeet-rs-server) works unchanged.
     """
-    # Parse the multipart form ONCE — this consumes the request stream, so we
-    # cannot also read request.body() afterwards. We rebuild the upstream
-    # multipart from the parsed parts instead, letting httpx generate a fresh
-    # boundary (forwarding the original Content-Type with the old boundary would
-    # not match a re-encoded body).
+    return await _proxy_audio(request, pm, registry, "audio/transcriptions")
+
+
+@router.post("/audio/diarize")
+async def audio_diarize(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Speaker diarization only: who spoke when, as JSON or RTTM.
+
+    Served by ASR backends that ship a diarization model
+    (parakeet-rs-server with a `diarization` artifact).
+    """
+    return await _proxy_audio(request, pm, registry, "audio/diarize")
+
+
+async def _proxy_audio(request: Request, pm, registry, endpoint: str):
+    """Forward a multipart audio request to the model's ASR backend.
+
+    Parse the multipart form ONCE — this consumes the request stream, so we
+    cannot also read request.body() afterwards. We rebuild the upstream
+    multipart from the parsed parts instead, letting httpx generate a fresh
+    boundary (forwarding the original Content-Type with the old boundary would
+    not match a re-encoded body).
+    """
     form = await request.form()
     model_name = (form.get("model") or "").strip()
     if not model_name:
         raise HTTPException(status_code=400, detail="'model' field is required")
 
-    inst = await _resolve_instance(
-        model_name, pm, registry, endpoint="audio/transcriptions"
-    )
+    inst = await _resolve_instance(model_name, pm, registry, endpoint=endpoint)
     inst.touch()
+    backend = inst.backend
+    if endpoint == "audio/diarize" and not getattr(backend, "supports_diarization", False):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{model_name}' runs on {backend.name}, which has no speaker "
+                   f"diarization; use a parakeet-rs-server model with a 'diarization' artifact.",
+        )
 
     # Split the form into file parts (uploads) and plain data fields. UploadFile
-    # is detected by its .read()/.filename attributes. parakeet only decodes
-    # WAV, so transcode the audio upload to 16 kHz mono WAV first (no-op if it
-    # already is WAV) and rename it accordingly.
+    # is detected by its .read()/.filename attributes. Backends that decode
+    # audio themselves (decodes_audio) get the upload untouched: transcoding
+    # and the silence clamp would shift the word and speaker timestamps they
+    # return. The others (parakeet-server, audio.cpp) only read WAV, so the
+    # audio is transcoded to 16 kHz mono WAV first and renamed accordingly.
+    # Repeated fields (timestamp_granularities[]) are kept as lists.
     files = []
-    data = {}
+    data: dict[str, Any] = {}
     for key, value in form.multi_items():
         if hasattr(value, "read") and hasattr(value, "filename"):
             content = await value.read()
-            if key == "file":
+            if key == "file" and not getattr(backend, "decodes_audio", False):
                 content = await _to_wav(content)
                 name = (value.filename or "audio").rsplit(".", 1)[0] + ".wav"
                 files.append((key, (name, content, "audio/wav")))
             else:
-                files.append((key, (value.filename, content, value.content_type)))
+                files.append((key, (value.filename or "audio", content,
+                                    value.content_type or "application/octet-stream")))
+        elif key in data:
+            prev = data[key]
+            data[key] = (prev if isinstance(prev, list) else [prev]) + [value]
         else:
             data[key] = value
 
-    upstream_url = f"{inst.base_url}/v1/audio/transcriptions"
-    async with pm.serving(inst, "audio/transcriptions"):
+    upstream_url = f"{inst.base_url}/v1/{endpoint}"
+    streaming = str(data.get("stream", "")).strip().lower() in ("true", "1", "yes", "on")
+    if streaming and endpoint == "audio/transcriptions":
+        return StreamingResponse(
+            _stream_audio_proxy(pm, inst, upstream_url, data, files, endpoint, request),
+            media_type="text/event-stream",
+        )
+
+    async with pm.serving(inst, endpoint):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
             try:
                 resp = await client.post(upstream_url, data=data, files=files)
             except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=f"parakeet-server error: {e}")
-    # parakeet-server honours response_format (json / text / verbose_json), so
-    # pass the upstream body and content type straight back to the client.
+                raise HTTPException(status_code=502, detail=f"{backend.name} error: {e}")
     return Response(
         content=resp.content,
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type"),
     )
+
+
+async def _stream_audio_proxy(pm, inst, upstream_url: str, data: dict, files: list,
+                              endpoint: str, request: Request) -> AsyncIterator[bytes]:
+    """Relay a `stream=true` transcription's server-sent events as they arrive."""
+    async with pm.serving(inst, endpoint, stream=True):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            async with client.stream("POST", upstream_url, data=data, files=files) as resp:
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
 
 
 # ---------------------------------------------------------------------------

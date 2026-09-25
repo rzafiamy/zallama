@@ -14,6 +14,7 @@ as *new Backend subclasses* rather than as cross-cutting changes:
   - EmbeddingServerBackend→ embeddings (llama-server --embedding)
   - RerankServerBackend   → rerank     (llama-server --reranking)
   - ParakeetServerBackend → ASR        (parakeet-server)
+  - ParakeetRsServerBackend → ASR + diarization (parakeet-rs-server)
   - KokoroServerBackend   → TTS        (kokoro-server)
   - SdServerBackend       → image gen  (sd-server / stable-diffusion.cpp)
 
@@ -97,6 +98,7 @@ ENDPOINT_MODALITY = {
     "completions": TEXT,
     "embeddings": EMBEDDING,
     "audio/transcriptions": ASR,
+    "audio/diarize": ASR,
     "audio/speech": TTS,
     "images/generations": IMAGE,
     "images/edits": IMAGE,
@@ -448,6 +450,80 @@ class ParakeetServerBackend:
             "--host", "127.0.0.1",
             "--port", str(port),
         ]
+        for key, flag in self._PARAM_MAP.items():
+            if key in merged_params:
+                args += [flag, str(merged_params[key])]
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
+# parakeet-rs-server backend (ASR + speaker diarization)
+# ---------------------------------------------------------------------------
+class ParakeetRsServerBackend:
+    """parakeet-rs-server (rzafiamy/parakeet-rs, server/) — OpenAI-compatible
+    speech-to-text plus NVIDIA Nemotron-3 speaker diarization, on ONNX Runtime.
+
+    Same launch contract and endpoints as parakeet-server (`--model --host
+    --port --threads`, GET /health, POST /v1/audio/transcriptions), plus:
+      * `response_format=diarized_json` / `diarize=true`, `srt`, `vtt`, and
+        SSE `stream=true` on /v1/audio/transcriptions;
+      * POST /v1/audio/diarize (speaker turns as JSON or RTTM).
+    `model` is the ONNX model *directory* (encoder/decoder_joint/vocab.txt);
+    the diarization model is the `diarization` artifact.
+
+    It decodes every common audio format itself and cuts long audio at pauses
+    while keeping the original timestamps, so the proxy forwards uploads
+    untouched: no WAV transcode and no silence clamp, which would shift the
+    word and speaker timestamps it returns. Build it with
+    build-parakeet-rs.sh, which installs `parakeet-rs-server` and its
+    `parakeet-rs-lib/` runtime into ./bin/.
+    """
+    name = "parakeet-rs-server"
+    binary_name = "parakeet-rs-server"
+    modalities = {ASR}
+    # Read by the routes layer (see routes/openai.py).
+    decodes_audio = True
+    supports_diarization = True
+
+    # Params that take a value: registry/config key -> CLI flag.
+    _PARAM_MAP = {
+        "threads": "--threads",
+        "device": "--device",
+        "device_id": "--device-id",
+        "gpu_mem_limit_mb": "--gpu-mem-limit-mb",
+        "diarization_device": "--diarization-device",
+        "diar_onset": "--diar-onset",
+        "diar_offset": "--diar-offset",
+        "diar_min_duration_on": "--diar-min-duration-on",
+        "diar_min_duration_off": "--diar-min-duration-off",
+        "max_chunk_secs": "--max-chunk-secs",
+        "split_silence_secs": "--split-silence-secs",
+        "max_audio_secs": "--max-audio-secs",
+        "max_upload_mb": "--max-upload-mb",
+        "max_queue": "--max-queue",
+    }
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [
+            binary,
+            "--model", str(model_path),
+            "--model-id", entry["name"],
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+        if "diarization" in artifacts:
+            args += ["--diarization-model", str(artifacts["diarization"])]
         for key, flag in self._PARAM_MAP.items():
             if key in merged_params:
                 args += [flag, str(merged_params[key])]
@@ -865,6 +941,7 @@ _BACKENDS: dict[str, Backend] = {
     EmbeddingServerBackend.name: EmbeddingServerBackend(),
     RerankServerBackend.name: RerankServerBackend(),
     ParakeetServerBackend.name: ParakeetServerBackend(),
+    ParakeetRsServerBackend.name: ParakeetRsServerBackend(),
     AudioCppServerBackend.name: AudioCppServerBackend(),
     KokoroServerBackend.name: KokoroServerBackend(),
     VoxtralTtsServerBackend.name: VoxtralTtsServerBackend(),

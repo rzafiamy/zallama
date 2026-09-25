@@ -108,6 +108,9 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 # parakeet.cpp (ASR / speech-to-text) — requires a release tag/branch name
 ./build-ggml-parakeet.cpp.sh master
 
+# parakeet-rs-server (ASR + speaker diarization, CPU or CUDA; no root needed)
+./build-parakeet-rs.sh master
+
 # kokoro.cpp (TTS / voice synthesis) — requires a release tag/branch name
 ./build-ggml-kokoro.cpp.sh v0.3.0
 
@@ -775,6 +778,61 @@ curl http://localhost:11435/v1/audio/transcriptions \
 > **Language support is a property of the model, not Zallama.** `ctc-0.6b` / `tdt-0.6b-v2` are **English-only**; for French and other languages use the multilingual **[Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)** (25 European languages, automatic language detection).
 >
 > **`ffmpeg`** is only needed for non-WAV uploads. Without it, WAV uploads still work and other formats return a clear `415`.
+
+### Transcription with speaker diarization — parakeet-rs-server
+
+The **`parakeet-rs-server`** backend ([rzafiamy/parakeet-rs](https://github.com/rzafiamy/parakeet-rs), `server/`)
+serves the same Parakeet TDT v3 model through ONNX Runtime and adds NVIDIA's
+**Nemotron-3 Diarization** (Sortformer v3, up to 8 speakers):
+
+- `response_format=diarized_json` (or `diarize=true` with `verbose_json`, `srt`, `vtt`) labels every segment and word with its speaker;
+- `POST /v1/audio/diarize` returns speaker turns only, as JSON or RTTM;
+- `srt` / `vtt` subtitles, and `stream=true` server-sent events;
+- it decodes any audio format itself, and long files are cut at pauses into ≤ 2 min windows with the original timestamps, so memory stays flat. parakeet.cpp's server peaked at 13.8 GB VRAM on a 9-minute file.
+
+Zallama forwards uploads to this backend **untouched**: no WAV transcode and no
+silence clamp, which would shift the timestamps. The silence clamp only exists
+for parakeet.cpp's decoder.
+
+**1. Build** (installs `bin/parakeet-rs-server` + its `bin/parakeet-rs-lib/` runtime: ONNX Runtime GPU and cuDNN, matched to your driver's CUDA version; `--cpu` for a CPU-only build):
+```bash
+./build-parakeet-rs.sh master
+```
+
+**2. Models** — the ONNX TDT export (a directory) and the diarization model:
+```bash
+M=/bank2/zallama/models
+hf download istupakov/parakeet-tdt-0.6b-v3-onnx --local-dir $M/parakeet-tdt-0.6b-v3-onnx \
+  --include "encoder-model.onnx*" "decoder_joint-model.onnx" "vocab.txt" "config.json"
+hf download altunenes/parakeet-rs --include "nemotron-3-diarization/*" --local-dir $M
+# GPU: convert to fp16 (a third less VRAM, same transcript) with the script in a parakeet-rs checkout
+python parakeet-rs/server/scripts/convert_tdt_fp16.py $M/parakeet-tdt-0.6b-v3-onnx $M/parakeet-tdt-0.6b-v3-onnx-fp16
+```
+
+**3. Register** (see `models/registry.example.yaml` and [CONFIG.md](CONFIG.md#asr-backend-parakeet-rs-server--asr--speaker-diarization)):
+```yaml
+- name: parakeet-tdt-v3
+  modality: asr
+  backend: parakeet-rs-server
+  file: /bank2/zallama/models/parakeet-tdt-0.6b-v3-onnx-fp16
+  artifacts:
+    diarization: /bank2/zallama/models/nemotron-3-diarization/nemotron3_diar_v3.onnx
+  mem_gb: 2.2
+  evict_group: services
+  params: {device: cuda, diarization_device: cpu, threads: 8}
+```
+
+**4. Use**:
+```bash
+curl http://localhost:6767/v1/audio/transcriptions -F model=parakeet-tdt-v3 \
+  -F file=@meeting.m4a -F response_format=diarized_json
+curl http://localhost:6767/v1/audio/diarize -F model=parakeet-tdt-v3 \
+  -F file=@meeting.m4a -F response_format=rttm
+```
+
+Measured on the RTX 4090 host, 9.4-minute recording: CPU fp32 **39× realtime,
+0 VRAM**; CUDA fp16 with diarization on CPU **57×, 2.1 GB peak**; CUDA fp16
+with diarization on GPU **101×, 2.6 GB peak**.
 
 ### Streaming ASR — Voxtral Mini 4B Realtime
 

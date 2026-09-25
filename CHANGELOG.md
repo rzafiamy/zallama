@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`parakeet-rs-server` backend (ASR + speaker diarization)** — Parakeet TDT v3 on ONNX
+  Runtime plus NVIDIA Nemotron-3 Diarization (Sortformer v3, up to 8 speakers), from
+  rzafiamy/parakeet-rs `server/`. Adds `response_format=diarized_json` / `diarize=true`,
+  `srt`, `vtt` and `stream=true` on `/v1/audio/transcriptions`. Built by the new
+  `build-parakeet-rs.sh`, which needs no root: it bundles ONNX Runtime GPU and cuDNN for
+  the driver's CUDA version into `bin/parakeet-rs-lib/`, or builds for CPU with `--cpu`.
+  Long audio is processed in ≤ 2 min windows cut at pauses, so VRAM stays flat
+  (2.1–2.6 GB peak on a 9-minute file, where parakeet.cpp's single pass reached 13.8 GB).
+- **`POST /v1/audio/diarize`** — speaker turns as JSON or RTTM, for ASR backends that
+  declare `supports_diarization` (a clear 400 otherwise).
+
+### Changed
+- `/v1/audio/transcriptions` forwards uploads untouched to backends that decode audio
+  themselves (`decodes_audio`): no WAV transcode and no silence clamp, which would shift
+  their word and speaker timestamps. parakeet-server and audiocpp-server are unchanged.
+- `stream=true` transcriptions are relayed as server-sent events as they arrive instead
+  of being buffered.
+
+### Fixed
+- Repeated multipart fields (`timestamp_granularities[]=word` +
+  `timestamp_granularities[]=segment`) were collapsed to the last value before being
+  forwarded.
+
 ## [1.18.0] - 2026-09-23
 
 ### Added
