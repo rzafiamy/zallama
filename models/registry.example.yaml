@@ -90,13 +90,31 @@ models:
   # Same Parakeet TDT v3 model on ONNX Runtime, plus NVIDIA Nemotron-3
   # Diarization: response_format=diarized_json, /v1/audio/diarize, srt/vtt,
   # stream=true. Build with build-parakeet-rs.sh. `file` is the ONNX model
-  # directory; convert it to fp16 for GPU (see README). With `device: cpu` it
-  # uses no VRAM at ~39x realtime; drop `mem_gb` in that case.
-  - name: parakeet-tdt-v3
+  # directory. Two flavours of the same model; clients pick one by name:
+  #
+  #  - CPU: fp32, no VRAM at all, ~39x realtime (9.4 min in 14.5 s, with
+  #    diarization). The right choice next to a big resident LLM. No mem_gb:
+  #    it costs nothing against the GPU budget.
+  #  - GPU: fp16 (converted with parakeet-rs server/scripts/convert_tdt_fp16.py),
+  #    57x realtime with diarization on CPU at 2.1 GB peak VRAM; set
+  #    diarization_device: cuda for 101x at 2.6 GB (then mem_gb: 2.7).
+  - name: parakeet-tdt-v3-cpu
+    file: parakeet-tdt-0.6b-v3-onnx
+    modality: asr
+    backend: parakeet-rs-server
+    description: "Parakeet TDT 0.6B v3 + Nemotron-3 diarization, CPU (no VRAM)"
+    artifacts:
+      diarization: nemotron-3-diarization/nemotron3_diar_v3.onnx
+    evict_group: services
+    params:
+      device: cpu
+      threads: 8
+
+  - name: parakeet-tdt-v3-gpu
     file: parakeet-tdt-0.6b-v3-onnx-fp16
     modality: asr
     backend: parakeet-rs-server
-    description: "Parakeet TDT 0.6B v3 + Nemotron-3 speaker diarization"
+    description: "Parakeet TDT 0.6B v3 fp16 + Nemotron-3 diarization, CUDA"
     artifacts:
       diarization: nemotron-3-diarization/nemotron3_diar_v3.onnx
     mem_gb: 2.2        # measured peak: fp16 on CUDA, diarization on CPU

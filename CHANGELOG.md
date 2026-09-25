@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-09-25
+
 ### Added
 - **`parakeet-rs-server` backend (ASR + speaker diarization)** — Parakeet TDT v3 on ONNX
   Runtime plus NVIDIA Nemotron-3 Diarization (Sortformer v3, up to 8 speakers), from
@@ -16,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the driver's CUDA version into `bin/parakeet-rs-lib/`, or builds for CPU with `--cpu`.
   Long audio is processed in ≤ 2 min windows cut at pauses, so VRAM stays flat
   (2.1–2.6 GB peak on a 9-minute file, where parakeet.cpp's single pass reached 13.8 GB).
+- **`parakeet-tdt-v3-cpu` / `parakeet-tdt-v3-gpu`** example registry entries: one model, two
+  flavours picked by name. CPU: fp32, no VRAM, 39× realtime with diarization. GPU: fp16,
+  2.1 GB peak, 57×. Benchmarks and the full API are in the README's ASR section.
 - **`POST /v1/audio/diarize`** — speaker turns as JSON or RTTM, for ASR backends that
   declare `supports_diarization` (a clear 400 otherwise).
 

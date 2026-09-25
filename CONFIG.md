@@ -295,7 +295,9 @@ artifact:
 
 `mem_gb`: fp16 on CUDA peaks at 2.1 GB with `diarization_device: cpu` and
 2.6 GB with diarization on the GPU (the fp32 export needs about twice that).
-CPU entries use no VRAM, so leave `mem_gb` unset there.
+CPU entries use no VRAM, so leave `mem_gb` unset there. The usual setup is
+two entries over the same models (`parakeet-tdt-v3-cpu` with `device: cpu`,
+`parakeet-tdt-v3-gpu` with `device: cuda`); see `models/registry.example.yaml`.
 
 ---
 

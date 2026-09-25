@@ -109,7 +109,7 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 ./build-ggml-parakeet.cpp.sh master
 
 # parakeet-rs-server (ASR + speaker diarization, CPU or CUDA; no root needed)
-./build-parakeet-rs.sh master
+./build-parakeet-rs.sh server-v0.1.0
 
 # kokoro.cpp (TTS / voice synthesis) — requires a release tag/branch name
 ./build-ggml-kokoro.cpp.sh v0.3.0
@@ -794,9 +794,9 @@ Zallama forwards uploads to this backend **untouched**: no WAV transcode and no
 silence clamp, which would shift the timestamps. The silence clamp only exists
 for parakeet.cpp's decoder.
 
-**1. Build** (installs `bin/parakeet-rs-server` + its `bin/parakeet-rs-lib/` runtime: ONNX Runtime GPU and cuDNN, matched to your driver's CUDA version; `--cpu` for a CPU-only build):
+**1. Build** (installs `bin/parakeet-rs-server` + its `bin/parakeet-rs-lib/` runtime: ONNX Runtime GPU and cuDNN, matched to your driver's CUDA version; `--cpu` for a CPU-only build; the GPU build also runs the CPU entry):
 ```bash
-./build-parakeet-rs.sh master
+./build-parakeet-rs.sh server-v0.1.0
 ```
 
 **2. Models** — the ONNX TDT export (a directory) and the diarization model:
@@ -809,9 +809,20 @@ hf download altunenes/parakeet-rs --include "nemotron-3-diarization/*" --local-d
 python parakeet-rs/server/scripts/convert_tdt_fp16.py $M/parakeet-tdt-0.6b-v3-onnx $M/parakeet-tdt-0.6b-v3-onnx-fp16
 ```
 
-**3. Register** (see `models/registry.example.yaml` and [CONFIG.md](CONFIG.md#asr-backend-parakeet-rs-server--asr--speaker-diarization)):
+**3. Register** — one model, two entries, so each client picks CPU or GPU by name
+(both are in `models/registry.example.yaml`; parameters in
+[CONFIG.md](CONFIG.md#asr-backend-parakeet-rs-server--asr--speaker-diarization)):
 ```yaml
-- name: parakeet-tdt-v3
+- name: parakeet-tdt-v3-cpu          # no VRAM, ~39x realtime
+  modality: asr
+  backend: parakeet-rs-server
+  file: /bank2/zallama/models/parakeet-tdt-0.6b-v3-onnx
+  artifacts:
+    diarization: /bank2/zallama/models/nemotron-3-diarization/nemotron3_diar_v3.onnx
+  evict_group: services
+  params: {device: cpu, threads: 8}
+
+- name: parakeet-tdt-v3-gpu          # 2.1 GB peak VRAM, ~57x realtime
   modality: asr
   backend: parakeet-rs-server
   file: /bank2/zallama/models/parakeet-tdt-0.6b-v3-onnx-fp16
@@ -824,15 +835,45 @@ python parakeet-rs/server/scripts/convert_tdt_fp16.py $M/parakeet-tdt-0.6b-v3-on
 
 **4. Use**:
 ```bash
-curl http://localhost:6767/v1/audio/transcriptions -F model=parakeet-tdt-v3 \
+# who said what
+curl http://localhost:6767/v1/audio/transcriptions -F model=parakeet-tdt-v3-cpu \
   -F file=@meeting.m4a -F response_format=diarized_json
-curl http://localhost:6767/v1/audio/diarize -F model=parakeet-tdt-v3 \
+# subtitles with speaker tags
+curl http://localhost:6767/v1/audio/transcriptions -F model=parakeet-tdt-v3-gpu \
+  -F file=@meeting.m4a -F response_format=srt -F diarize=true
+# speaker turns only
+curl http://localhost:6767/v1/audio/diarize -F model=parakeet-tdt-v3-cpu \
   -F file=@meeting.m4a -F response_format=rttm
 ```
 
-Measured on the RTX 4090 host, 9.4-minute recording: CPU fp32 **39× realtime,
-0 VRAM**; CUDA fp16 with diarization on CPU **57×, 2.1 GB peak**; CUDA fp16
-with diarization on GPU **101×, 2.6 GB peak**.
+**API** (`parakeet-rs-server` models):
+
+| Endpoint | Field | Values |
+|---|---|---|
+| `POST /v1/audio/transcriptions` | `response_format` | `json` (default), `text`, `verbose_json`, `srt`, `vtt`, `diarized_json` |
+| | `timestamp_granularities[]` | `word` adds `words[]` to `verbose_json` |
+| | `diarize` | `true` adds speakers to `verbose_json` / `srt` (`[A]`) / `vtt` (`<v A>`) |
+| | `stream` | `true` streams SSE `transcript.text.delta` events, then one `transcript.text.done` event (`json` / `text` only) |
+| `POST /v1/audio/diarize` | `response_format` | `json` (default: `num_speakers`, `speakers`, `segments[{speaker,start,end}]`), `rttm` |
+
+`diarized_json` segments look like
+`{"type":"transcript.text.segment","id":"seg_0","start":0.0,"end":6.88,"speaker":"A","text":"…"}`.
+Speakers are labelled `A`, `B`, … in order of first appearance (up to 8). Errors
+use OpenAI's `{"error":{"message","type","param","code"}}` shape.
+
+**Benchmark** — RTX 4090 host (32 cores), 9.4-minute French recording:
+
+| Setup | Time | Speed | VRAM idle → peak |
+|---|---|---|---|
+| `parakeet-tdt-v3-cpu` (fp32, 8 threads, diarization included) | 14.5 s | 39× realtime | 0 |
+| `parakeet-tdt-v3-gpu` (fp16, diarization on CPU) | 9.8 s | 57× | 1.7 → 2.1 GB |
+| fp16, diarization on GPU (`diarization_device: cuda`) | 5.6 s | 101× | 2.2 → 2.6 GB |
+| parakeet.cpp `parakeet-server` q8 (for reference) | 4.9 s | 115× | 1.3 → **13.8 GB** |
+
+parakeet.cpp decodes the whole file in one pass, so its VRAM grows with the
+file's length. Next to a 21.5 GB LLM that allocation fails and the server
+segfaults. `parakeet-rs-server` stays flat. Its transcripts differ from
+parakeet.cpp's on 1.6% of words; fp16 and fp32 gave identical transcripts.
 
 ### Streaming ASR — Voxtral Mini 4B Realtime
 
