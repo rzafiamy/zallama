@@ -8,7 +8,7 @@ Implements:
   POST /v1/completions        (streaming + non-streaming)
   POST /v1/embeddings
   POST /v1/rerank                 (cross-encoder reranking, llama-server --reranking)
-  POST /v1/translate              (machine translation, malaga — NLLB-200)
+  POST /v1/translate              (machine translation, malaga — NLLB-200; explicit source/target)
   POST /v1/audio/transcriptions   (ASR — multipart upload, parakeet-server / parakeet-rs-server)
   POST /v1/audio/diarize          (speaker diarization — multipart upload, parakeet-rs-server)
   POST /v1/audio/speech           (TTS — JSON audio output, kokoro-server)
@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
-from ..backends import ENDPOINT_EXTRA_MODALITIES, ENDPOINT_MODALITY, TRANSLATION, get_backend
+from ..backends import ENDPOINT_MODALITY, TRANSLATION, get_backend
 from ..tts_lang import voice_for_text
 from ..model_registry import ModelRegistry
 
@@ -71,8 +71,7 @@ async def _resolve_instance(model_name: str, pm, registry, endpoint: str | None 
     if endpoint is not None:
         required = ENDPOINT_MODALITY.get(endpoint)
         actual = ModelRegistry.modality_of(entry)
-        accepted = {required} | ENDPOINT_EXTRA_MODALITIES.get(endpoint, set())
-        if required is not None and actual not in accepted:
+        if required is not None and actual != required:
             raise HTTPException(
                 status_code=400,
                 detail=f"Model '{model_name}' has modality '{actual}', "
@@ -247,10 +246,11 @@ def _model_info(entry: dict, running: set[str], pm) -> dict:
         "status": "running" if name in running else "available",
         "modality": modality,
         "backend": backend_name,
-        "context_length": merged.get("ctx_size"),
+        "context_length": None if modality == TRANSLATION else merged.get("ctx_size"),
         "supports_vision": bool(artifacts.get("mmproj")),
         "pinned": bool(entry.get("pinned", False)),
         "tunable_params": tunable_params,
+        **({"languages": translation_languages(merged)} if modality == TRANSLATION else {}),
     }
 
 
@@ -291,8 +291,6 @@ async def chat_completions(
     model_name = _model_id_from_body(body)
     inst = await _resolve_instance(model_name, pm, registry, endpoint="chat/completions")
     inst.touch()
-    if ModelRegistry.modality_of(inst.entry) == TRANSLATION:
-        _flatten_message_content(body)
 
     upstream_url = f"{inst.base_url}/v1/chat/completions"
     stream = body.get("stream", False)
@@ -463,21 +461,16 @@ async def rerank(
 # ---------------------------------------------------------------------------
 # POST /v1/translate  (machine translation)
 # ---------------------------------------------------------------------------
-def _flatten_message_content(body: dict) -> None:
-    """Turn OpenAI content-part arrays into plain strings, in place.
+# Languages a translation entry accepts when it sets no `languages` param.
+_DEFAULT_TRANSLATION_LANGUAGES = ["fr", "en", "mg"]
 
-    malaga's chat endpoint takes `content` as a string only; OpenAI clients
-    (and most chat UIs) may send `[{"type": "text", "text": ...}, ...]`.
-    """
-    for msg in body.get("messages") or []:
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if isinstance(content, list):
-            msg["content"] = "\n".join(
-                p.get("text", "") for p in content
-                if isinstance(p, dict) and p.get("type") in (None, "text")
-            )
-        elif content is None and isinstance(msg, dict):
-            msg["content"] = ""
+
+def translation_languages(merged_params: dict) -> list[str]:
+    """The entry's `languages` param (list or comma-separated), lowercased."""
+    langs = merged_params.get("languages") or _DEFAULT_TRANSLATION_LANGUAGES
+    if isinstance(langs, str):
+        langs = langs.split(",")
+    return [str(l).strip().lower() for l in langs if str(l).strip()]
 
 
 @router.post("/translate")
@@ -488,30 +481,50 @@ async def translate(
 ):
     """Translate one text or a batch with a translation model (malaga).
 
-    Body: {model, text: str | texts: [str], source?, target?, beam_size?}
-    (`q` is accepted for `text`, `source_lang`/`from` and `target_lang`/`to`
-    for the languages). Languages are aliases (`fr`, `en`, `mg`, `français`…)
-    or NLLB codes (`fra_Latn`). When omitted, they come from the requested
-    model name (`malaga-en-mg`), else the entry's default_source/target.
+    Body: {model, source, target, text: str | texts: [str], beam_size?}.
+    `source` and `target` are required and must be two different codes from
+    the model's `languages` (default fr, en, mg; listed on /v1/models).
 
     Returns {"translation": str | [str], "source", "target", "model",
-    "elapsed_ms"} — a list exactly when the input was a list. Concurrent
+    "elapsed_ms"} — a list exactly when the input was `texts`. Concurrent
     requests are batched together on the GPU by malaga.
     """
     body = await request.json()
     model_name = _model_id_from_body(body)
-    if not any(k in body for k in ("text", "texts", "q")):
-        raise HTTPException(status_code=400, detail="'text' (string) or 'texts' (list) is required")
+
+    if "texts" in body:
+        texts = body["texts"]
+        if not isinstance(texts, list) or not texts or not all(isinstance(t, str) for t in texts):
+            raise HTTPException(status_code=400, detail="'texts' must be a non-empty list of strings")
+    elif not isinstance(body.get("text"), str):
+        raise HTTPException(status_code=400, detail="'text' (string) or 'texts' (list of strings) is required")
+
+    try:
+        entry = registry.get(model_name)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    allowed = translation_languages(pm.merged_params(entry))
+    source = str(body.get("source") or "").strip().lower()
+    target = str(body.get("target") or "").strip().lower()
+    for field, lang in (("source", source), ("target", target)):
+        if lang not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{field}' must be one of {', '.join(allowed)} (got '{lang or None}')",
+            )
+    if source == target:
+        raise HTTPException(status_code=400, detail="'source' and 'target' must differ")
 
     inst = await _resolve_instance(model_name, pm, registry, endpoint="translate")
     inst.touch()
 
-    upstream_body = dict(body)
-    src, tgt = _langs_from_model_name(model_name)
-    if src and not any(k in body for k in ("source", "source_lang", "from")):
-        upstream_body["source"] = src
-    if tgt and not any(k in body for k in ("target", "target_lang", "to")):
-        upstream_body["target"] = tgt
+    upstream_body = {"source": source, "target": target}
+    if "texts" in body:
+        upstream_body["texts"] = body["texts"]
+    else:
+        upstream_body["text"] = body["text"]
+    if "beam_size" in body:
+        upstream_body["beam_size"] = body["beam_size"]
 
     async with pm.serving(inst, "translate") as rec:
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
@@ -528,19 +541,6 @@ async def translate(
     if resp.status_code == 200 and isinstance(payload, dict):
         payload["model"] = model_name
     return JSONResponse(content=payload, status_code=resp.status_code)
-
-
-def _langs_from_model_name(model: str) -> tuple[str | None, str | None]:
-    """`malaga-fr-mg` / `malaga:en-mg` -> ("fr", "mg"); (None, None) otherwise.
-
-    Same rule as malaga's own chat endpoint (two trailing 2-3 letter codes),
-    so a pair alias behaves alike on /v1/translate and /v1/chat/completions.
-    """
-    tail = re.split(r"[:/]", model)[-1]
-    parts = tail.rsplit("-", 2)
-    if len(parts) >= 2 and all(2 <= len(p) <= 3 for p in parts[-2:]):
-        return parts[-2], parts[-1]
-    return None, None
 
 
 # ---------------------------------------------------------------------------

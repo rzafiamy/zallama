@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Translation is `/v1/translate` only, with explicit languages** — `source` and `target`
+  are now required on every call and checked against the entry's new `languages` param
+  (default `fr`, `en`, `mg`: any direction between them, fr ↔ mg and en ↔ mg included),
+  with a `400` that lists the allowed codes. Translation models no longer answer
+  `/v1/chat/completions`, and the language pair is no longer read from the model name.
+  `/v1/models` lists `languages` for translation models (and no `context_length`).
+
 ## [1.20.0] - 2026-10-01
 
 ### Added

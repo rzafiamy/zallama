@@ -54,9 +54,8 @@ RERANK = "rerank"
 # rerank and lets the modality guard protect the endpoint.
 EMBEDDING = "embedding"
 # Machine translation (encoder-decoder, e.g. NLLB-200 on malaga). Its own
-# modality because the model can only translate: it serves /v1/translate, and
-# /v1/chat/completions only as "translate the last user message" (see
-# ENDPOINT_EXTRA_MODALITIES), never as a general chat model.
+# modality because the model can only translate: it serves /v1/translate and
+# nothing else (no chat), with an explicit source and target on every call.
 TRANSLATION = "translation"
 
 ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING, TRANSLATION}
@@ -111,13 +110,6 @@ ENDPOINT_MODALITY = {
     "images/edits": IMAGE,
     "rerank": RERANK,
     "translate": TRANSLATION,
-}
-
-# Modalities an endpoint accepts on top of its ENDPOINT_MODALITY one. A
-# translation backend answers /v1/chat/completions by translating the last user
-# message, so chat UIs and OpenAI clients can drive it unchanged.
-ENDPOINT_EXTRA_MODALITIES: dict[str, set[str]] = {
-    "chat/completions": {TRANSLATION},
 }
 
 
@@ -951,21 +943,18 @@ class SdServerBackend:
 # malaga backend (translation — NLLB-200 / M2M100 converted to GGUF)
 # ---------------------------------------------------------------------------
 class MalagaServerBackend:
-    """`malaga serve` (rzafiamy/malaga) — NLLB-200 translation, French/English
-    to Malagasy by default, on fused CUDA kernels (CPU and Metal also work).
+    """`malaga serve` (rzafiamy/malaga) — NLLB-200 translation on fused CUDA
+    kernels (CPU and Metal also work).
 
     Contract: `serve --model <gguf> --model-id --host --port`, GET /health
     (200 once the model is loaded *and* warmed up, so CUDA JIT and the first
-    graph capture land in the health-check, not the first request),
-    POST /v1/translate (native, batched: `text` or `texts`, `source`,
-    `target`, `beam_size`) and POST /v1/chat/completions (translates the last
-    user message; JSON or SSE).
+    graph capture land in the health-check, not the first request) and
+    POST /v1/translate (`text` or `texts`, `source`, `target`, `beam_size`).
 
-    The language pair comes from the body (`source` / `target`), else from the
-    *requested* model name (`malaga-fr-mg`, `malaga:en-mg`), else from the
-    `default_source` / `default_target` params. Since aliases resolve to the
-    same process, one entry with aliases per pair serves every direction.
-    Concurrent requests are merged into one GPU batch by malaga itself.
+    Zallama exposes only /v1/translate and requires `source` and `target` on
+    every call, checked against the entry's `languages` param (default
+    fr, en, mg — any direction between them). Concurrent requests are merged
+    into one GPU batch by malaga itself.
     """
     name = "malaga-server"
     binary_name = "malaga"

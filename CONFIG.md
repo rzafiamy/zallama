@@ -506,12 +506,9 @@ Source: `MalagaServerBackend`, wrapping `malaga serve` from
 GGUF). Build with `./build-malaga.sh`. Default backend for
 `modality: translation`, default eviction group `services`.
 
-Serves `/v1/translate` (`text` or `texts`, `source`, `target`, `beam_size`)
-and `/v1/chat/completions` (translates the last user message; content-part
-arrays are flattened to text before forwarding). The language pair comes
-from the body, else from the requested model name or alias
-(`malaga-en-mg`), else from `default_source` / `default_target` — so one
-entry with one alias per pair serves every direction from one process.
+Serves only `/v1/translate`: `source` and `target` are required on every
+call and must be two different codes from `languages`; `text` or `texts`,
+optional `beam_size`. `/v1/models` lists `languages` for translation models.
 
 | key | CLI flag | default |
 |---|---|---|
@@ -521,7 +518,7 @@ entry with one alias per pair serves every direction from one process.
 | `beam` | `--beam` (1 = greedy, fastest) | 1 |
 | `max_batch` | `--max-batch` (sentences decoded together) | 32 |
 | `max_new_tokens` | `--max-new-tokens` | 2 × source + 16, ≤ 200 |
-| `default_source` / `default_target` | `--default-source` / `--default-target` | `fr` / `mg` |
+| `languages` | — (zallama-side: codes accepted as `source` / `target`) | `[fr, en, mg]` |
 | `fast_vocab` | `--fast-vocab` (bool; Malagasy vocabulary shortlist — faster, **not exact**) | off |
 
 Everything else in `params` (including the global `ctx_size` defaults) is
