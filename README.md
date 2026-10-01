@@ -584,7 +584,7 @@ zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
 zallama bench --all --runs 5 --out bench.md
 ```
 
-Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `reasoning_effort`, `chat_template_kwargs`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`, `spec_draft_ngl`, `image_min_tokens`, `image_max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`.
+Anything llama-server takes is fair game: `ctx_size`, `reasoning`, `reasoning_effort`, `chat_template_kwargs`, `n_gpu_layers`, `threads`, `batch_size`, `ubatch_size`, `flash_attn`, `parallel`, `kv_unified`, `cache_type_k`, `cache_type_v`, `spec_type`, `spec_draft_n_max`, `spec_draft_ngl`, `image_min_tokens`, `image_max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repeat_penalty`.
 
 Measured results from past sweeps — settings tried, tok/s and VRAM they measured — are kept in the [Model Tuning Log](docs/tuning-log.md), so a config doesn't get re-benchmarked from scratch every session.
 

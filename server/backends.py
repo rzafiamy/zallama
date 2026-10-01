@@ -225,6 +225,13 @@ class LlamaServerBackend:
         # are a small fraction of most workloads), freeing the mmproj's own
         # footprint plus room in the shared VRAM pool for a larger ctx_size.
         "no_mmproj_offload": "--no-mmproj-offload",
+        # One KV buffer shared by every slot instead of ctx_size / parallel
+        # each. With it, `parallel` becomes a ceiling rather than a split: a
+        # lone request still gets the whole ctx_size, N short ones share it.
+        # llama.cpp only enables it by default when parallel is auto, so an
+        # explicit `parallel` needs this. Each extra slot still costs ~0.6 GB
+        # of per-sequence state (Qwen3.8-27B, measured) — bump mem_gb with it.
+        "kv_unified": "--kv-unified",
     }
     # Tri-state options that take on/off/auto in recent llama.cpp.
     _TRISTATE = {

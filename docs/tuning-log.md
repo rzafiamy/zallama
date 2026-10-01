@@ -33,6 +33,7 @@ flat index across all of them.
 | NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0 | nemotron_h_moe (hybrid MoE) | RTX 4090 24 GiB | Re-tune: **no speculation** (`spec_type`/`spec_draft_n_max` removed — was draft-mtp), `ctx_size 450560` (via `calibrate --probe --apply`), `batch_size 2048`, `ubatch_size 2048` (was 512), `cache_type_k/v q8_0`, `reasoning false` (was unset = thinking on: a "17 × 23?" ate all 400 max_tokens in reasoning_content and returned empty content) | **237.2 ±2.2** greedy on original prose; with MTP: n_max 1 → 247.3 (62% accept), 2 → 241/238 (48%), 3 → 221 (38%), 4 → 206 (30%), 6 → 161 (20%); prefill **5321** without MTP vs 4200 with, **8605** vs 7108 on a 3.6k prompt with ubatch 2048 | 21.0 GiB (2.5 GiB free) | 2026-09-12 | Goal: more speed, ctx ≥ 105k. Started the day picking `spec_draft_n_max 4` off 341–356 tok/s sweeps — every one of those was the model **copying the bench filler** (100% draft acceptance, see the bench note below); on text it has to write, MTP buys **+4 % at best** (n_max 1) for +2.1 GiB VRAM, −20 % prefill and +25 ms TTFT, and gets worse with every extra drafted token. Dropped it: A3B active weights are so cheap per token that verifying a draft costs what it saves. Without the draft context the KV slope is 7.9 KiB/token (was ~13 with it), so the full 450k fits with 2.5 GiB spare — more ctx *and* more free VRAM than the August 444416 entry. `ubatch_size` 2048 stays: +21 % prefill for +0.9 GiB, the one clean win. KV f16 vs q8_0: no consistent difference. Tool calling: declines a plain "what's the weather?" but calls `get_weather` fine when told to use it — `probe` prompts imperatively for that reason. |
 | Muse-Glimmer-30B-UD-Q4_K_XL (`muse-glimmer:30b`) | muse-glimmer (dense, SWA 39/52 layers) | RTX 4090 24 GiB | Re-tune: `ctx_size 131072` (full native, was 24576), `no_mmproj_offload` (new), `cache_type_k/v f16` (was q8_0), `spec_draft_n_max 2` (was 4), `spec_type draft-dflash` kept, `chat_template_kwargs '{"reasoning_strength":"low"}'` (new) | **82.3 ±2.0** honest @ n_max 2 (49% accept); n_max 1/2/3/4/8/16 → 70.6/82.3/80.3/79.3/67.7/68.7 at 65/49/34/29/16/10% accept. (Old copy-prompt: 107 @ n_max 3 f16, 99 q8_0.) | 18.8 GiB (4.8 GiB free) | 2026-09-12 | Goal: more speed, ctx ≥ 105k. The 24576 cap was never the KV: `sliding_window_pattern 4` → only 13 of 52 layers are full-attention, × 2 KV-heads × head_dim 128 = **~7 KiB/token** (q8_0), so the whole 131072 costs < 1 GiB. It was the **3.6 GiB BF16 mmproj** sitting in VRAM; `no_mmproj_offload` moves it to CPU and the full native ctx fits with ~5 GiB to spare. Real decode is ~80–82 tok/s, up from the 52.8 of August (llama.cpp's dflash path improved); the 107 first written here was copy-speed. DFlash draft length: 2 wins on real prose, 1 is clearly worse (fewer tokens per verify), ≥8 falls off a cliff as acceptance collapses. KV f16 measured +7 % on the copy-prompt; kept, it's 0.7 GiB on a model with this little KV. `ubatch_size` 1024/2048: no prefill gain (dense = compute-bound) and +1.1/+3.3 GiB, left at default. **Reasoning**: Harmony-style template (`<|start|>assistant to=self<|message|>…<|eom|>` then `to=user`); the model *always* opens the `to=self` channel and starts by echoing the user prompt into it, then thinks. `reasoning: false` is a no-op (no `<think>` toggle) — the only lever is the template's own `reasoning_strength` variable (default `high`): `low`/`none`/`minimal` all cut a "17 × 23?" from ~100 to 47 completion tokens; the prompt-echo residue stays. Wired as the `chat_template_kwargs` param. `probe`: answer 391 in 41 tokens, structured tool call, sees red. |
 | gemma-4-31B-it-Q4_K_M | gemma4 (dense, SWA 50/60 layers) | RTX 4090 24 GiB | Re-tune: `ctx_size 24576` (was 49152), `mem_gb 20.6` (was 22.2), `spec_type draft-mtp` + `spec_draft_n_max 3` with the external `mtp-gemma-4-31B-it-BF16.gguf` draft (0.9 GiB, added 2026-08-23 after the row above was written — the "no MTP" there is stale), `cache_type_k/v q8_0`, `no_mmproj_offload`, `reasoning false` | ~79 tok/s with MTP (64% accept on an 11k-prompt run in the log; 42 without) | 20.6 GiB (0.9 GiB free with 2.0 GiB of services resident) | 2026-09-12 | **Why it was re-tuned: it stopped loading.** 13 consecutive `died during startup` — every one an OOM on the *last* allocation, the MTP draft context's 520 MiB compute buffer. Nothing about the model changed; `tdt-0.6b-v3-q8_0` (parakeet, 1.4 GiB) had joined granite (0.7 GiB) in the always-resident services group, and the daemon can't evict services for a primary model, so it admitted the 22.2 GB declaration over budget and llama-server hit the wall. `calibrate --probe` measured **60.2 KiB/token all-in** (draft ctx + buffers) on a **20.1 GiB floor at ctx 16384** — so 49152 needs ~22.0 GiB for the model alone, which only ever fit when granite was the sole service. Ceiling next to 2 GiB of services: 24576 (0.9 GiB free), 28672 leaves 0.7. The alternative is dropping MTP (frees the 0.9 GiB draft + its context, ~1.5–2 GiB) to get back to ~48k at 42 tok/s — chose speed over context here: this model is picked for quality, and 79 vs 42 tok/s matters more day-to-day than 24k vs 48k. Flip with `zallama set gemma-4-31B-it-Q4_K_M spec_type= spec_draft_n_max= ctx_size=49152` and re-probe if long context is needed. General lesson: a primary model whose `mem_gb` sits within ~2 GiB of the card only fits until the next service model is registered — re-probe primaries whenever the services group grows. |
+| Qwen3.8-27B-Q4_K_M | qwen35 (hybrid) | RTX 4090 24 GiB | `ctx_size 98304`, `cache_type_k/v q4_0`, mmproj on GPU (`no_mmproj_offload: false`), `spec_type draft-mtp`, `spec_draft_n_max 3` | 81.8 (788-token image+text prompt, 36/67 accepted) | 20654 MiB (20.2 GiB), `mem_gb: 20.2` | 2026-09-28 | Replaces the q8_0 / CPU-mmproj / 108k entry. q4_0 KV ≈ 27 KiB/token (98304 → 20654 MiB, 131072 → 21550, 163840 → 22446, 196608 → 23342; 262144 won't load). Vision prefill 1187 tok/s vs ~143 with the CPU mmproj. **ctx is sized for `parakeet-tdt-v3-gpu` co-residency, not for Qwen alone:** parakeet's ONNX arena grows with chunk length, and with Qwen at 131072 + embedding (712 MiB) it OOMs (`BFCArena ... Failed to allocate`) on a 6-min file at the default `max_chunk_secs 120`, and even at 30. At 98304 with parakeet `max_chunk_secs: 60` a 19-min file transcribes in 5.5 s, repeatably; parakeet peak 2444 MiB (`mem_gb: 2.4`), card peak 23834 / 24564 MiB. Without parakeet, 163840 fits (22446 MiB). |
 
 **2026-08-15 — two calibrate/registry gaps found registering the above:**
 - `_gguf_arch_dims` (`zallama` CLI) assumed `attention.head_count_kv` is a scalar.
@@ -107,6 +108,59 @@ Tools added the same day so this stops being hand work:
 `zallama calibrate <m> --probe [--apply]` (bisect ctx_size by real loads,
 default margin = services budget), `zallama probe <m>` (does it think / call
 tools / see; which template switch it understands), `bench`'s `ACCEPT %`.
+
+## Two slots (`parallel=2`) on Qwen3.8-27B — 2026-10-01
+
+Does llama-server serve two requests at once, MTP included? Yes.
+`zallama bench Qwen3.8-27B-Q4_K_M --sweep parallel=1,2 -c 1,2 -p 2000 -n 256
+--runs 2 --temp 0.7` (RTX 4090, build 10434 `7e4c0a968`, ctx 98304, KV q4_0,
+`draft-mtp` n_max 3):
+
+| parallel | conc | TTFT ms | prefill t/s | decode t/s (per req) | ACCEPT % | TOTAL t/s (aggregate) | VRAM |
+|---|---|---|---|---|---|---|---|
+| 1 | 1 | 1000 | 2229 | 72.1 | 39 | 56.4 | 20.2 GiB |
+| 1 | 2 | 3195 ±2525 | 2221 | 72.8 | 40 | 56.9 | 20.2 GiB |
+| 2 | 1 | 1005 | 2215 | 70.3 | 37 | 55.3 | 20.7 GiB |
+| 2 | 2 | 1983 | 1119 | 50.9 | 36 | **72.0** | 20.7 GiB |
+| 4 | 4 | 3761 ±334 | 798 | 42.2 | 39 | **101.7** | 21.8 GiB |
+
+- With one slot the second request just queues (TTFT doubles, ±2.5 s).
+- Two slots: **+26 % aggregate throughput**, each request drops to ~51 tok/s
+  (−30 %). Single-request speed is unchanged (70 vs 72, noise). Cost: +0.5 GiB.
+- Four slots: **+80 % aggregate** (101.7 vs 56.4), 42 tok/s each, +1.6 GiB;
+  log `n_ctx_slot = 24576` — the static split is what makes `kv_unified` matter.
+- MTP works per slot (both `id 0` and `id 1` log draft acceptance ~0.31–0.42).
+- **The context is split:** log says `n_slots = 2, n_ctx_slot = 49152,
+  kv_unified = 'false'` — each request gets 98304/2. `--kv-unified` (one shared
+  buffer, a request may use the whole ctx) is not in the backend's `_FLAG_MAP`
+  yet, so Zallama can't turn it on today.
+
+**Dynamic, not fixed — with `--kv-unified`** (manual llama-server, same args +
+`--parallel 4 --kv-unified`): log `n_slots = 4, n_ctx_slot = 98304,
+kv_unified = 'true'`. A single **80,388-token** prompt ran fine (47.7 tok/s
+decode at that depth) — impossible with the 24,576 static split — then 4
+concurrent ~4k-token requests ran side by side. One request alone on a 4-slot
+server: 66.3 tok/s vs 72.1 on 1 slot (ACCEPT 33 vs 39 %, mostly sampling
+noise); prefill identical. So `parallel` becomes a *ceiling*, not an
+allocation: idle slots cost ~1.6 GiB VRAM and nothing in compute.
+
+VRAM per slot (manual llama-server, `--kv-unified`, idle after load, MTP + mmproj):
+
+| ctx \ parallel | 1 | 2 | 4 |
+|---|---|---|---|
+| 98304 | 20.16 GiB | 20.75 | 21.92 |
+| 81920 | 19.73 | 20.31 | 21.48 |
+| 65536 | 19.29 | 19.87 | 21.04 |
+
+≈ **0.58 GiB per extra slot** (recurrent state + MTP draft ctx, not KV — the
+unified KV size only follows ctx), ≈ 0.43 GiB per 16k of ctx. Against this
+box's budgets (global 23.8, `services` 2.5 → primary ceiling 21.3): p2 @ 98304
+fits, p4 needs ctx ≤ ~73728. `mem_gb` is static — set it with the params.
+
+Verdict: without `kv_unified`, extra slots halve (or quarter) every request's
+ctx for nothing when one user is alone. With it, `parallel=4` is the right
+default for a local multi-session client — needs `kv_unified` in the backend's
+`_FLAG_MAP` first.
 
 ## Image models
 

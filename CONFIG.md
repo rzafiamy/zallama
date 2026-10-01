@@ -209,6 +209,7 @@ Also covers vision (add an `mmproj` artifact) and any entry with
 | `mlock` | `--mlock` |
 | `no_mmap` | `--no-mmap` |
 | `embedding` | `--embedding` (legacy; prefer `modality: embedding`) |
+| `kv_unified` | `--kv-unified` — one KV buffer shared by all `parallel` slots, so a lone request still gets the full `ctx_size` instead of `ctx_size / parallel`; needed whenever `parallel` > 1 is set explicitly. Each extra slot still costs per-sequence VRAM (~0.6 GB on Qwen3.8-27B) — raise `mem_gb` with it |
 | `no_mmproj_offload` | `--no-mmproj-offload` — keeps the vision projector on CPU instead of VRAM; frees the mmproj's own footprint (and its compute buffers) for a larger `ctx_size`, at the cost of slower image encoding |
 
 ### Tri-state (`true`/`false`/`"on"`/`"off"`/`"auto"`)
