@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.23.1] - 2026-10-01
+
+### Changed
+- **Actionable startup-OOM errors** — when a backend dies during startup because it could
+  not allocate memory (CUDA/ggml `out of memory`, ONNX Runtime `Failed to allocate memory`,
+  …), the 503 body no longer says just "died during startup, check logs". It now gives the
+  backend's error line, free/total VRAM, the loaded models that could not be evicted for it
+  (with their size and group, or `pinned`), a warning that retrying will fail the same way,
+  and options: CPU variants of the same modality from the registry, or unloading the biggest
+  resident model through the admin API. Other startup deaths now include the log's last line.
+
+### Fixed
+- The "Capacity (…) reached — evicting" log line computed its reason after removing the
+  victim, so a memory eviction could be logged as `group '…' budget NoneGB`.
+
 ## [1.23.0] - 2026-10-01
 
 ### Added
@@ -695,7 +710,10 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.21.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.23.1...HEAD
+[1.23.1]: https://github.com/rzafiamy/zallama/compare/v1.23.0...v1.23.1
+[1.23.0]: https://github.com/rzafiamy/zallama/compare/v1.22.0...v1.23.0
+[1.22.0]: https://github.com/rzafiamy/zallama/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/rzafiamy/zallama/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/rzafiamy/zallama/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/rzafiamy/zallama/compare/v1.18.0...v1.19.0
