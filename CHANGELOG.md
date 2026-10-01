@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-10-01
+
+### Added
+- **Malagasy text-to-speech via malaga** — the `malaga-server` backend now also serves
+  `modality: tts`: given a `vits` GGUF (Meta MMS-TTS `facebook/mms-tts-mlg`, converted with
+  `malaga convert`, CC-BY-NC-4.0), malaga ≥ 0.2.0 answers `POST /v1/audio/speech` (WAV).
+  ~200x real time in f16 on an RTX 4090, 0.8 GB measured peak (bounded by chunked HiFi-GAN),
+  cold start ~0.2 s. malaga normalizes the text itself (numbers, units, symbols, acronyms,
+  foreign words) and floors vowel durations against choppy word endings.
+- New `malaga-server` params for TTS entries: `dtype` (auto = f16 on CUDA), `noise_scale`,
+  `noise_scale_duration`, `speaking_rate`, `pause_ms`, `phrase_pause_ms`, `vowel_floor_ms`,
+  `final_vowel_floor_ms`, and `lexicon` (a `word<TAB>respelling` file overriding malaga's
+  built-in pronunciations). Example entry `mms-tts-mlg` in `models/registry.example.yaml`.
+
 ## [1.22.0] - 2026-10-01
 
 ### Added
