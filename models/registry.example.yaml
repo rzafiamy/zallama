@@ -138,6 +138,22 @@ models:
       device: cuda
       languages: [fr, en, mg]
 
+  # --- TTS: Malagasy speech (Meta MMS-TTS on malaga) ----------------------------
+  # facebook/mms-tts-mlg (VITS, CC-BY-NC-4.0 — non-commercial) converted with
+  #   malaga convert --hf <hf-dir> -o mms-tts-mlg-f16.gguf      (f16 by default)
+  # Same `malaga` binary as above; it serves POST /v1/audio/speech when handed
+  # a vits GGUF. ~200x real time on a 4090 (f16); one pass per sentence.
+  - name: mms-tts-mlg
+    file: mms-tts-mlg-f16.gguf
+    modality: tts
+    backend: malaga-server
+    description: "MMS-TTS Malagasy (VITS, 16 kHz, single voice)"
+    mem_gb: 0.8        # measured peak incl. CUDA context; bounded by chunked HiFi-GAN
+                       # not pinned: cold start is ~0.2 s (53 ms load + warm-up)
+    params:
+      device: cuda
+      dtype: auto      # f16 on CUDA
+
   # --- RAG: embedding model ---------------------------------------------------
   # Runs llama-server in --embedding mode via the embedding-server backend and
   # serves POST /v1/embeddings. zvec uses this to embed & search documents; set

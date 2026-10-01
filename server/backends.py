@@ -962,10 +962,16 @@ class MalagaServerBackend:
     every call, checked against the entry's `languages` param (default
     fr, en, mg — any direction between them). Concurrent requests are merged
     into one GPU batch by malaga itself.
+
+    The same binary also serves text-to-speech: given a `vits` GGUF (Meta
+    MMS-TTS, e.g. facebook/mms-tts-mlg converted with `malaga convert`),
+    `malaga serve` exposes POST /v1/audio/speech (OpenAI shape, WAV out)
+    instead. Register such an entry with `modality: tts`. `voice` is ignored
+    (single speaker); `speed` maps to the speaking rate.
     """
     name = "malaga-server"
     binary_name = "malaga"
-    modalities = {TRANSLATION}
+    modalities = {TRANSLATION, TTS}
 
     # Params that take a value: registry/config key -> CLI flag.
     _PARAM_MAP = {
@@ -977,6 +983,12 @@ class MalagaServerBackend:
         "max_new_tokens": "--max-new-tokens",
         "default_source": "--default-source",
         "default_target": "--default-target",
+        # TTS (vits GGUF) only. dtype: auto (f16 on CUDA) | f32 | f16.
+        "dtype": "--dtype",
+        "noise_scale": "--noise-scale",
+        "noise_scale_duration": "--noise-scale-duration",
+        "speaking_rate": "--speaking-rate",
+        "pause_ms": "--pause-ms",
     }
 
     def build_args(
