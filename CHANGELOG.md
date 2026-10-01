@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-10-01
+
+### Added
+- **`kv_unified` param** (`--kv-unified`) — every `parallel` slot shares one KV buffer
+  instead of getting `ctx_size / parallel` each, so `parallel` becomes a ceiling rather
+  than a split: a lone request still gets the full `ctx_size`, concurrent ones share it.
+  llama.cpp only turns it on by itself when `parallel` is auto, so an explicit `parallel`
+  needs it. Measured on Qwen3.8-27B (RTX 4090, MTP on): 2 slots = +26 % aggregate
+  throughput, 4 slots = +80 %, single-request speed unchanged; each extra slot costs
+  ~0.6 GB of per-sequence state, so raise `mem_gb` with it. Numbers in
+  `docs/tuning-log.md`.
+
 ## [1.21.0] - 2026-10-01
 
 ### Changed
