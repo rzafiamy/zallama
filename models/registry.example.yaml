@@ -153,6 +153,11 @@ models:
     params:
       device: cuda
       dtype: auto      # f16 on CUDA
+      # Malagasy front-end (numbers, units, symbols, foreign words) is built in;
+      # this file adds / overrides pronunciations: word<TAB>respelling per line.
+      # lexicon: /path/to/mms-tts-mlg.lexicon.tsv
+      # vowel_floor_ms: 45          # anti-"choppy" vowel floors (0 = model as is)
+      # final_vowel_floor_ms: 65
 
   # --- RAG: embedding model ---------------------------------------------------
   # Runs llama-server in --embedding mode via the embedding-server backend and

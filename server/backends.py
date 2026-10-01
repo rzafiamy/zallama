@@ -989,6 +989,11 @@ class MalagaServerBackend:
         "noise_scale_duration": "--noise-scale-duration",
         "speaking_rate": "--speaking-rate",
         "pause_ms": "--pause-ms",
+        "phrase_pause_ms": "--phrase-pause-ms",
+        "vowel_floor_ms": "--vowel-floor-ms",
+        "final_vowel_floor_ms": "--final-vowel-floor-ms",
+        # word<TAB>respelling file, overrides malaga's built-in lexicon.
+        "lexicon": "--lexicon",
     }
 
     def build_args(
