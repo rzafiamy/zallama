@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-10-01
+
 ### Added
 - **`translation` modality and `malaga-server` backend** — NLLB-200 machine translation via
   [malaga](https://github.com/rzafiamy/malaga) (GGUF, fused CUDA kernels), tuned for
@@ -657,7 +659,9 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.18.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.20.0...HEAD
+[1.20.0]: https://github.com/rzafiamy/zallama/compare/v1.19.0...v1.20.0
+[1.19.0]: https://github.com/rzafiamy/zallama/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/rzafiamy/zallama/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/rzafiamy/zallama/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/rzafiamy/zallama/compare/v1.16.0...v1.17.0
