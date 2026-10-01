@@ -53,6 +53,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
 - [Text-to-Speech (TTS)](#-text-to-speech-tts)
 - [Image Generation (Stable Diffusion)](#-image-generation-stable-diffusion)
+- [Translation (malaga)](#-translation-malaga)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
 - [RAG: Reranking & the zvec Vector Store](#-rag-reranking--the-zvec-vector-store)
 - [OpenAI API Integration](#-openai-api-integration)
@@ -75,6 +76,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 👁️ **Vision** | Attach an `mmproj` projector and send images straight through `/v1/chat/completions`. |
 | 🎙️ **Speech-to-text** | `/v1/audio/transcriptions`, any input format auto-transcoded via `ffmpeg`, multilingual models supported. |
 | 🎨 **Image Generation** | `/v1/images/generations` and `/v1/images/edits` powered by `sd-server` (stable-diffusion.cpp), plus `zallama generate` CLI. |
+| 🌍 **Translation** | `/v1/translate` (batched) and `/v1/chat/completions` on NLLB-200 via `malaga` — French/English → Malagasy in ~10 ms per sentence. |
 | 🔎 **RAG, built in** | A reranker at `/v1/rerank` plus **zvec**, an embedded HNSW vector store — no external vector DB to run. |
 | 🧩 **Pluggable backends** | Each model declares a `modality` + `backend`; new engines slot in without touching the core. |
 | ⚙️ **Config, not code** | Context size, GPU offload, batching — all YAML, all per-model, all hot-reloadable. |
@@ -82,7 +84,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🧠 **Memory awareness** | Set a `mem_budget_gb` and Zallama evicts least-recently-used models to make room — automatically. |
 | 🔒 **Locked down by default** | Binds to `127.0.0.1`, optional Bearer-token auth, sane timeouts out of the box. |
 
-Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, `sd-server`), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, `image`); new modalities are added as new backends, not as changes scattered across the codebase.
+Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, `sd-server`, `malaga`), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, `image`, `translation`); new modalities are added as new backends, not as changes scattered across the codebase.
 
 ---
 
@@ -116,6 +118,9 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 # stable-diffusion.cpp (Image generation) — requires a release tag/branch name
 ./build-ggml-stable-diffusion.cpp.sh master
+
+# malaga (translation, NLLB-200; needs cargo + nvcc, or --cpu)
+./build-malaga.sh
 
 # Optional: a third-party llama.cpp fork, as a separate llama-fork-server binary
 ./build-llamacpp-fork.sh https://github.com/PrismML-Eng/llama.cpp prism
@@ -517,7 +522,7 @@ models:
 > **Applying changes:** The registry reloads from disk automatically, so adding, editing, or removing an entry takes effect on the next request — no daemon restart. The one exception is a model that's **already running**: its `llama-server` keeps the params it launched with, so run `zallama reload <name>` to restart it with the new params. (Changes to `config.yaml` are read only at startup and do require `systemctl restart zallama`.)
 
 Each entry may declare:
-- **`modality`** — `text` (default), `embedding`, `rerank`, `asr`, `tts`, or the planned `image`. Determines which endpoints the model may serve; requests to a mismatched endpoint return a clear `400`. (Legacy embedding models registered as `text` with `params: embedding: true` are still treated as `embedding` at runtime.)
+- **`modality`** — `text` (default), `embedding`, `rerank`, `asr`, `tts`, `image` or `translation`. Determines which endpoints the model may serve; requests to a mismatched endpoint return a clear `400`. (Legacy embedding models registered as `text` with `params: embedding: true` are still treated as `embedding` at runtime.)
 - **`backend`** — which engine runs the model (default `llama-server`). New backends resolve their own binary from `./bin/<name>`, `~/.zallama/bin/<name>`, or `PATH`.
 - **`artifacts`** — extra files beyond the primary GGUF (e.g. `mmproj` for vision, and — for future backends — vocoders, etc.). Paths are absolute or relative to `models_dir`.
 - **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size — an estimate that is frequently off by 100% or more, so [measure it](docs/vram-planning.md#measuring-what-a-model-actually-costs).
@@ -1074,11 +1079,63 @@ The OpenAI SDK works unchanged: `client.images.edit(model="qwen-image:2.1", imag
 
 ---
 
+## 🌍 Translation (malaga)
+
+Machine translation runs on the **`malaga-server`** backend: [malaga](https://github.com/rzafiamy/malaga)
+serves Meta's NLLB-200 (encoder-decoder, which llama.cpp cannot run) converted to GGUF, with fused CUDA
+kernels and CUDA Graphs. Tuned for French / English → Malagasy, but any NLLB-200 pair works
+(`mg → fr`, `deu_Latn`, …). Models declare `modality: translation`.
+
+**1. Build** (installs `bin/malaga`; needs `cargo` and, for the GPU build, `nvcc`):
+```bash
+./build-malaga.sh            # or --cpu; MALAGA_SRC=/path/to/checkout to build a local tree
+```
+
+**2. Get a model** — in a malaga checkout, `scripts/download.sh 600M` downloads NLLB-200 distilled 600M
+and converts it; copy `models/gguf/nllb-200-distilled-600M-q4_k_m.gguf` into your models dir.
+`q4_k_m` is the recommended preset: fastest, and FLORES-200 quality identical to f32.
+
+**3. Register** — one entry, one process; each alias names a language pair:
+```yaml
+  - name: malaga
+    file: nllb-200-distilled-600M-q4_k_m.gguf
+    modality: translation
+    backend: malaga-server
+    mem_gb: 1.6
+    aliases: [malaga-fr-mg, malaga-en-mg, malaga-mg-fr]
+    params:
+      device: cuda
+      default_source: fr
+      default_target: mg
+```
+(`zallama add malaga /path/to/nllb-…gguf` detects `nllb`/`malaga` in the name and sets the modality.)
+
+**4. Translate** — `POST /v1/translate` takes one `text` or a batch of `texts`:
+```bash
+curl -s http://localhost:11435/v1/translate -H 'content-type: application/json' \
+  -d '{"model": "malaga-en-mg", "texts": ["Good morning.", "Where is the market?"]}'
+# {"translation":["Tsara ny maraina.","Aiza ny tsena?"],"source":"en","target":"mg","model":"malaga-en-mg","elapsed_ms":10.3}
+```
+The pair is resolved from `source` / `target` in the body (`fr`, `en`, `mg`, `français`, or an NLLB code
+like `fra_Latn`), else from the requested name (`malaga-en-mg`, `malaga:mg-fr`), else from the entry's
+`default_source` / `default_target`. The response's `translation` is a list exactly when the input was.
+
+Chat clients work unchanged: `/v1/chat/completions` (JSON or `stream: true`) on a translation model
+translates the **last user message** — it is not a conversational model, and other endpoints return
+`400`. Concurrent requests are merged into one GPU batch.
+
+Measured on an RTX 4090 through zallama (q4_k_m): cold start 1.6 s including CUDA warm-up, ~10 ms for a
+short sentence, 64 long sentences in 0.26 s. VRAM is 1.0 GB idle and peaks at 1.6 GB on large batches of
+long sentences, hence `mem_gb: 1.6`. Translation defaults to the `services` eviction group.
+Every `params` key: [CONFIG.md](CONFIG.md#translation-backend-malaga-server).
+
+---
+
 ## 🧩 Backends & Modalities (Architecture)
 
 Zallama separates the **generic process lifecycle** (spawn, health-check, port assignment, LRU eviction, kill) from **engine-specific logic** (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a `Backend` abstraction in [`server/backends.py`](server/backends.py).
 
-This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation and editing (`/v1/images/generations`, `/v1/images/edits`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
+This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation and editing (`/v1/images/generations`, `/v1/images/edits`); `MalagaServerBackend` covers translation (`/v1/translate`, plus `/v1/chat/completions` for translation models). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
 
 ---
 

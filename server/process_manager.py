@@ -26,7 +26,7 @@ from pathlib import Path
 
 import httpx
 
-from .backends import ASR, EMBEDDING, IMAGE, RERANK, TEXT, TTS, Backend, get_backend
+from .backends import ASR, EMBEDDING, IMAGE, RERANK, TEXT, TRANSLATION, TTS, Backend, get_backend
 from .config import resolve_binary
 
 logger = logging.getLogger("zallama.process_manager")
@@ -226,6 +226,7 @@ class ProcessManager:
         EMBEDDING: "services",
         RERANK: "services",
         TTS: "services",
+        TRANSLATION: "services",
     }
 
     @classmethod

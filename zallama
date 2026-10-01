@@ -558,8 +558,8 @@ def cmd_add(args: list[str]):
             
     if len(filtered_args) < 2:
         _err("Usage: zallama add <name> <path-to-model.gguf> [description] [--mmproj <path-to-mmproj.gguf>] [--modality <modality>] [--backend <backend>]")
-        _info("Supported modalities: text, embedding, rerank, asr, tts, image")
-        _info("Supported backends: llama-server, embedding-server, rerank-server, parakeet-server, kokoro-server, sd-server")
+        _info("Supported modalities: text, embedding, rerank, asr, tts, image, translation")
+        _info("Supported backends: llama-server, embedding-server, rerank-server, parakeet-server, kokoro-server, sd-server, malaga-server")
         _info("Vision example: zallama add qwen2.5-vl model.gguf --mmproj mmproj.gguf")
         _info("Tip: set --modality only; the matching backend is auto-selected.")
         sys.exit(1)
@@ -586,6 +586,9 @@ def cmd_add(args: list[str]):
         elif "kokoro" in file_path.lower() or "kokoro" in name.lower():
             modality = "tts"
             backend = "kokoro-server"
+        elif any(k in f"{name} {file_path}".lower() for k in ("nllb", "malaga")):
+            modality = "translation"
+            backend = "malaga-server"
         else:
             # Match "sd"/"sdxl" as a *token*, not a substring: a plain `in` test
             # would tag every model whose name merely contains "sd" (mistral-sdk,
@@ -624,7 +627,7 @@ def cmd_set(args: list[str]):
         _info("  zallama set my-model evict_group=none          # reset to the modality default group")
         _info("  zallama set my-model evict_group=              # opt out of grouping entirely")
         _info("Special keys (entry-level, not llama-server params): modality "
-              "(text|embedding|rerank|asr|tts|image), backend, mem_gb, pinned, "
+              "(text|embedding|rerank|asr|tts|image|translation), backend, mem_gb, pinned, "
               "evict_group, description.")
         sys.exit(1)
 

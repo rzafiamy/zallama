@@ -499,6 +499,41 @@ them — these are **not** CLI flags:
 
 ---
 
+## `translation` (backend: `malaga-server`)
+
+Source: `MalagaServerBackend`, wrapping `malaga serve` from
+[rzafiamy/malaga](https://github.com/rzafiamy/malaga) (NLLB-200 / M2M100 in
+GGUF). Build with `./build-malaga.sh`. Default backend for
+`modality: translation`, default eviction group `services`.
+
+Serves `/v1/translate` (`text` or `texts`, `source`, `target`, `beam_size`)
+and `/v1/chat/completions` (translates the last user message; content-part
+arrays are flattened to text before forwarding). The language pair comes
+from the body, else from the requested model name or alias
+(`malaga-en-mg`), else from `default_source` / `default_target` — so one
+entry with one alias per pair serves every direction from one process.
+
+| key | CLI flag | default |
+|---|---|---|
+| `device` | `--device` (`auto`, `cpu`, `cuda`, `metal`) | `auto` |
+| `device_id` | `--device-id` | 0 |
+| `threads` | `--threads` (CPU inference and tokenization) | all cores |
+| `beam` | `--beam` (1 = greedy, fastest) | 1 |
+| `max_batch` | `--max-batch` (sentences decoded together) | 32 |
+| `max_new_tokens` | `--max-new-tokens` | 2 × source + 16, ≤ 200 |
+| `default_source` / `default_target` | `--default-source` / `--default-target` | `fr` / `mg` |
+| `fast_vocab` | `--fast-vocab` (bool; Malagasy vocabulary shortlist — faster, **not exact**) | off |
+
+Everything else in `params` (including the global `ctx_size` defaults) is
+ignored. `MALAGA_GRAPH_CACHE_MB` (CUDA graph budget, default 512) is read
+from the daemon's environment.
+
+`mem_gb`: q4_k_m on CUDA uses 1.0 GB idle and peaks at 1.6 GB on batches of
+long sentences (measured, RTX 4090); q8_0 needs ~0.2 GB more. `device: cpu`
+uses no VRAM — leave `mem_gb` unset — but is ~50× slower.
+
+---
+
 ## Daemon-wide config (`config.yaml`, not per-model)
 
 Not part of the registry, but the other half of the merge chain — see

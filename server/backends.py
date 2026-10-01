@@ -17,6 +17,7 @@ as *new Backend subclasses* rather than as cross-cutting changes:
   - ParakeetRsServerBackend → ASR + diarization (parakeet-rs-server)
   - KokoroServerBackend   → TTS        (kokoro-server)
   - SdServerBackend       → image gen  (sd-server / stable-diffusion.cpp)
+  - MalagaServerBackend   → translation (malaga serve, NLLB-200 GGUF)
 
 Each backend declares:
   - binary_name:   the executable to look for (./bin/<name>, ~/.zallama/bin, PATH)
@@ -52,8 +53,13 @@ RERANK = "rerank"
 # /v1/chat/completions. Modelling it as its own modality keeps it symmetric with
 # rerank and lets the modality guard protect the endpoint.
 EMBEDDING = "embedding"
+# Machine translation (encoder-decoder, e.g. NLLB-200 on malaga). Its own
+# modality because the model can only translate: it serves /v1/translate, and
+# /v1/chat/completions only as "translate the last user message" (see
+# ENDPOINT_EXTRA_MODALITIES), never as a general chat model.
+TRANSLATION = "translation"
 
-ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING}
+ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING, TRANSLATION}
 
 # Default backend for each modality. This is the canonical "which engine serves
 # this modality" map; the downloader and the model-management API both resolve
@@ -67,6 +73,7 @@ MODALITY_BACKEND: dict[str, str | None] = {
     ASR: "parakeet-server",
     TTS: "kokoro-server",
     IMAGE: "sd-server",
+    TRANSLATION: "malaga-server",
 }
 
 
@@ -103,6 +110,14 @@ ENDPOINT_MODALITY = {
     "images/generations": IMAGE,
     "images/edits": IMAGE,
     "rerank": RERANK,
+    "translate": TRANSLATION,
+}
+
+# Modalities an endpoint accepts on top of its ENDPOINT_MODALITY one. A
+# translation backend answers /v1/chat/completions by translating the last user
+# message, so chat UIs and OpenAI clients can drive it unchanged.
+ENDPOINT_EXTRA_MODALITIES: dict[str, set[str]] = {
+    "chat/completions": {TRANSLATION},
 }
 
 
@@ -933,6 +948,70 @@ class SdServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# malaga backend (translation — NLLB-200 / M2M100 converted to GGUF)
+# ---------------------------------------------------------------------------
+class MalagaServerBackend:
+    """`malaga serve` (rzafiamy/malaga) — NLLB-200 translation, French/English
+    to Malagasy by default, on fused CUDA kernels (CPU and Metal also work).
+
+    Contract: `serve --model <gguf> --model-id --host --port`, GET /health
+    (200 once the model is loaded *and* warmed up, so CUDA JIT and the first
+    graph capture land in the health-check, not the first request),
+    POST /v1/translate (native, batched: `text` or `texts`, `source`,
+    `target`, `beam_size`) and POST /v1/chat/completions (translates the last
+    user message; JSON or SSE).
+
+    The language pair comes from the body (`source` / `target`), else from the
+    *requested* model name (`malaga-fr-mg`, `malaga:en-mg`), else from the
+    `default_source` / `default_target` params. Since aliases resolve to the
+    same process, one entry with aliases per pair serves every direction.
+    Concurrent requests are merged into one GPU batch by malaga itself.
+    """
+    name = "malaga-server"
+    binary_name = "malaga"
+    modalities = {TRANSLATION}
+
+    # Params that take a value: registry/config key -> CLI flag.
+    _PARAM_MAP = {
+        "device": "--device",
+        "device_id": "--device-id",
+        "threads": "--threads",
+        "beam": "--beam",
+        "max_batch": "--max-batch",
+        "max_new_tokens": "--max-new-tokens",
+        "default_source": "--default-source",
+        "default_target": "--default-target",
+    }
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [
+            binary, "serve",
+            "--model", str(model_path),
+            "--model-id", entry["name"],
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+        for key, flag in self._PARAM_MAP.items():
+            if merged_params.get(key) not in (None, ""):
+                args += [flag, str(merged_params[key])]
+        # Opt-in, not exact: decodes over a Malagasy vocabulary shortlist.
+        if merged_params.get("fast_vocab"):
+            args.append("--fast-vocab")
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # Registry of backends
 # ---------------------------------------------------------------------------
 _BACKENDS: dict[str, Backend] = {
@@ -946,6 +1025,7 @@ _BACKENDS: dict[str, Backend] = {
     KokoroServerBackend.name: KokoroServerBackend(),
     VoxtralTtsServerBackend.name: VoxtralTtsServerBackend(),
     SdServerBackend.name: SdServerBackend(),
+    MalagaServerBackend.name: MalagaServerBackend(),
 }
 
 DEFAULT_BACKEND = LlamaServerBackend.name

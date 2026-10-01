@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`translation` modality and `malaga-server` backend** — NLLB-200 machine translation via
+  [malaga](https://github.com/rzafiamy/malaga) (GGUF, fused CUDA kernels), tuned for
+  French / English → Malagasy. New **`POST /v1/translate`** (one `text` or a batch of
+  `texts`); `/v1/chat/completions` also accepts translation models and translates the last
+  user message. The language pair comes from the body, else from the requested name, so one
+  entry with aliases `malaga-fr-mg`, `malaga-en-mg`… serves every direction from one process.
+  ~10 ms per sentence on an RTX 4090, 1.6 GB peak VRAM in q4_k_m. Built by the new
+  `build-malaga.sh`; `zallama add` detects `nllb`/`malaga` model files.
+
 ## [1.19.0] - 2026-09-25
 
 ### Added

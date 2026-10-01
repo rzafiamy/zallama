@@ -124,6 +124,23 @@ models:
       diarization_device: cpu   # 0.45 GB less VRAM; 57x instead of 101x realtime
       threads: 8
 
+  # --- Translation: malaga (NLLB-200) ----------------------------------------
+  # French/English -> Malagasy (any NLLB-200 pair works) on POST /v1/translate,
+  # and on /v1/chat/completions (translates the last user message). Build with
+  # build-malaga.sh; the GGUF comes from malaga's scripts/download.sh 600M.
+  # One process serves every pair: the alias picks the direction.
+  - name: malaga
+    file: nllb-200-distilled-600M-q4_k_m.gguf
+    modality: translation
+    backend: malaga-server
+    description: "NLLB-200 600M q4_k_m translation (fr/en -> mg)"
+    aliases: [malaga-fr-mg, malaga-en-mg, malaga-mg-fr]
+    mem_gb: 1.6        # measured peak on 64 long sentences; 1.0 GB idle
+    params:
+      device: cuda
+      default_source: fr
+      default_target: mg
+
   # --- RAG: embedding model ---------------------------------------------------
   # Runs llama-server in --embedding mode via the embedding-server backend and
   # serves POST /v1/embeddings. zvec uses this to embed & search documents; set
