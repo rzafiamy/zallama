@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-10-01
+
 ### Changed
 - **Translation is `/v1/translate` only, with explicit languages** — `source` and `target`
   are now required on every call and checked against the entry's new `languages` param
@@ -667,7 +669,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.20.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.21.0...HEAD
+[1.21.0]: https://github.com/rzafiamy/zallama/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/rzafiamy/zallama/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/rzafiamy/zallama/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/rzafiamy/zallama/compare/v1.17.1...v1.18.0
