@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import signal
 import socket
 import time
@@ -30,6 +31,27 @@ from .backends import ASR, EMBEDDING, IMAGE, RERANK, TEXT, TRANSLATION, TTS, Bac
 from .config import resolve_binary
 
 logger = logging.getLogger("zallama.process_manager")
+
+# Substrings (lowercased) that mark an allocation failure in a backend's startup
+# log: CUDA/ggml ("out of memory", "cudaMalloc failed"), ONNX Runtime's BFC
+# arena ("Failed to allocate memory"), torch/stable-diffusion variants.
+_OOM_MARKERS = (
+    "out of memory",
+    "failed to allocate",
+    "unable to allocate",
+    "cudamalloc failed",
+    "cuda_error_out_of_memory",
+    "error_out_of_device_memory",
+)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class BackendOOMError(RuntimeError):
+    """A backend died during startup because it could not allocate memory.
+
+    Retrying the same request is pointless until memory is freed, so the
+    message spells out what is resident and what the caller can do instead.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -589,8 +611,9 @@ class ProcessManager:
                     f"admitting incoming {incoming_cost:.1f}GB over budget."
                 )
                 break
-            victim = self._instances.pop(victim_name)
+            # Decide the reason before popping: afterwards the check may no longer hold.
             reason = "count" if over_count() else ("memory" if over_mem() else f"group '{incoming_group}' budget {group_budget}GB")
+            victim = self._instances.pop(victim_name)
             logger.info(
                 f"Capacity ({reason}) reached — evicting LRU model "
                 f"'{victim_name}' ({victim.mem_gb:.1f}GB) to make room "
@@ -653,6 +676,12 @@ class ProcessManager:
 
         port = self._next_port()
         log_path = self.logs_dir / f"{model_name.replace(':', '_')}.log"
+        # The log is appended across spawns; remember where this run starts so
+        # a startup failure is diagnosed from this run's output only.
+        try:
+            log_offset = log_path.stat().st_size
+        except OSError:
+            log_offset = 0
         args = backend.build_args(binary, port, model_path, entry, merged, artifacts)
 
         logger.info(f"Spawning {backend.name} for '{model_name}' on port {port}")
@@ -680,7 +709,7 @@ class ProcessManager:
         )
 
         try:
-            await self._wait_healthy(inst)
+            await self._wait_healthy(inst, log_offset)
         except Exception:
             self.lifecycle["start_failure"][model_name] += 1
             raise
@@ -688,7 +717,7 @@ class ProcessManager:
         logger.info(f"Model '{model_name}' is ready on port {port}")
         return inst
 
-    async def _wait_healthy(self, inst: ModelInstance):
+    async def _wait_healthy(self, inst: ModelInstance, log_offset: int = 0):
         """Poll the backend's health path until the server is ready."""
         health_url = f"{inst.base_url}{inst.backend.health_path()}"
         timeout = self._startup_timeout * getattr(
@@ -698,10 +727,7 @@ class ProcessManager:
         async with httpx.AsyncClient(timeout=2.0) as client:
             while time.time() < deadline:
                 if not inst.is_alive():
-                    raise RuntimeError(
-                        f"{inst.backend.name} for '{inst.name}' died during startup. "
-                        f"Check logs: {inst.log_file}"
-                    )
+                    raise self._startup_failure(inst, log_offset)
                 try:
                     r = await client.get(health_url)
                     if r.status_code == 200:
@@ -715,6 +741,110 @@ class ProcessManager:
             f"{inst.backend.name} for '{inst.name}' did not become healthy within "
             f"{timeout:.0f}s. Check logs: {inst.log_file}"
         )
+
+    @staticmethod
+    def _startup_log_lines(inst: ModelInstance, log_offset: int) -> list[str]:
+        """Non-empty, ANSI-stripped lines this spawn wrote to its log (last 64KB)."""
+        try:
+            with open(inst.log_file, "rb") as f:
+                f.seek(max(log_offset, inst.log_file.stat().st_size - 65536))
+                text = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return []
+        return [ln for ln in (_ANSI_RE.sub("", l).strip() for l in text.splitlines()) if ln]
+
+    @staticmethod
+    def _gpu_free_total_gb() -> tuple[float, float] | None:
+        """(free, total) GB on the first GPU via nvidia-smi, or None."""
+        import shutil
+        import subprocess
+
+        if shutil.which("nvidia-smi") is None:
+            return None
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=memory.free,memory.total",
+                 "--format=csv,noheader,nounits"],
+                text=True, timeout=5,
+            )
+            free, total = (float(x) for x in out.strip().splitlines()[0].split(","))
+        except Exception:
+            return None
+        return free / 1024.0, total / 1024.0
+
+    def _startup_failure(self, inst: ModelInstance, log_offset: int) -> RuntimeError:
+        """Build the error for a backend that exited before becoming healthy.
+
+        Callers (often agents) only see this message in the 503 body, so it
+        carries the backend's own last error line and, for an out-of-memory
+        death, what is holding the memory and which alternatives exist —
+        instead of a bare "check logs" that invites blind retries.
+        """
+        lines = self._startup_log_lines(inst, log_offset)
+        oom_lines = [ln for ln in lines if any(m in ln.lower() for m in _OOM_MARKERS)]
+        head = f"{inst.backend.name} for '{inst.name}' died during startup"
+        if not oom_lines:
+            last = f" Last log line: {lines[-1][:400]}" if lines else ""
+            return RuntimeError(f"{head}.{last} Full log: {inst.log_file}")
+
+        on_cpu = str(self.merged_params(inst.entry).get("device", "")).lower() == "cpu"
+        where = "system RAM" if on_cpu else "GPU memory"
+        parts = [f"{head}: out of {where} (needs ~{inst.mem_gb:.1f} GB)."]
+        gpu = None if on_cpu else self._gpu_free_total_gb()
+        if gpu is not None:
+            parts.append(f"GPU has {gpu[0]:.1f} GB free of {gpu[1]:.1f} GB.")
+        err = oom_lines[-1]
+        # Long ONNX/CUDA lines put the useful part ("Failed to allocate ...") at the end.
+        parts.append(f"Backend error: {err if len(err) <= 300 else '...' + err[-300:]}")
+
+        group = self.evict_group_of(inst.entry)
+        by_pid = self._gpu_used_by_pid()
+        resident = []
+        for name, other in self._instances.items():
+            if name == inst.name or not other.is_alive():
+                continue
+            other_group = self.evict_group_of(other.entry)
+            pinned = self._is_pinned(other.entry)
+            if group is not None and other_group == group and not pinned:
+                continue  # same group: was evictable, so not what blocked it
+            vram = self._vram_for_instance(other, by_pid)
+            gb = vram if vram is not None else other.mem_gb
+            why = "pinned" if pinned else f"group '{other_group}'"
+            resident.append((gb, name, f"'{name}' ({gb:.1f} GB, {why})"))
+        if resident:
+            resident.sort(reverse=True)
+            parts.append(
+                f"Loaded models it could not evict (it is in group '{group}'): "
+                + ", ".join(d for _, _, d in resident) + "."
+            )
+
+        parts.append("Retrying the same request will fail the same way until memory is freed.")
+        options = []
+        try:
+            from .dependencies import get_registry  # local import to avoid cycle
+            from .model_registry import ModelRegistry  # local import to avoid cycle
+
+            modality = ModelRegistry.modality_of(inst.entry)
+            cpu_alts = [
+                e["name"] for e in get_registry().list_models()
+                if e.get("name") != inst.name
+                and ModelRegistry.modality_of(e) == modality
+                and str(self.merged_params(e).get("device", "")).lower() == "cpu"
+            ]
+        except Exception:
+            cpu_alts = []
+        if cpu_alts and not on_cpu:
+            options.append("use a CPU model instead: " + ", ".join(f"'{n}'" for n in cpu_alts))
+        if resident:
+            admin_port = self.cfg.get("zallama", {}).get("admin_port")
+            options.append(
+                f"free memory by unloading a model via the admin API "
+                f"(POST /api/models/{resident[0][1]}/unload on port {admin_port}), then retry"
+            )
+        if options:
+            parts.append("Options: " + "; ".join(options) + ".")
+        parts.append(f"Full log: {inst.log_file}")
+        return BackendOOMError(" ".join(parts))
 
     async def _kill_instance(self, inst: ModelInstance, drain_timeout: float = 0.0):
         """Gracefully terminate a process group.
