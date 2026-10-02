@@ -19,6 +19,7 @@ as *new Backend subclasses* rather than as cross-cutting changes:
   - PocketTtsServerBackend→ TTS        (pocket-tts serve, Pocket TTS GGUF)
   - SdServerBackend       → image gen  (sd-server / stable-diffusion.cpp)
   - MalagaServerBackend   → translation (malaga serve, NLLB-200 GGUF)
+  - TnServerBackend       → normalization (tn-server, text for TTS)
 
 Each backend declares:
   - binary_name:   the executable to look for (./bin/<name>, ~/.zallama/bin, PATH)
@@ -58,8 +59,12 @@ EMBEDDING = "embedding"
 # modality because the model can only translate: it serves /v1/translate and
 # nothing else (no chat), with an explicit source and target on every call.
 TRANSLATION = "translation"
+# Text normalization for speech (tn-server): numbers, dates, amounts and
+# Markdown to words. Serves /v1/normalize; the TTS route calls it before the
+# engine when a TTS entry names it in `params.normalizer`.
+NORMALIZATION = "normalization"
 
-ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING, TRANSLATION}
+ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING, TRANSLATION, NORMALIZATION}
 
 # Default backend for each modality. This is the canonical "which engine serves
 # this modality" map; the downloader and the model-management API both resolve
@@ -74,6 +79,7 @@ MODALITY_BACKEND: dict[str, str | None] = {
     TTS: "kokoro-server",
     IMAGE: "sd-server",
     TRANSLATION: "malaga-server",
+    NORMALIZATION: "tn-server",
 }
 
 
@@ -111,6 +117,7 @@ ENDPOINT_MODALITY = {
     "images/edits": IMAGE,
     "rerank": RERANK,
     "translate": TRANSLATION,
+    "normalize": NORMALIZATION,
 }
 
 
@@ -827,6 +834,10 @@ class PocketTtsServerBackend:
         for key, flag in self._PARAM_MAP.items():
             if params.get(key) not in (None, ""):
                 args += [flag, str(params[key])]
+        # pocket-tts spells out numbers itself (the tn rules, built in);
+        # `normalize: false` turns that off (e.g. to measure without it).
+        if params.get("normalize") is False:
+            args.append("--no-normalize")
         return args
 
     def health_path(self) -> str:
@@ -1144,6 +1155,47 @@ class MalagaServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# tn-server backend (normalization — text for TTS)
+# ---------------------------------------------------------------------------
+class TnServerBackend:
+    """`tn-server serve` (rzafiamy/tn-rs) — rule-based text normalization
+    for speech: French/English numbers, times, dates, amounts, units,
+    abbreviations; Markdown to sentences; a pronunciation lexicon. CPU only,
+    about a millisecond per paragraph. Build with build-tn.sh.
+
+    Contract: `serve --host --port [--lexicon <tsv>]`, GET /health,
+    POST /v1/normalize `{text|texts, language, mode: strict|safe}`.
+
+    `file` is the lexicon TSV (word<TAB>respelling or lang<TAB>word<TAB>
+    respelling); tn-server re-reads it when it changes, so edits apply to the
+    next request without a reload.
+    """
+    name = "tn-server"
+    binary_name = "tn-server"
+    modalities = {NORMALIZATION}
+    # A few MB of CPU memory: outside max_loaded_models and memory budgets
+    # (ProcessManager._is_lightweight), never an eviction victim.
+    lightweight = True
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [binary, "serve", "--host", "127.0.0.1", "--port", str(port)]
+        if model_path.is_file():
+            args += ["--lexicon", str(model_path)]
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # Registry of backends
 # ---------------------------------------------------------------------------
 _BACKENDS: dict[str, Backend] = {
@@ -1159,6 +1211,7 @@ _BACKENDS: dict[str, Backend] = {
     PocketTtsServerBackend.name: PocketTtsServerBackend(),
     SdServerBackend.name: SdServerBackend(),
     MalagaServerBackend.name: MalagaServerBackend(),
+    TnServerBackend.name: TnServerBackend(),
 }
 
 DEFAULT_BACKEND = LlamaServerBackend.name

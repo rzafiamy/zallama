@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import logging
 import re
 import shutil
 import tempfile
@@ -33,9 +34,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
-from ..backends import ENDPOINT_MODALITY, TRANSLATION, get_backend
+from ..backends import ENDPOINT_MODALITY, NORMALIZATION, TRANSLATION, get_backend
 from ..tts_lang import detect_language
+from ..tts_normalize import normalize_for_tts
 from ..model_registry import ModelRegistry
+
+logger = logging.getLogger("zallama.openai")
 
 router = APIRouter(prefix="/v1")
 
@@ -246,7 +250,7 @@ def _model_info(entry: dict, running: set[str], pm) -> dict:
         "status": "running" if name in running else "available",
         "modality": modality,
         "backend": backend_name,
-        "context_length": None if modality == TRANSLATION else merged.get("ctx_size"),
+        "context_length": None if modality in (TRANSLATION, NORMALIZATION) else merged.get("ctx_size"),
         "supports_vision": bool(artifacts.get("mmproj")),
         "pinned": bool(entry.get("pinned", False)),
         "tunable_params": tunable_params,
@@ -763,6 +767,32 @@ def _pocket_voice_allowed(voice: str) -> bool:
     )
 
 
+@router.post("/normalize")
+async def normalize(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Proxy to a `normalization` model (tn-server): {model, text | texts,
+    language?, mode?} -> {text | texts, language, mode}."""
+    body = await request.json()
+    model_name = _model_id_from_body(body)
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="normalize")
+    inst.touch()
+    payload = {k: v for k, v in body.items() if k != "model"}
+    async with pm.serving(inst, "normalize"):
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(f"{inst.base_url}/v1/normalize", json=payload)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"tn-server error: {e}")
+    try:
+        content = resp.json()
+    except ValueError:
+        content = {"error": {"message": resp.text[:500]}}
+    return JSONResponse(content=content, status_code=resp.status_code)
+
+
 @router.post("/audio/speech")
 async def audio_speech(
     request: Request,
@@ -779,8 +809,6 @@ async def audio_speech(
     body = await request.json()
     model_name = _model_id_from_body(body)
     model_name, routed_language = _route_tts_by_language(model_name, body, registry)
-    inst = await _resolve_instance(model_name, pm, registry, endpoint="audio/speech")
-    inst.touch()
 
     # Apply server-side defaults from the model's registry params for synthesis
     # knobs the client omitted. kokoro-server takes `voice`/`speed` only in the
@@ -792,13 +820,45 @@ async def audio_speech(
         entry = {}
     params = entry.get("params") or {}
     backend_name = entry.get("backend")
-    # Collapse newlines/control chars so kokoro doesn't truncate at the first
-    # blank line (its pipeline splits on `\n+` and drops trailing chunks).
+    # Text normalization (params.normalizer, see server/tts_normalize.py):
+    # numbers, dates, amounts and Markdown become words before the engine
+    # sees them. It runs on the text with its line breaks (each line is a
+    # sentence for tn). A normalizer that fails never fails the request: the
+    # engine then gets the text as sent.
     raw_input = body.get("input")
+    normalized = None
+    # One language decision for the request, used by the normalizer and by
+    # the voice choice below: language routing > params.language > detection
+    # on the whole text (more reliable than on what the normalizer returns).
+    lang = routed_language or params.get("language") or (
+        detect_language(raw_input) if isinstance(raw_input, str) else None
+    )
     if isinstance(raw_input, str):
+        text = raw_input
+        normalizer = params.get("normalizer")
+        if normalizer and text.strip():
+            text = _sanitize_tts_input(text, keep_lines=True)
+            try:
+                text, normalized = await normalize_for_tts(
+                    text, lang, normalizer, params.get("normalizer_llm"),
+                    resolve=_resolve_instance, pm=pm, registry=registry,
+                    timeout=_request_timeout(request),
+                )
+            except Exception as e:
+                logger.warning("normalizer %s failed, speaking the raw text: %s", normalizer, e)
+                normalized = "failed"
+        # Collapse newlines/control chars so kokoro doesn't truncate at the
+        # first blank line (its pipeline splits on `\n+` and drops trailing
+        # chunks).
         body["input"] = _sanitize_tts_input(
-            raw_input, keep_lines=backend_name == "pocket-tts-server"
+            text, keep_lines=backend_name == "pocket-tts-server"
         )
+
+    # The engine is resolved after normalization: starting the normalizer's
+    # LLM may evict a model of the same group, and must not evict the engine
+    # this request is about to use.
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="audio/speech")
+    inst.touch()
     if "speed" in params and "speed" not in body:
         body["speed"] = params["speed"]
 
@@ -838,7 +898,7 @@ async def audio_speech(
         chosen = None
         pick = getattr(backend_obj, "voice_for_language", None)
         if pick is not None:
-            chosen = pick(detect_language(body.get("input") or ""), known or [])
+            chosen = pick(lang, known or [])
         chosen = chosen or params.get("voice")
         if chosen:
             body["voice"] = chosen
@@ -860,6 +920,8 @@ async def audio_speech(
     )
     if voice_fallback:
         headers["X-Zallama-Voice-Fallback"] = voice_fallback[:64]
+    if normalized:
+        headers["X-Zallama-Normalized"] = normalized
     return Response(
         content=resp.content,
         status_code=resp.status_code,

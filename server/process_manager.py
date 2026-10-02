@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from .backends import ASR, EMBEDDING, IMAGE, RERANK, TEXT, TRANSLATION, TTS, Backend, get_backend
+from .backends import ASR, EMBEDDING, IMAGE, NORMALIZATION, RERANK, TEXT, TRANSLATION, TTS, Backend, get_backend
 from .config import resolve_binary
 
 logger = logging.getLogger("zallama.process_manager")
@@ -223,6 +223,19 @@ class ProcessManager:
             inst.release()
 
     @staticmethod
+    def _is_lightweight(entry: dict) -> bool:
+        """A lightweight backend (tn-server: a few MB of CPU memory, ~1 ms per
+        request) sits outside capacity accounting: it never counts toward
+        max_loaded_models or any memory budget, so adding it in front of the
+        TTS engines can't evict anything."""
+        from .model_registry import ModelRegistry  # local import to avoid cycle
+
+        try:
+            return bool(getattr(get_backend(ModelRegistry.backend_of(entry)), "lightweight", False))
+        except Exception:
+            return False
+
+    @staticmethod
     def _is_pinned(entry: dict) -> bool:
         """A pinned model is pre-warmed at startup and never evicted.
 
@@ -249,6 +262,7 @@ class ProcessManager:
         RERANK: "services",
         TTS: "services",
         TRANSLATION: "services",
+        NORMALIZATION: "services",
     }
 
     @classmethod
@@ -311,7 +325,9 @@ class ProcessManager:
             incoming_cost = self._estimate_cost(entry, model_path)
             incoming_group = self.evict_group_of(entry)
             has_group_budget = incoming_group is not None and incoming_group in self._group_mem_budgets
-            has_capacity_limit = self._max_loaded > 0 or self._mem_budget_gb > 0 or has_group_budget
+            has_capacity_limit = (
+                self._max_loaded > 0 or self._mem_budget_gb > 0 or has_group_budget
+            ) and not self._is_lightweight(entry)
 
             if has_capacity_limit:
                 # Keep the reservation from capacity check through registration.
@@ -565,7 +581,8 @@ class ProcessManager:
             )
 
         def over_count() -> bool:
-            return self._max_loaded > 0 and len(self._instances) >= self._max_loaded
+            counted = sum(1 for i in self._instances.values() if not self._is_lightweight(i.entry))
+            return self._max_loaded > 0 and counted >= self._max_loaded
 
         def over_mem() -> bool:
             return (
@@ -587,7 +604,7 @@ class ProcessManager:
             # candidate (and even then the caller drains it before killing).
             busy_fallback: str | None = None
             for name, inst in self._instances.items():
-                if self._is_pinned(inst.entry):
+                if self._is_pinned(inst.entry) or self._is_lightweight(inst.entry):
                     continue
                 if incoming_group is not None and self.evict_group_of(inst.entry) != incoming_group:
                     continue

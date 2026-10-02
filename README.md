@@ -75,7 +75,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🔌 **A real OpenAI `/v1` surface** | Chat, Completions, Embeddings — streaming included — so existing SDKs and tools just work. |
 | 👁️ **Vision** | Attach an `mmproj` projector and send images straight through `/v1/chat/completions`. |
 | 🎙️ **Speech-to-text** | `/v1/audio/transcriptions`, any input format auto-transcoded via `ffmpeg`, multilingual models supported. |
-| 🗣️ **Text-to-speech** | `/v1/audio/speech` on Kokoro (8 languages), Pocket TTS (French, English and more, ~28x real time in 0.8 GB), Voxtral-4B-TTS and MMS-TTS Malagasy. |
+| 🗣️ **Text-to-speech** | `/v1/audio/speech` on Kokoro (8 languages), Pocket TTS (French, English and more, ~28x real time in 0.8 GB), Voxtral-4B-TTS and MMS-TTS Malagasy — with numbers, dates, amounts and Markdown read right by a text normalizer (rules + optional small LLM). |
 | 🎨 **Image Generation** | `/v1/images/generations` and `/v1/images/edits` powered by `sd-server` (stable-diffusion.cpp), plus `zallama generate` CLI. |
 | 🌍 **Translation** | `/v1/translate` on NLLB-200 via `malaga` — French / English ↔ Malagasy, ~10 ms per sentence, batched. |
 | 🔎 **RAG, built in** | A reranker at `/v1/rerank` plus **zvec**, an embedded HNSW vector store — no external vector DB to run. |
@@ -119,6 +119,9 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 # pocket-tts (TTS, Kyutai Pocket TTS in Rust/GGUF; needs cargo + nvcc, or --cpu)
 ./build-pocket-tts.sh
+
+# tn-server (text normalization in front of the TTS engines; cargo only)
+./build-tn.sh
 
 # stable-diffusion.cpp (Image generation) — requires a release tag/branch name
 ./build-ggml-stable-diffusion.cpp.sh master
@@ -1041,6 +1044,37 @@ cents") and reads Markdown headings and list items as sentences.
 Measured on an RTX 4090 through zallama: cold start 0.7 s (spawn, load, warm-up and the first sentence),
 then ~110 ms per sentence (~28x real time); 808 MiB VRAM, hence `mem_gb: 0.9`.
 
+### Reading numbers, dates and Markdown right — text normalization
+
+Every engine above reads digits and symbols poorly: Pocket TTS turns "9h30" into noise, Kokoro reads simple
+numbers but not "1 250 000 €", and chat answers are full of lists and bold. Put
+[tn-server](https://github.com/rzafiamy/tn-rs) in front of them:
+
+```bash
+./build-tn.sh      # bin/tn-server, CPU only, ~1 ms per paragraph
+```
+```yaml
+  - name: tn                              # rules (fr, en) + your pronunciation lexicon
+    file: tn-lexicon.tsv                  # word<TAB>respelling, re-read when edited
+    modality: normalization
+    backend: tn-server
+  - name: gemma-e2b-tn                    # optional LLM pass, 1.8 GB VRAM
+    file: gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf
+    evict_group: normalizer
+    params: {ctx_size: 4096, parallel: 4, reasoning: false}
+  - name: pocket-tts-fr
+    # ...
+    params:
+      normalizer: tn
+      normalizer_llm: gemma-e2b-tn
+```
+
+Then « Réunion à 9h30, budget de 1 250 000 €, le 21/10/2026 » is spoken « neuf heures trente … un million deux
+cent cinquante mille euros … vingt et un octobre deux mille vingt-six ». The rules spell out what they can read
+exactly; the LLM only sees sentences that still hold Roman numerals, codes or phone numbers, so it can't change an
+amount. The response header `X-Zallama-Normalized` says what ran. `POST /v1/normalize` is also available directly.
+Details: [CONFIG.md](CONFIG.md#text-normalization-for-tts-paramsnormalizer-any-tts-entry).
+
 ### Voxtral-4B-TTS
 
 Mistral's TTS model has no mature native server yet, so this ships a thin
@@ -1218,7 +1252,7 @@ Every `params` key: [CONFIG.md](CONFIG.md#translation-backend-malaga-server).
 
 Zallama separates the **generic process lifecycle** (spawn, health-check, port assignment, LRU eviction, kill) from **engine-specific logic** (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a `Backend` abstraction in [`server/backends.py`](server/backends.py).
 
-This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` and `PocketTtsServerBackend` cover TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation and editing (`/v1/images/generations`, `/v1/images/edits`); `MalagaServerBackend` covers translation (`/v1/translate`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
+This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` and `PocketTtsServerBackend` cover TTS (`/v1/audio/speech`); `TnServerBackend` covers text normalization (`/v1/normalize`), which the TTS route calls first; `SdServerBackend` covers image generation and editing (`/v1/images/generations`, `/v1/images/edits`); `MalagaServerBackend` covers translation (`/v1/translate`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
 
 ---
 

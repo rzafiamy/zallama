@@ -64,7 +64,11 @@ no config at all:
 | modality | default `evict_group` |
 |---|---|
 | `text`, `image` | `primary` |
-| `asr`, `embedding`, `rerank`, `tts` | `services` |
+| `asr`, `embedding`, `rerank`, `tts`, `translation`, `normalization` | `services` |
+
+`tn-server` (modality `normalization`) is **lightweight**: a few MB of CPU
+memory, so it never counts toward `max_loaded_models` or any memory budget
+and is never evicted.
 
 In other words: a large, slow-to-reload text or image model only ever gets
 evicted to make room for *another* text/image model — never bumped just
@@ -351,6 +355,63 @@ fields; the registry's `params.voice`/`params.speed` are applied by the
 
 ---
 
+## Text normalization for TTS (`params.normalizer`, any `tts` entry)
+
+Source: `server/tts_normalize.py`. TTS engines read digits, symbols and
+Markdown poorly (Pocket TTS turns "9h30" into noise; Kokoro reads simple
+numbers but not "1 250 000 €"). A `tts` entry opts in:
+
+| key | notes |
+|---|---|
+| `normalizer` | registry name of a `normalization` model (tn-server). Its rules and lexicon run first. |
+| `normalizer_llm` | optional registry name of a `text` model. With it, tn runs in *safe* mode (ambiguous numbers stay digits) and the LLM reads the sentences that still contain digits, Roman numerals or abbreviations — all of one request at once, few-shot, temperature 0. An answer that lost plain words of its sentence (or is empty or runaway) is replaced by tn's strict reading. |
+| `language` | language for the rules when the route can't tell; precedence: language routing (`languages` entries) > `params.language` > detection from the text. Only `fr` and `en` have number rules. |
+
+The normalizer runs **before** the engine is started, so starting the LLM
+can never evict the engine of the same request; it keeps the input's line
+breaks (each line is one sentence for tn). If it fails, the request goes on
+with the raw text. The response says what ran in `X-Zallama-Normalized`
+(`rules`, `rules+llm 2/3` — LLM answers accepted / sentences sent, `failed`).
+
+Measured with `benchmarks/tts_normalization.py`: 8 French and 8 English
+sentences full of times, amounts, dates, phone numbers, Roman numerals,
+units and Markdown, 3 takes each, transcribed by Parakeet; WER after both
+sides go through tn (so "9h30" written by the ASR equals "neuf heures
+trente"). Pocket TTS on CPU, Kokoro with an explicit voice per language.
+
+| Engine | No normalizer | `normalizer: tn` | + `normalizer_llm: gemma-e2b-tn` |
+|---|---|---|---|
+| pocket-tts French | 73.0 % | 14.1 % | **11.2 %** |
+| pocket-tts English | 35.1 % | 13.8 % | **7.4 %** |
+| Kokoro French | 15.1 % | 8.5 % | **5.5 %** |
+| Kokoro English | 8.9 % | 3.9 % | **1.5 %** |
+
+"No normalizer" for pocket-tts is `params.normalize: false` (pocket-tts
+otherwise applies the tn rules itself). Rules vs LLM choice (16 references,
+10 models under 3 GB): tn-rs `docs/llm-pass.md`. Voxtral was not measured
+(9.4 GB did not fit next to the resident 27B model).
+
+Malagasy MMS-TTS (malaga) normalizes its own input: leave `normalizer` unset.
+
+---
+
+## `normalization` (backend: `tn-server`)
+
+Source: `TnServerBackend`. `tn-server serve` from
+[rzafiamy/tn-rs](https://github.com/rzafiamy/tn-rs), built by
+`./build-tn.sh`. Serves `POST /v1/normalize` `{model, text | texts,
+language?, mode?: strict | safe}` → `{text | texts, language, mode}` and
+`GET /health`. CPU only, about a millisecond per paragraph; lightweight
+(outside capacity accounting, see `evict_group`).
+
+`file` is the **lexicon** (TSV: `word<TAB>respelling` or
+`lang<TAB>word<TAB>respelling`, `#` comments) — recent words, names, brands
+the engines can't know. tn-server re-reads it when it changes: edit it in
+place, the next request uses it. An edit that breaks the file is logged and
+the previous version stays in use. No params.
+
+---
+
 ## `tts` (backend: `pocket-tts-server`) — Kyutai Pocket TTS
 
 Source: `PocketTtsServerBackend`. Runs `pocket-tts serve` from
@@ -376,6 +437,7 @@ Only the entry's own `params` are forwarded — `llama_server.default_params`
 | `eos_threshold` | `--eos-threshold` | more negative = longer tail; default -4.0 |
 | `noise_clamp` | `--noise-clamp` | clamp sampling noise to [-x, x] |
 | `prewarm_voices` | `--prewarm-voices` | comma-separated voices resolved at startup |
+| `normalize` | `--no-normalize` when `false` | pocket-tts spells out numbers itself (the tn rules); `false` turns that off |
 | `voice_cache_capacity` | `--voice-cache-capacity` | resolved voices kept in memory; default 64 |
 
 Text: pocket-tts spells out numbers, times, amounts, units and abbreviations

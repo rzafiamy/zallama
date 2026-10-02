@@ -176,6 +176,9 @@ models:
     mem_gb: 0.9        # measured 808 MiB incl. CUDA context
     params:
       device: cuda     # cpu also works (~7x real time); threads: 1-4 on CPU
+      language: fr               # for the normalizer
+      normalizer: tn             # numbers, dates, amounts, Markdown -> words
+      normalizer_llm: gemma-e2b-tn   # optional: Roman numerals, codes, phones
       # voice: estelle           # default voice when the request names none
       # temperature: 0.3         # model default
 
@@ -187,6 +190,9 @@ models:
     mem_gb: 0.9
     params:
       device: cuda
+      language: en
+      normalizer: tn
+      normalizer_llm: gemma-e2b-tn
 
   # One name for clients: /v1/audio/speech picks pocket-tts-fr or pocket-tts-en
   # from the text's language (or the request's "language" field). `file` is only
@@ -201,6 +207,34 @@ models:
       device: cuda
       languages: {fr: pocket-tts-fr, en: pocket-tts-en}   # language -> registry name
       default_language: fr     # when the text is too short to tell
+
+  # --- Text normalization for TTS (tn-server + optional LLM pass) -------------
+  # TTS engines read digits, symbols and Markdown poorly. A TTS entry with
+  # `params.normalizer: tn` gets its text through tn-server first (French and
+  # English rules + the lexicon below); `params.normalizer_llm` adds a small LLM
+  # for what rules can't read (Roman numerals, codes, phone numbers), only on
+  # the sentences that need it. Build: ./build-tn.sh. Measured on 16 FR/EN
+  # sentences: rules 6.0 % WER, rules + Gemma-4-E2B QAT 1.0 %.
+  # Lexicon (word<TAB>respelling, or lang<TAB>word<TAB>respelling), re-read when
+  # edited — no reload: copy https://github.com/rzafiamy/tn-rs lexicon.example.tsv.
+  - name: tn
+    file: tn-lexicon.tsv
+    modality: normalization
+    backend: tn-server
+    description: "tn text normalization (rules + lexicon), CPU, ~1 ms"
+
+  # unsloth/gemma-4-E2B-it-qat-GGUF, gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf (2.6 GB
+  # file, 1.8 GB VRAM: per-layer embeddings stay in RAM). Own evict_group so it
+  # never evicts, or is evicted by, the TTS/ASR services it works for.
+  - name: gemma-e2b-tn
+    file: gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf
+    description: "Gemma-4-E2B QAT, LLM pass of the TTS text normalizer"
+    mem_gb: 1.9
+    evict_group: normalizer
+    params:
+      ctx_size: 4096
+      parallel: 4      # sentences of one request are normalized concurrently
+      reasoning: false
 
   # --- RAG: embedding model ---------------------------------------------------
   # Runs llama-server in --embedding mode via the embedding-server backend and

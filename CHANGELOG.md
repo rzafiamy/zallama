@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Text normalization in front of the TTS engines** — new modality `normalization` and
+  backend `tn-server` ([rzafiamy/tn-rs](https://github.com/rzafiamy/tn-rs), `build-tn.sh`):
+  French/English rules for numbers, times, dates, amounts, units, ordinals and
+  abbreviations, Markdown to sentences, and a pronunciation lexicon (the entry's `file`,
+  re-read when edited). A `tts` entry opts in with `params.normalizer`; with
+  `params.normalizer_llm` (a small text model, e.g. Gemma-4-E2B QAT, 1.8 GB VRAM) tn runs in
+  safe mode and the LLM reads only the sentences still holding Roman numerals, codes or phone
+  numbers, concurrently, with a guard that falls back to the rules if the LLM loses words.
+  `params.language` sets the language when routing can't. `X-Zallama-Normalized` says what
+  ran; a failing normalizer never fails the request. `POST /v1/normalize` proxies tn-server.
+  Measured WER (Parakeet, 16 sentences × 3 takes): pocket-tts FR 73.0 → 14.1 (rules) → 11.2 %
+  (rules + LLM), EN 35.1 → 13.8 → 7.4 %; Kokoro FR 15.1 → 8.5 → 5.5 %, EN 8.9 → 3.9 → 1.5 %.
+- `benchmarks/tts_normalization.py`: synthesize, transcribe and score TTS models.
+- pocket-tts `params.normalize: false` (`--no-normalize`).
+
+### Changed
+- `tn-server` is lightweight: outside `max_loaded_models` and memory budgets, never evicted.
+- `/v1/audio/speech` resolves the engine after normalization, so the normalizer's LLM can't
+  evict the engine of the same request, and picks the voice from the same language decision
+  as the normalizer (routing > `params.language` > detection on the whole input).
+
 ## [1.26.1] - 2026-10-02
 
 ### Fixed
