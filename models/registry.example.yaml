@@ -188,6 +188,20 @@ models:
     params:
       device: cuda
 
+  # One name for clients: /v1/audio/speech picks pocket-tts-fr or pocket-tts-en
+  # from the text's language (or the request's "language" field). `file` is only
+  # used if this entry is loaded directly; speech requests run the target model.
+  - name: pocket-tts
+    file: pocket-tts-french-q8_0.gguf
+    modality: tts
+    backend: pocket-tts-server
+    description: "Pocket TTS, French or English picked from the text"
+    mem_gb: 0.9
+    params:
+      device: cuda
+      languages: {fr: pocket-tts-fr, en: pocket-tts-en}   # language -> registry name
+      default_language: fr     # when the text is too short to tell
+
   # --- RAG: embedding model ---------------------------------------------------
   # Runs llama-server in --embedding mode via the embedding-server backend and
   # serves POST /v1/embeddings. zvec uses this to embed & search documents; set

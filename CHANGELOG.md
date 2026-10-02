@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Language-routed TTS entries** — a `tts` entry with `params.languages` as a mapping
+  (`{fr: pocket-tts-fr, en: pocket-tts-en}`) sends each `/v1/audio/speech` request to the
+  model of the text's language: the request's `language` field, else the detected language,
+  else `params.default_language`. The response names the model and language
+  (`X-Zallama-Model`, `X-Zallama-Language`). Registered as `pocket-tts` in
+  `models/registry.example.yaml`, since Pocket TTS has one checkpoint per language.
+
 ## [1.24.0] - 2026-10-02
 
 ### Added

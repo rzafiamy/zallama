@@ -1001,6 +1001,26 @@ curl http://localhost:11435/v1/audio/speech -H "Content-Type: application/json" 
   -d '{"model":"pocket-tts-fr","input":"Bonjour, comment allez-vous ?","voice":"jean"}' -o speech.wav
 ```
 
+**One name for both languages.** Pocket TTS has one checkpoint per language (separate weights and
+tokenizer), so a French model reads English with French sounds. The `pocket-tts` entry routes instead:
+it detects the text's language and forwards to `pocket-tts-fr` or `pocket-tts-en`:
+```yaml
+  - name: pocket-tts
+    file: pocket-tts-french-q8_0.gguf     # only used if loaded directly
+    modality: tts
+    backend: pocket-tts-server
+    params:
+      languages: {fr: pocket-tts-fr, en: pocket-tts-en}
+      default_language: fr                # text too short to tell ("Merci.", "OK.")
+```
+```bash
+curl http://localhost:11435/v1/audio/speech -H "Content-Type: application/json" \
+  -d '{"model":"pocket-tts","input":"Hello, how are you today?"}' -o speech.wav
+# response headers: X-Zallama-Model: pocket-tts-en, X-Zallama-Language: en
+```
+An optional `"language": "en"` in the request skips detection (a code not in `languages` is a `400`).
+Alternating languages keeps both models loaded (~1.6 GB VRAM). Any TTS entry can route this way.
+
 Without `voice` the model's native default speaks (`estelle` in French, `alba` in English). `voice` takes
 a predefined name or inline audio (`data:audio/wav;base64,…`) to clone a voice; server-side paths and
 `hf://` URLs are refused with a `400`. `speed` is not supported and is ignored.

@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
 from ..backends import ENDPOINT_MODALITY, TRANSLATION, get_backend
-from ..tts_lang import voice_for_text
+from ..tts_lang import detect_language, voice_for_text
 from ..model_registry import ModelRegistry
 
 router = APIRouter(prefix="/v1")
@@ -676,6 +676,46 @@ def _sanitize_tts_input(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned.replace("_", "")).strip()
 
 
+def _route_tts_by_language(model_name: str, body: dict, registry) -> tuple[str, str | None]:
+    """Resolve a language-routing TTS entry to the model for the text's language.
+
+    A TTS entry whose `params.languages` is a mapping (language code -> registry
+    name) is a router: models such as Pocket TTS have one checkpoint per
+    language, so one client-facing name picks among them. The language is the
+    request's `language` field if given (unknown code -> 400), else the one
+    detected from `input`, else `params.default_language`, else the first
+    mapping. Returns (model to serve, language), or (model_name, None) for an
+    ordinary entry.
+    """
+    try:
+        entry = registry.get(model_name)
+    except Exception:
+        return model_name, None  # _resolve_instance reports the 404
+    params = entry.get("params") or {}
+    routes = params.get("languages")
+    if not isinstance(routes, dict) or not routes:
+        return model_name, None
+
+    requested = body.pop("language", None)
+    if requested:
+        lang = str(requested).strip().lower()
+        if lang not in routes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{model_name}' speaks {', '.join(sorted(routes))}; "
+                       f"got language '{requested}'.",
+            )
+    else:
+        lang = detect_language(body.get("input") or "")
+        if lang not in routes:
+            lang = params.get("default_language")
+            if lang not in routes:
+                lang = next(iter(routes))
+    target = str(routes[lang])
+    body["model"] = target
+    return target, lang
+
+
 _POCKET_VOICE_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
@@ -707,6 +747,7 @@ async def audio_speech(
     if isinstance(raw_input, str):
         body["input"] = _sanitize_tts_input(raw_input)
     model_name = _model_id_from_body(body)
+    model_name, routed_language = _route_tts_by_language(model_name, body, registry)
     inst = await _resolve_instance(model_name, pm, registry, endpoint="audio/speech")
     inst.touch()
 
@@ -765,10 +806,16 @@ async def audio_speech(
                 raise HTTPException(status_code=502, detail=f"{backend_name or 'kokoro-server'} error: {e}")
     # TTS servers return audio/wav on success, or a JSON error body otherwise;
     # pass the upstream content and content type straight back to the client.
+    # A language-routed request says which model and language answered.
+    headers = (
+        {"X-Zallama-Model": model_name, "X-Zallama-Language": routed_language}
+        if routed_language else None
+    )
     return Response(
         content=resp.content,
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type"),
+        headers=headers,
     )
 
 

@@ -384,6 +384,23 @@ to the gated `kyutai/pocket-tts` weights). Server-side paths and `hf://` URLs,
 which `pocket-tts` itself accepts, are refused by zallama with a `400`. `speed`
 is ignored. No language auto-detection: each model speaks one language.
 
+### Language routing (any `tts` entry)
+
+A `tts` entry whose `params.languages` is a **mapping** (language code →
+registry name) is a router: `/v1/audio/speech` sends each request to the model
+of the text's language and never starts the router entry itself (its `file`
+is only used if you load it directly).
+
+| key | notes |
+|---|---|
+| `languages` | `{fr: pocket-tts-fr, en: pocket-tts-en}`; codes from the built-in detector (`server/tts_lang.py`: en, fr, es, it, pt, hi, ja, zh) |
+| `default_language` | used when detection is unsure (short text) or finds a language not in `languages`; default: the first mapping |
+
+Order: request `"language"` field (unknown code → `400`) > detected language >
+`default_language` > first mapping. The response carries `X-Zallama-Model` and
+`X-Zallama-Language`. Not to be confused with malaga's `languages` **list**
+(translation entries), which declares translation codes.
+
 Measured (RTX 4090, q8_0, 27 voices embedded): 808 MiB VRAM → `mem_gb: 0.9`;
 cold start 0.7 s, ~110 ms per sentence. Weights: CC-BY-4.0 (Kyutai).
 
