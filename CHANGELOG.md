@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`hidden` registry field** — `hidden: true` keeps an entry out of `GET /v1/models` but
+  callable by name, so clients see a language-routing TTS entry (`pocket-tts`) and not the
+  per-language models behind it. Settable with `zallama set <model> hidden=true`.
+
 ### Fixed
 - **Long voice conversations overflowing the LLM context** — `/v1/realtime` sent the whole
   history every turn, so past the voice LLM's ctx_size every reply failed. The oldest turns are

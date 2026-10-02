@@ -292,7 +292,9 @@ def _tts_info(entry: dict, backend_obj) -> dict:
 # ---------------------------------------------------------------------------
 @router.get("/models")
 async def list_models(registry=Depends(get_registry), pm=Depends(get_pm)):
-    models = registry.list_models()
+    # `hidden` entries (e.g. the per-language models a TTS router picks from)
+    # stay callable by name but aren't offered to clients.
+    models = [m for m in registry.list_models() if not m.get("hidden")]
     running = {r["name"] for r in pm.list_running()}
     data = [_model_info(m, running, pm) for m in models]
     return {"object": "list", "data": data}

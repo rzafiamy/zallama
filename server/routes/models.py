@@ -87,6 +87,9 @@ class AddModelRequest(BaseModel):
     # LRU eviction scope. None = no override (modality default applies); ""
     # opts out of grouping entirely; any other string is a custom group name.
     evict_group: str | None = None
+    # Left out of GET /v1/models (still callable by name): e.g. the
+    # per-language models behind a language-routing TTS entry.
+    hidden: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +126,7 @@ async def list_models(registry=Depends(get_registry), pm=Depends(get_pm)):
             "artifacts": m.get("artifacts", {}),
             "mem_gb": m.get("mem_gb", 0),
             "pinned": bool(m.get("pinned", False)),
+            "hidden": bool(m.get("hidden", False)),
             "evict_group": m.get("evict_group"),
             # Group actually in effect for eviction — the raw field above is
             # None for most entries (they just take the modality default),
@@ -158,6 +162,7 @@ async def add_model(req: AddModelRequest, registry=Depends(get_registry)):
         mem_gb=req.mem_gb or None,
         pinned=req.pinned,
         evict_group=req.evict_group,
+        hidden=req.hidden,
     )
     return {"status": "added", "model": entry}
 

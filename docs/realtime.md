@@ -26,7 +26,7 @@ context, 2 slots, MTP, vision on GPU, q4_0 KV, 20.8 GB.
 realtime:
   llm_model: "gemma-e2b-q4-32k1s-k8-1.9g"   # alias: gemma-e2b-voice
   asr_model: "parakeet-tdt-v3-cpu"  # CPU, no VRAM
-  tts_model: "pocket-tts-voice"     # CPU language router → pocket-tts-fr-cpu / -en-cpu (see VRAM below)
+  tts_model: "pocket-tts-cpu"       # CPU language router → pocket-tts-fr-cpu / -en-cpu (see VRAM below)
   voice: "estelle"
 ```
 
@@ -132,7 +132,7 @@ reserves everything at startup). With the 27B (21.3 GB) + gemma-e2b-voice
 32K (1.9 GB) + pocket-tts on CUDA (0.8 GB), the card sat at 24 072 of
 24 564 MiB and pocket-tts failed every request with `CUDA_ERROR_OUT_OF_MEMORY`.
 
-So the voice uses CPU entries: `pocket-tts-voice` (language router) →
+So the voice uses CPU entries: `pocket-tts-cpu` (language router, alias `pocket-tts-voice`) →
 `pocket-tts-fr-cpu` / `pocket-tts-en-cpu` (`device: cpu`, `threads: 4`,
 `mem_gb: 0.01`, evict_group `voice`). Measured: first audio 60–130 ms per
 phrase (GPU: 25–60 ms), 4.6–6.4× realtime, so streaming stays ahead of
@@ -141,7 +141,7 @@ Switching language costs one cold model load (~0.8 s) the first time.
 
 ```yaml
 realtime:
-  tts_model: "pocket-tts-voice"
+  tts_model: "pocket-tts-cpu"
 ```
 
 ### Making room: a lighter entry for the resident 27B

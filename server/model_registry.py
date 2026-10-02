@@ -178,6 +178,7 @@ class ModelRegistry:
         mem_gb: float | None = None,
         pinned: bool = False,
         evict_group: str | None = None,
+        hidden: bool = False,
     ) -> dict:
         """Register (or replace) a model in registry.yaml.
 
@@ -204,6 +205,8 @@ class ModelRegistry:
             entry["mem_gb"] = mem_gb
         if pinned:
             entry["pinned"] = True
+        if hidden:
+            entry["hidden"] = True
         if evict_group is not None:
             entry["evict_group"] = evict_group
         if params:

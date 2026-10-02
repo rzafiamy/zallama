@@ -535,6 +535,7 @@ Each entry may declare:
 - **`artifacts`** — extra files beyond the primary GGUF (e.g. `mmproj` for vision, and — for future backends — vocoders, etc.). Paths are absolute or relative to `models_dir`.
 - **`mem_gb`** — declared memory footprint, used by memory-aware eviction (see below). If omitted, it's estimated from the GGUF file size — an estimate that is frequently off by 100% or more, so [measure it](docs/vram-planning.md#measuring-what-a-model-actually-costs).
 - **`pinned`** — `true` keeps the model loaded for the daemon's lifetime: pre-warmed at startup, exempt from both idle sweep and eviction. Intended for small always-on services (ASR, TTS), not for large models.
+- **`hidden`** — `true` leaves the entry out of `GET /v1/models` while it stays callable by name. For the models behind a router, e.g. the per-language `pocket-tts-fr` / `-en` that the `pocket-tts` entry picks from: clients see only the router. `zallama set <model> hidden=true`.
 
 Useful `params` for making a model fit on a busy GPU — `cache_type_k`/`cache_type_v` (quantize the KV cache), `ctx_size`, `n_cpu_moe` (keep the expert weights of the first N layers in system RAM, MoE models only) and `n_gpu_layers` — are covered with measured trade-offs in [Fitting Your Models on One GPU](docs/vram-planning.md#making-a-model-fit). For diffusion models, see [Tuning Image Generation](docs/sd-tuning.md).
 
