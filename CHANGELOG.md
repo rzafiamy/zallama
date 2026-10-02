@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-10-02
+
 ### Added
 - **Language-routed TTS entries** — a `tts` entry with `params.languages` as a mapping
   (`{fr: pocket-tts-fr, en: pocket-tts-en}`) sends each `/v1/audio/speech` request to the
@@ -741,7 +743,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.24.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.25.0...HEAD
+[1.25.0]: https://github.com/rzafiamy/zallama/compare/v1.24.0...v1.25.0
 [1.24.0]: https://github.com/rzafiamy/zallama/compare/v1.23.1...v1.24.0
 [1.23.1]: https://github.com/rzafiamy/zallama/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/rzafiamy/zallama/compare/v1.22.0...v1.23.0
