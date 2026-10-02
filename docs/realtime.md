@@ -138,6 +138,27 @@ realtime:
   tts_model: "pocket-tts-voice"
 ```
 
+### Making room: a lighter entry for the resident 27B
+
+What the Qwen3.8-27B-Q4_K_M launch line costs in VRAM (measured, q4_0 KV, MTP):
+
+| variant | VRAM |
+|---|---|
+| parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`Qwen3.8-27B-Q4_K_M`) | 21 298 MiB |
+| parallel 2, no kv_unified | 21 232 MiB |
+| parallel 1 | 20 700 MiB |
+| **parallel 1 + `no_mmproj_offload: true`** (`Qwen3.8-27B-Q4_K_M-lite`) | **19 562 MiB** |
+| … + ctx 65536 | 18 666 MiB |
+| … + ctx 32768 | 17 800 MiB |
+
+kv_unified costs nothing by itself (the slots share one ctx_size); the second
+slot costs 0.6 GB, the BF16 mmproj on GPU 1.1 GB, and every 32K of context
+~0.9 GB. With the `-lite` entry the card holds the 27B + gemma-e2b-voice +
+pocket-tts on CUDA at 22.3 GB (2.2 GB free). Vision still works, with the
+image encoded on CPU (1.15 s for a small image); a vision request did not grow
+the 27B's VRAM. Two entries on one file are two processes: a client asking for
+the other name evicts this one and reloads it.
+
 ## Protocol notes
 
 - Audio in: `input_audio_buffer.append`, base64 PCM16 mono, 24 kHz by default
