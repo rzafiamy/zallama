@@ -139,6 +139,10 @@ class ProcessManager:
         self._admission_lock = asyncio.Lock()
         # Per-model locks so booting one model never blocks requests to another.
         self._model_locks: dict[str, asyncio.Lock] = {}
+        # Starts in progress, one per model, awaited by every caller (see
+        # get_or_start): a caller that gets cancelled mid-start must not abort
+        # a start that other callers, or the next request, still need.
+        self._starting: dict[str, asyncio.Task] = {}
         self._binary_cache: dict[str, str] = {}
 
         ls = cfg["llama_server"]
@@ -222,14 +226,27 @@ class ProcessManager:
         finally:
             inst.release()
 
-    @staticmethod
-    def _is_lightweight(entry: dict) -> bool:
-        """A lightweight backend (tn-server: a few MB of CPU memory, ~1 ms per
-        request) sits outside capacity accounting: it never counts toward
-        max_loaded_models or any memory budget, so adding it in front of the
-        TTS engines can't evict anything."""
+    # A declared mem_gb below this is a model that holds no VRAM (a CPU
+    # backend, e.g. pocket-tts or parakeet with `device: cpu`, declared 0.01).
+    _FREE_MEM_GB = 0.05
+
+    @classmethod
+    def _is_lightweight(cls, entry: dict) -> bool:
+        """A lightweight model sits outside capacity accounting: it never
+        counts toward max_loaded_models or any memory budget, so loading it
+        can't evict anything. That is a lightweight backend (tn-server: a few
+        MB of CPU memory, ~1 ms per request) or an entry declaring a mem_gb
+        under 0.05 GB (a CPU backend, no VRAM). Counting those made the voice
+        stack (LLM + CPU ASR + CPU TTS) hit max_loaded_models: 4 and evict its
+        own LLM on every TTS load."""
         from .model_registry import ModelRegistry  # local import to avoid cycle
 
+        try:
+            declared = float(entry.get("mem_gb") or 0)
+        except (TypeError, ValueError):
+            declared = 0.0
+        if 0 < declared < cls._FREE_MEM_GB:
+            return True
         try:
             return bool(getattr(get_backend(ModelRegistry.backend_of(entry)), "lightweight", False))
         except Exception:
@@ -309,7 +326,27 @@ class ProcessManager:
                 self._instances.move_to_end(model_name)
                 return inst
 
-        # Slow path: serialize starts of *this* model only.
+        # Slow path, in a task shared by every caller and shielded from their
+        # cancellation. A realtime turn dropped mid-start (the user spoke
+        # again) used to cancel the start after the process was spawned but
+        # before it was registered: the process was orphaned, still holding
+        # its VRAM, and the next request spawned a second one.
+        task = self._starting.get(model_name)
+        if task is None:
+            task = asyncio.ensure_future(self._start(model_name, entry, model_path))
+            self._starting[model_name] = task
+
+            def _done(t: asyncio.Task, name: str = model_name) -> None:
+                if self._starting.get(name) is t:
+                    del self._starting[name]
+                if not t.cancelled() and t.exception() is not None:
+                    logger.debug(f"Start of '{name}' failed: {t.exception()}")
+            task.add_done_callback(_done)
+        return await asyncio.shield(task)
+
+    async def _start(self, model_name: str, entry: dict, model_path: Path) -> ModelInstance:
+        """get_or_start's slow path: start the model unless it got started
+        meanwhile. Serialized per model."""
         async with self._lock_for(model_name):
             async with self._global_lock:
                 inst = self._instances.get(model_name)
@@ -341,14 +378,23 @@ class ProcessManager:
                             victim, drain_timeout=self._evict_drain_timeout
                         )
                     inst = await self._spawn(model_name, entry, model_path, incoming_cost)
-                    async with self._global_lock:
-                        self._instances[model_name] = inst
+                    await self._register(model_name, inst)
                     return inst
 
             inst = await self._spawn(model_name, entry, model_path, incoming_cost)
-            async with self._global_lock:
-                self._instances[model_name] = inst
+            await self._register(model_name, inst)
             return inst
+
+    async def _register(self, model_name: str, inst: ModelInstance) -> None:
+        """Record a started instance. Never overwrite a live one silently: the
+        overwritten process would keep running, unaccounted and unevictable."""
+        async with self._global_lock:
+            old = self._instances.get(model_name)
+            self._instances[model_name] = inst
+        if old is not None and old is not inst and old.is_alive():
+            logger.warning(f"'{model_name}' was already running on port {old.port}; "
+                           f"stopping that duplicate (now on port {inst.port})")
+            await self._kill_instance(old)
 
     async def prewarm_pinned(self, registry) -> None:
         """Start every pinned model so its slow cold load happens at boot.
@@ -727,8 +773,15 @@ class ProcessManager:
 
         try:
             await self._wait_healthy(inst, log_offset)
-        except Exception:
+        except BaseException:
+            # Whatever stopped the start (failure, timeout, cancellation), the
+            # process must not outlive it unregistered.
             self.lifecycle["start_failure"][model_name] += 1
+            if inst.process.returncode is None:
+                try:
+                    os.killpg(os.getpgid(inst.process.pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
             raise
         self.lifecycle["start"][model_name] += 1
         logger.info(f"Model '{model_name}' is ready on port {port}")

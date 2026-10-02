@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Orphaned backend processes (VRAM leak)** — a request cancelled while its model was starting
+  (a realtime turn dropped because the user spoke again) aborted `get_or_start` after the process
+  was spawned but before it was registered: the process kept its VRAM, unaccounted and never
+  evicted, and the next request spawned a second one (seen: two gemma-4-E2B servers, 1.9 GB
+  leaked). Starts now run in a task shared by every caller and shielded from their cancellation;
+  a start that fails or is cancelled kills its process; registering never overwrites a live
+  instance without stopping it.
+- **Voice LLM evicted by its own TTS** — `max_loaded_models` counted CPU backends (pocket-tts and
+  parakeet on CPU, kokoro), so the voice stack exceeded 4 and each CPU TTS load evicted the LLM in
+  the middle of a session. An entry declaring `mem_gb` under 0.05 GB (no VRAM) is now outside
+  capacity accounting, like tn-server: it never counts and never evicts.
+
 ## [1.29.0] - 2026-10-02
 
 ### Added
