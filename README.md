@@ -1034,6 +1034,10 @@ Without `voice` (or with a name it doesn't have) the model's native default spea
 `alba` in English). `voice` takes one of the 27 predefined names or inline audio (`data:audio/wav;base64,…`) to clone a voice; server-side paths and
 `hf://` URLs are refused with a `400`. `speed` is not supported and is ignored.
 
+Chat answers can be sent as they are: pocket-tts spells out numbers, times, amounts, `%`, `°C`, units and
+abbreviations in French and English (`9h30` → « neuf heures trente », `$5.50` → "five dollars and fifty
+cents") and reads Markdown headings and list items as sentences.
+
 Measured on an RTX 4090 through zallama: cold start 0.7 s (spawn, load, warm-up and the first sentence),
 then ~110 ms per sentence (~28x real time); 808 MiB VRAM, hence `mem_gb: 0.9`.
 

@@ -688,13 +688,17 @@ async def _stream_audio_proxy(pm, inst, upstream_url: str, data: dict, files: li
 # ---------------------------------------------------------------------------
 # POST /v1/audio/speech  (TTS)
 # ---------------------------------------------------------------------------
-def _sanitize_tts_input(text: str) -> str:
+def _sanitize_tts_input(text: str, keep_lines: bool = False) -> str:
     """Flatten text so kokoro doesn't truncate it.
 
     kokoro's pipeline splits on `\\n+` and yields one chunk per line; stray
     newlines or control chars can cut synthesis short at the first blank line.
     Strip control characters (Cc/Cf/Co/Cs), drop underscores (mispronounced),
     and collapse all whitespace runs to single spaces so the input is one line.
+
+    `keep_lines` (pocket-tts) keeps line breaks and underscores: its own
+    normalizer reads headings and list items as one sentence per line and
+    handles Markdown emphasis and snake_case.
     """
     # Keep whitespace control chars (\n, \t, ...) as spaces so sentences don't
     # run together; drop the rest (NUL, zero-width, other Cc/Cf/Co/Cs).
@@ -702,6 +706,9 @@ def _sanitize_tts_input(text: str) -> str:
         ch for ch in text
         if ch.isspace() or unicodedata.category(ch)[0] != "C"
     )
+    if keep_lines:
+        lines = (re.sub(r"[^\S\n]+", " ", ln).strip() for ln in cleaned.split("\n"))
+        return "\n".join(ln for ln in lines if ln)
     return re.sub(r"\s+", " ", cleaned.replace("_", "")).strip()
 
 
@@ -770,11 +777,6 @@ async def audio_speech(
     forward the JSON body and stream the audio bytes (and content type) back.
     """
     body = await request.json()
-    # Collapse newlines/control chars so kokoro doesn't truncate at the first
-    # blank line (its pipeline splits on `\n+` and drops trailing chunks).
-    raw_input = body.get("input")
-    if isinstance(raw_input, str):
-        body["input"] = _sanitize_tts_input(raw_input)
     model_name = _model_id_from_body(body)
     model_name, routed_language = _route_tts_by_language(model_name, body, registry)
     inst = await _resolve_instance(model_name, pm, registry, endpoint="audio/speech")
@@ -790,6 +792,13 @@ async def audio_speech(
         entry = {}
     params = entry.get("params") or {}
     backend_name = entry.get("backend")
+    # Collapse newlines/control chars so kokoro doesn't truncate at the first
+    # blank line (its pipeline splits on `\n+` and drops trailing chunks).
+    raw_input = body.get("input")
+    if isinstance(raw_input, str):
+        body["input"] = _sanitize_tts_input(
+            raw_input, keep_lines=backend_name == "pocket-tts-server"
+        )
     if "speed" in params and "speed" not in body:
         body["speed"] = params["speed"]
 

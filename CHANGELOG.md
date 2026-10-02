@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **pocket-tts garbled numbers and Markdown in long texts** — Pocket TTS reads digits,
+  times, amounts and Markdown as noise. pocket-tts-rs now normalizes text itself (French
+  and English numbers, `9h30`, `1 250 000 €`, `%`, `°C`, units, ordinals, abbreviations;
+  Markdown to sentences); rebuild with `./build-pocket-tts.sh`. `/v1/audio/speech` keeps
+  line breaks for `pocket-tts-server` models so headings and list items become sentences
+  instead of running together (other TTS backends still get one flattened line).
+
 ## [1.26.0] - 2026-10-02
 
 ### Added

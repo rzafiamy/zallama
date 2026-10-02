@@ -378,6 +378,11 @@ Only the entry's own `params` are forwarded — `llama_server.default_params`
 | `prewarm_voices` | `--prewarm-voices` | comma-separated voices resolved at startup |
 | `voice_cache_capacity` | `--voice-cache-capacity` | resolved voices kept in memory; default 64 |
 
+Text: pocket-tts spells out numbers, times, amounts, units and abbreviations
+(French, English) and turns Markdown into sentences itself; zallama keeps the
+input's line breaks for it (other TTS backends get one flattened line).
+Rebuild with `./build-pocket-tts.sh` to get it.
+
 Request `voice`: a predefined name or inline audio
 (`data:audio/wav;base64,…`, voice cloning — needs a GGUF converted with access
 to the gated `kyutai/pocket-tts` weights). Server-side paths and `hf://` URLs,
