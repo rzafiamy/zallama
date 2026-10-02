@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.29.0] - 2026-10-02
+
 ### Added
 - **`hidden` registry field** — `hidden: true` keeps an entry out of `GET /v1/models` but
   callable by name, so clients see a language-routing TTS entry (`pocket-tts`) and not the
@@ -840,7 +842,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.28.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.29.0...HEAD
+[1.29.0]: https://github.com/rzafiamy/zallama/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/rzafiamy/zallama/compare/v1.27.1...v1.28.0
 [1.27.1]: https://github.com/rzafiamy/zallama/compare/v1.27.0...v1.27.1
 [1.27.0]: https://github.com/rzafiamy/zallama/compare/v1.26.1...v1.27.0
