@@ -207,6 +207,12 @@ calls 30/30. Entry: `gemma12b-q4-96k1s-mv-k4-9.5g`.
   `function_call`, and never sends it to the TTS. A `call:` naming no declared
   tool is spoken as normal text; prose after a text call (usually an invented
   tool result) is dropped. Each one is logged ("tool call written as text").
+- Voices: `session.audio.output.voice` (or beta `session.voice`) takes a
+  voice of the session's TTS (pocket-tts: alba, jean, estelle, marius… the
+  list is in `session.created` → `session.zallama.voices`), or inline audio to
+  clone (`data:audio/wav;base64,...`, a few seconds of speech; pocket-tts
+  only). An unknown name (OpenAI's `alloy`, `marin`…) gets an `error` event
+  (`code: unknown_voice`, with the list) and the previous voice stays.
 - Auth: same API key as HTTP (the HTTP middleware never sees WebSockets), as
   `Authorization: Bearer` or the `openai-insecure-api-key.<key>` subprotocol
   (browsers). Loopback is let through.

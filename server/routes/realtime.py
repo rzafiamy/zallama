@@ -687,6 +687,7 @@ class RealtimeSession:
         self.last: Turn | None = None
         self.warm_task: asyncio.Task | None = None
         self.bg: set[asyncio.Task] = set()
+        self.warnings: list[str] = []         # reported after a session.update
 
     # -- plumbing ----------------------------------------------------------
     def _vad_path(self) -> str:
@@ -753,6 +754,17 @@ class RealtimeSession:
             await hold.aclose()
 
     # -- models ------------------------------------------------------------
+    def tts_voices(self) -> list[str] | None:
+        """Voices the session's TTS offers, or None when unknown (then any
+        voice is passed through)."""
+        try:
+            name, entry = self.tts_target()
+            from ..backends import get_backend
+            voices_of = getattr(get_backend(ModelRegistry.backend_of(entry)), "voices", None)
+            return list(voices_of(self.registry.resolve_path(entry))) if voices_of else None
+        except Exception:
+            return None
+
     def tts_language(self, phrase: str) -> str | None:
         """Language to speak a reply in: forced by the session, else detected
         on the reply's first phrase, else the previous reply's (detection
@@ -857,7 +869,10 @@ class RealtimeSession:
         if backend == "pocket-tts-server":
             from ..backends import PocketTtsServerBackend
             body = {"text": text}
-            if voice in PocketTtsServerBackend.VOICES:
+            # A predefined name, or inline audio to clone ("data:audio/wav;
+            # base64,..."); never a path or hf:// URL (see openai.py).
+            if voice in PocketTtsServerBackend.VOICES or (
+                    voice.startswith("data:audio/") and "base64," in voice):
                 body["voice"] = voice
             async with self.pm.serving(inst, "audio/speech", stream=True):
                 async with self.http.stream("POST", f"{inst.base_url}/stream", json=body) as r:
@@ -969,9 +984,10 @@ class RealtimeSession:
                           "turn_detection": td,
                           "transcription": {"model": self.asr_model}},
                 "output": {"format": {"type": "audio/pcm", "rate": OUT_RATE},
-                           "voice": self.conf["voice"]},
+                           "voice": self.conf["voice"][:64]},
             },
             "zallama": {"asr_model": self.asr_model, "tts_model": self.tts_model,
+                        "voices": self.tts_voices() or [],
                         "language": self.conf["language"] or self.language},
         }
 
@@ -993,7 +1009,16 @@ class RealtimeSession:
             conf["modalities"] = ["audio"] if "audio" in mods else ["text"]
         voice = aout.get("voice", s.get("voice"))
         if isinstance(voice, str):
-            conf["voice"] = voice
+            voice = voice.strip()
+            known = self.tts_voices()
+            if not voice or voice.startswith("data:audio/") or known is None or voice in known:
+                conf["voice"] = voice
+            else:
+                # OpenAI SDKs send "alloy", "marin"...: the TTS has none of
+                # them. Say so instead of silently speaking the default.
+                self.warnings.append(
+                    f"Unknown voice '{voice[:40]}' for {self.tts_model}; keeping "
+                    f"'{conf['voice'] or 'default'}'. Voices: {', '.join(known)}")
         for key in ("temperature",):
             if key in s:
                 conf[key] = float(s[key])
@@ -1250,6 +1275,11 @@ class RealtimeSession:
         elif kind == "session.update":
             if self.apply_session(ev.get("session") or {}):
                 self._prefill()
+            for msg in self.warnings:
+                await self.send({"type": "error", "error": {
+                    "type": "invalid_request_error", "code": "unknown_voice",
+                    "param": "session.audio.output.voice", "message": msg, "event_id": eid}})
+            self.warnings.clear()
             await self.send({"type": "session.updated", "session": self.session_obj()})
         elif kind == "response.create":
             r = ev.get("response") or {}

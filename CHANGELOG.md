@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Realtime voice choice ignored silently** — `/v1/realtime` dropped any voice the TTS didn't
+  know (OpenAI SDKs send `alloy`, `marin`…) and spoke the default while `session.updated` echoed
+  the requested name. An unknown voice now gets an `error` event (`unknown_voice`, listing the
+  TTS's voices, also in `session.created` → `zallama.voices`) and the previous voice stays; inline
+  audio (`data:audio/...;base64,...`) clones a voice with pocket-tts, as on `/v1/audio/speech`.
 - **Orphaned backend processes (VRAM leak)** — a request cancelled while its model was starting
   (a realtime turn dropped because the user spoke again) aborted `get_or_start` after the process
   was spawned but before it was registered: the process kept its VRAM, unaccounted and never
