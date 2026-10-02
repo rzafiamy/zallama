@@ -998,6 +998,8 @@ bin/pocket-tts convert --variant english --voices all -o /bank2/zallama/models/p
 ```
 Voice cloning from a WAV needs the gated `kyutai/pocket-tts` weights: accept the license on Hugging Face and
 run `hf auth login` before converting. Without them everything else works.
+Ready-made files (q8_0 and q4k, all 27 voices, voice cloning included; gated with Kyutai's terms):
+[rleo/pocket-tts-GGUF](https://huggingface.co/rleo/pocket-tts-GGUF).
 
 **3. Register** (both entries are in `models/registry.example.yaml`):
 ```yaml
@@ -1233,6 +1235,8 @@ kernels and CUDA Graphs. Tuned for French / English ↔ Malagasy, but any NLLB-2
 **2. Get a model** — in a malaga checkout, `scripts/download.sh 600M` downloads NLLB-200 distilled 600M
 and converts it; copy `models/gguf/nllb-200-distilled-600M-q4_k_m.gguf` into your models dir.
 `q4_k_m` is the recommended preset: fastest, and FLORES-200 quality identical to f32.
+Or download it converted: [rleo/nllb-200-distilled-600M-malaga-GGUF](https://huggingface.co/rleo/nllb-200-distilled-600M-malaga-GGUF)
+(and the Malagasy voice: [rleo/mms-tts-mlg-malaga-GGUF](https://huggingface.co/rleo/mms-tts-mlg-malaga-GGUF)).
 
 **3. Register**:
 ```yaml
@@ -1282,9 +1286,12 @@ prompt (text, LaTeX formulas, OTSL tables → HTML, code). Models declare `modal
 ./build-teleocr.sh            # or --cpu; TELEOCR_SRC=/path/to/checkout to build a local tree
 ```
 
-**2. Get a model**: download `XingChen-AGI/TeleOCR` and convert it:
+**2. Get a model**: download the converted GGUF from
+[rleo/TeleOCR-GGUF](https://huggingface.co/rleo/TeleOCR-GGUF) (`teleocr-q8v.gguf` for GPU,
+`teleocr-q8_0.gguf` for CPU), or convert `XingChen-AGI/TeleOCR` yourself:
 ```bash
-bin/teleocr convert ./TeleOCR -o ~/.zallama/models/teleocr-q8v.gguf --vision-dtype q8_0
+hf download rleo/TeleOCR-GGUF teleocr-q8v.gguf --local-dir ~/.zallama/models
+bin/teleocr convert ./TeleOCR -o ~/.zallama/models/teleocr-q8v.gguf --vision-dtype q8_0   # or this
 ```
 
 **3. Register**:
