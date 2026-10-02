@@ -939,14 +939,23 @@ curl http://localhost:11435/v1/audio/speech \
 
 Kokoro takes no language argument — it phonemizes according to the **voice prefix** (`ff_siwis` → French, `af_heart` → American English, `if_sara` → Italian, …). Sending French text with an English voice therefore reads it with English sounds.
 
-So when a request names **no** voice, Zallama guesses the language from the text and picks that language's voice ([`server/tts_lang.py`](server/tts_lang.py)). Precedence:
+So when a request names **no** voice — or a voice the model doesn't have — Zallama guesses the language from the text and picks that language's voice ([`server/tts_lang.py`](server/tts_lang.py)). Precedence:
 
 | | |
 |---|---|
-| 1. `voice` in the request | always wins — auto-selection never overrides an explicit choice |
+| 1. `voice` in the request | wins whenever the model has that voice |
 | 2. detected language | `fr` → `ff_siwis`, `en` → `af_heart`, plus `es`/`it`/`pt`/`hi`/`ja`/`zh` |
 | 3. the model's registry `voice` param | used when the language can't be determined |
 | 4. kokoro's own default | when no registry default is set either |
+
+**Unknown voices fall back instead of failing.** Clients send whatever their SDK or UI defaults to —
+`"alloy"` from OpenAI SDKs, a Kokoro name sent to another engine — and every engine rejects a name it
+doesn't know (kokoro with a `400`, Voxtral and pocket-tts with a `500`), which audio players render as
+silence. Zallama drops such a voice, applies steps 2–4, and names the dropped voice in the
+`X-Zallama-Voice-Fallback` response header. `GET /v1/models/<id>` lists each TTS model's `voices` (and
+`default_voice` when the registry sets one) so a UI can offer real choices. This applies to every TTS
+backend that knows its voices: kokoro (54), Voxtral (the model's `voice_embedding/*.pt`) and pocket-tts
+(27). MMS-TTS on malaga has a single speaker and ignores `voice`.
 
 Detection is a small built-in heuristic, not a language identifier: CJK and Devanagari are settled by script, the Latin languages by function-word frequency. It deliberately answers "unknown" for very short inputs — `"Merci"` and `"Mercy"` are not distinguishable in five letters — and falls through to your registry default there. Pin `voice` in the request whenever you need a guaranteed result.
 
@@ -960,8 +969,8 @@ curl http://localhost:11435/v1/audio/speech \
 
 > Install **espeak-ng** (see [Installation](#2-build-the-inference-engines)) — without it kokoro falls back to a bundled phonemizer that is ~2.5x slower.
 
-Language detection only applies to `kokoro-server` models (it yields Kokoro voice names). The other TTS
-backends below get the request's `voice`, else the registry `voice` param, else their own default.
+The language step (2) picks a voice for kokoro and Voxtral (`fr` → `fr_female`, then `fr_male`); pocket-tts
+models speak one language each and use their native default voice instead.
 
 ### Pocket TTS (French, English, …) — pocket-tts
 
@@ -1021,8 +1030,8 @@ curl http://localhost:11435/v1/audio/speech -H "Content-Type: application/json" 
 An optional `"language": "en"` in the request skips detection (a code not in `languages` is a `400`).
 Alternating languages keeps both models loaded (~1.6 GB VRAM). Any TTS entry can route this way.
 
-Without `voice` the model's native default speaks (`estelle` in French, `alba` in English). `voice` takes
-a predefined name or inline audio (`data:audio/wav;base64,…`) to clone a voice; server-side paths and
+Without `voice` (or with a name it doesn't have) the model's native default speaks (`estelle` in French,
+`alba` in English). `voice` takes one of the 27 predefined names or inline audio (`data:audio/wav;base64,…`) to clone a voice; server-side paths and
 `hf://` URLs are refused with a `400`. `speed` is not supported and is ignored.
 
 Measured on an RTX 4090 through zallama: cold start 0.7 s (spawn, load, warm-up and the first sentence),

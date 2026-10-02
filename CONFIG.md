@@ -343,7 +343,7 @@ fields; the registry's `params.voice`/`params.speed` are applied by the
 
 | key | applied where | notes |
 |---|---|---|
-| `voice` | request body default | precedence: request `voice` > text-language auto-detect > `params.voice` > kokoro's own default |
+| `voice` | request body default | precedence: request `voice` (if kokoro has it) > text-language auto-detect > `params.voice` > kokoro's own default |
 | `speed` | request body default | applied only if the request omits `speed` |
 
 `file` for a kokoro entry must point at the model's **resource directory**
@@ -381,8 +381,11 @@ Only the entry's own `params` are forwarded — `llama_server.default_params`
 Request `voice`: a predefined name or inline audio
 (`data:audio/wav;base64,…`, voice cloning — needs a GGUF converted with access
 to the gated `kyutai/pocket-tts` weights). Server-side paths and `hf://` URLs,
-which `pocket-tts` itself accepts, are refused by zallama with a `400`. `speed`
-is ignored. No language auto-detection: each model speaks one language.
+which `pocket-tts` itself accepts, are refused by zallama with a `400`. Any
+other name that is not one of the 27 voices (listed in `/v1/models/<id>`) is
+replaced by `params.voice` or the native default and named in
+`X-Zallama-Voice-Fallback`. `speed` is ignored. Each model speaks one language;
+see language routing below.
 
 ### Language routing (any `tts` entry)
 
@@ -418,6 +421,10 @@ for `modality: tts`.
 Same CLI shape and endpoint contract as `kokoro-server`: `--model`/`--host`/
 `--port`, `POST /v1/audio/speech` (JSON in: `input`, optional `voice` —
 `speed` isn't supported by the engine and is ignored if sent), `GET /health`.
+Voices are the model's `voice_embedding/*.pt`; an unknown or missing `voice` is
+replaced by the detected language's `<lang>_female` / `<lang>_male`, else
+`params.voice`, else the engine's `neutral_female` (an unknown name would fail
+generation with a 500).
 No launch-time params beyond the path.
 
 `file` must point at the model directory containing `consolidated.safetensors`

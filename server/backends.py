@@ -642,6 +642,30 @@ class KokoroServerBackend:
     binary_name = "kokoro-server"
     modalities = {TTS}
 
+    # The 54 voices compiled into kokoro.cpp (kokoro_common::voices(), also
+    # served at kokoro-server's GET /v1/voices). Any other name is answered
+    # with a 400 by kokoro-server, so /v1/audio/speech replaces it.
+    VOICES = (
+        "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore",
+        "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam",
+        "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx",
+        "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+        "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "ef_dora", "em_alex",
+        "em_santa", "ff_siwis", "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
+        "if_sara", "im_nicola", "jf_alpha", "jf_gongitsune", "jf_nezumi",
+        "jf_tebukuro", "jm_kumo", "pf_dora", "pm_alex", "pm_santa", "zf_xiaobei",
+        "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi",
+        "zm_yunxia", "zm_yunyang",
+    )
+
+    def voices(self, model_path: Path) -> list[str]:
+        return list(self.VOICES)
+
+    def voice_for_language(self, lang: str | None, voices: list[str]) -> str | None:
+        # kokoro phonemizes by the voice's prefix, so the language decides it.
+        from .tts_lang import VOICE_BY_LANGUAGE
+        return VOICE_BY_LANGUAGE.get(lang) if lang else None
+
     def build_args(
         self,
         binary: str,
@@ -695,6 +719,23 @@ class VoxtralTtsServerBackend:
     binary_name = "voxtral-tts-server"
     modalities = {TTS}
 
+    def voices(self, model_path: Path) -> list[str] | None:
+        """The model's built-in voices: one `voice_embedding/<name>.pt` each
+        (`fr_female`, `de_male`, `neutral_female`, ...). An unknown name makes
+        generation fail (500), so /v1/audio/speech replaces it."""
+        d = Path(model_path) / "voice_embedding"
+        if not d.is_dir():
+            return None
+        return sorted(p.stem for p in d.glob("*.pt"))
+
+    def voice_for_language(self, lang: str | None, voices: list[str]) -> str | None:
+        # Voxtral reads any language with any voice, but the language's own
+        # speaker has the right accent.
+        for name in (f"{lang}_female", f"{lang}_male") if lang else ():
+            if name in voices:
+                return name
+        return None
+
     def build_args(
         self,
         binary: str,
@@ -734,6 +775,21 @@ class PocketTtsServerBackend:
     name = "pocket-tts-server"
     binary_name = "pocket-tts"
     modalities = {TTS}
+
+    # Kyutai's predefined voices, the same 27 in every language's model
+    # (pocket-tts `voices::PREDEFINED_VOICES`). Listed in /v1/models/<id>; any
+    # other name is replaced by the default voice in /v1/audio/speech, since
+    # clients routinely send OpenAI's ("alloy") or Kokoro's ("af_heart").
+    VOICES = (
+        "alba", "anna", "azelma", "bill_boerst", "caro_davy", "charles",
+        "cosette", "daan", "eponine", "estelle", "eve", "fantine", "george",
+        "giovanni", "jane", "javert", "jean", "juergen", "lola", "marius",
+        "mary", "michael", "paul", "peter_yearsley", "rafael", "stuart_bell",
+        "vera",
+    )
+
+    def voices(self, model_path: Path) -> list[str]:
+        return list(self.VOICES)
 
     # Params that take a value: registry/config key -> CLI flag.
     _PARAM_MAP = {

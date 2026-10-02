@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `GET /v1/models/<id>` lists a TTS model's `voices` (kokoro's 54, the Voxtral model's
+  `voice_embedding/*.pt`, pocket-tts's 27), its registry `default_voice`, and the languages
+  of a language-routed entry.
+
+### Fixed
+- **Silent audio on unknown voices** — clients send their own default voice (`"alloy"` from
+  OpenAI SDKs, a Kokoro name to another engine); kokoro answered `400`, Voxtral and pocket-tts
+  `500`, and players rendered the error as silence. `/v1/audio/speech` now drops a voice the
+  model doesn't have and falls back as if none was given (detected language's voice for
+  kokoro and Voxtral, then `params.voice`, then the engine default), naming the dropped
+  voice in `X-Zallama-Voice-Fallback`.
+- Voxtral requests without a voice now get the detected language's speaker (`fr_female`, …)
+  instead of `neutral_female`.
+
 ## [1.25.0] - 2026-10-02
 
 ### Added

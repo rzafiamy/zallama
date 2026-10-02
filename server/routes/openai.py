@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..dependencies import get_pm, get_registry
 from ..backends import ENDPOINT_MODALITY, TRANSLATION, get_backend
-from ..tts_lang import detect_language, voice_for_text
+from ..tts_lang import detect_language
 from ..model_registry import ModelRegistry
 
 router = APIRouter(prefix="/v1")
@@ -251,7 +251,36 @@ def _model_info(entry: dict, running: set[str], pm) -> dict:
         "pinned": bool(entry.get("pinned", False)),
         "tunable_params": tunable_params,
         **({"languages": translation_languages(merged)} if modality == TRANSLATION else {}),
+        **_tts_info(entry, backend_obj),
     }
+
+
+def _tts_voices(entry: dict, backend_obj, registry=None) -> list[str] | None:
+    """The voices a TTS backend has for this entry, or None when unknown
+    (then any requested voice is passed through untouched)."""
+    voices_of = getattr(backend_obj, "voices", None)
+    if voices_of is None:
+        return None
+    try:
+        registry = registry or get_registry()
+        return voices_of(registry.resolve_path(entry))
+    except Exception:
+        return None
+
+
+def _tts_info(entry: dict, backend_obj) -> dict:
+    """Voices and routed languages a TTS client can offer, when known."""
+    params = entry.get("params") or {}
+    info: dict = {}
+    voices = _tts_voices(entry, backend_obj)
+    if voices:
+        info["voices"] = list(voices)
+        if params.get("voice"):
+            info["default_voice"] = params["voice"]
+    routes = params.get("languages")
+    if isinstance(routes, dict) and routes:
+        info["languages"] = sorted(routes)
+    return info
 
 
 # ---------------------------------------------------------------------------
@@ -764,29 +793,23 @@ async def audio_speech(
     if "speed" in params and "speed" not in body:
         body["speed"] = params["speed"]
 
-    # `voice` gets one step more than the other knobs. kokoro has no language
-    # argument — it phonemizes according to the voice's prefix — so answering a
-    # French request with the default English voice reads French text with
-    # English sounds. When (and only when) the request names no voice, guess the
-    # language from the text and pick that language's voice. Precedence is
-    # request voice > detected language > registry default > kokoro's own
-    # default, so a caller that asks for a voice always gets it, and the
-    # registry default still covers text we can't place.
+    # `voice` gets one step more than the other knobs. Clients send whatever
+    # their UI or SDK defaults to ("alloy" from OpenAI SDKs, Kokoro names from
+    # a shared voice picker), and every TTS engine rejects names it doesn't
+    # know (kokoro 400, voxtral and pocket-tts 500), which players render as
+    # silence. So a voice the backend doesn't have is dropped, and the same
+    # fallback as "no voice" applies:
     #
-    # The guess yields *Kokoro* voice names, so it only applies to
-    # kokoro-server. Other TTS backends get the registry default or their own
-    # (pocket-tts: one language per model, native default voice).
+    #   request voice (if the backend has it) > the detected language's voice
+    #   (kokoro, voxtral) > registry `voice` param > the engine's own default
+    #
+    # The language step matters most for kokoro, which phonemizes by the
+    # voice's prefix: French text with an English voice comes out with
+    # English sounds. A dropped voice is named in X-Zallama-Voice-Fallback.
     voice = body.get("voice")
-    if not (isinstance(voice, str) and voice.strip()):
-        if backend_name in (None, "kokoro-server"):
-            chosen = voice_for_text(body.get("input") or "", fallback=params.get("voice"))
-        else:
-            chosen = params.get("voice")
-        if chosen:
-            body["voice"] = chosen
-        else:
-            body.pop("voice", None)
-    elif backend_name == "pocket-tts-server" and not _pocket_voice_allowed(voice):
+    voice = voice.strip() if isinstance(voice, str) else ""
+    voice_fallback = None
+    if voice and backend_name == "pocket-tts-server" and not _pocket_voice_allowed(voice):
         # pocket-tts also accepts a server-side file path or an hf:// URL as
         # `voice`; through zallama that would let any client make the server
         # open local files or download arbitrary repos. Names and inline audio
@@ -796,7 +819,22 @@ async def audio_speech(
             detail="voice must be a predefined voice name (e.g. 'estelle', 'alba') "
                    "or inline audio 'data:audio/wav;base64,...' for cloning",
         )
-
+    backend_obj = get_backend(backend_name or "kokoro-server")
+    known = _tts_voices(entry, backend_obj, registry)
+    if voice and known is not None and voice not in known and not voice.startswith("data:"):
+        voice_fallback, voice = voice, ""
+    if voice:
+        body["voice"] = voice
+    else:
+        chosen = None
+        pick = getattr(backend_obj, "voice_for_language", None)
+        if pick is not None:
+            chosen = pick(detect_language(body.get("input") or ""), known or [])
+        chosen = chosen or params.get("voice")
+        if chosen:
+            body["voice"] = chosen
+        else:
+            body.pop("voice", None)
     upstream_url = f"{inst.base_url}/v1/audio/speech"
     async with pm.serving(inst, "audio/speech"):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
@@ -809,8 +847,10 @@ async def audio_speech(
     # A language-routed request says which model and language answered.
     headers = (
         {"X-Zallama-Model": model_name, "X-Zallama-Language": routed_language}
-        if routed_language else None
+        if routed_language else {}
     )
+    if voice_fallback:
+        headers["X-Zallama-Voice-Fallback"] = voice_fallback[:64]
     return Response(
         content=resp.content,
         status_code=resp.status_code,
