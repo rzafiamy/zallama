@@ -15,10 +15,16 @@ Code: `server/routes/realtime.py` (session, protocol, pipeline),
 
 ## Setup
 
+Registry names of the LLM entries read `<model>-<quant>-<ctx>k<slots>s-<options>-<kv>-<vram>g`:
+options `m` MTP, `d` dflash, `v` mmproj on GPU, `vc` mmproj on CPU, `t` thinking
+(omitted when none); kv `k4`/`k8`/`k16`; vram is the measured `mem_gb`. Older
+names stay as aliases. E.g. `qwen27b-q4-96k2s-mv-k4-20.8g` = Qwen3.8-27B Q4, 96K
+context, 2 slots, MTP, vision on GPU, q4_0 KV, 20.8 GB.
+
 ```yaml
 # ~/.zallama/config.yaml
 realtime:
-  llm_model: "gemma4-e2b-qat-q4kxl-32k-1s-nomtp-nommproj-kvq8"   # alias: gemma-e2b-voice
+  llm_model: "gemma-e2b-q4-32k1s-k8-1.9g"   # alias: gemma-e2b-voice
   asr_model: "parakeet-tdt-v3-cpu"  # CPU, no VRAM
   tts_model: "pocket-tts-voice"     # CPU language router → pocket-tts-fr-cpu / -en-cpu (see VRAM below)
   voice: "estelle"
@@ -52,7 +58,7 @@ end of speech to the first audio byte sent:
 
 | LLM | VRAM | ASR | LLM TTFT | first audio | tools (4 cases) |
 |---|---|---|---|---|---|
-| **gemma4-e2b-qat-q4kxl-32k-1s-nomtp-nommproj-kvq8** (alias gemma-e2b-voice) | 1.9 GB | 78–168 ms | 24–36 ms | **506–531 ms** | 30/30 |
+| **gemma-e2b-q4-32k1s-k8-1.9g** (alias gemma-e2b-voice) | 1.9 GB | 78–168 ms | 24–36 ms | **506–531 ms** | 30/30 |
 | gemma-4-12b-it-Q4_K_M (MTP head, 60–100 % accepted) | 11.8 GB | 73–139 ms | 79–160 ms | 506–641 ms | 4/4 |
 | Qwen3.8-27B-Q4_K_M (MTP, hybrid) | 20.8 GB | 75–135 ms | 240–380 ms | 640–830 ms | 4/4 |
 | qwen3-0.6b-q8_0 | 1.4 GB | 80–170 ms | 16–20 ms | 506 ms | invents answers |
@@ -145,10 +151,10 @@ and the time to answer about a 1280×800 screenshot (~1 000 image tokens):
 
 | variant | VRAM | screenshot |
 |---|---|---|
-| parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`qwen3.8-27b-q4km-96k-2s-mtp-mmproj-kvq4`, was `Qwen3.8-27B-Q4_K_M`) | 21 298 MiB | |
+| parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`qwen27b-q4-96k2s-mv-k4-20.8g`, alias `Qwen3.8-27B-Q4_K_M`) | 21 298 MiB | |
 | parallel 2, no kv_unified | 21 232 MiB | |
 | parallel 1 | 20 700 MiB | 1.2 s |
-| **parallel 1, ctx 65536** (`qwen3.8-27b-q4km-64k-1s-mtp-mmproj-kvq4` (was `Qwen3.8-27B-Q4_K_M-lite`)) | **19 876 MiB** | **1.2 s** |
+| **parallel 1, ctx 65536** (`qwen27b-q4-64k1s-mv-k4-19.9g` (alias `Qwen3.8-27B-Q4_K_M-lite`)) | **19 876 MiB** | **1.2 s** |
 | parallel 1, ctx 32768 | ~17 800 MiB | |
 | parallel 1 + `no_mmproj_offload: true` (mmproj on CPU), ctx 98304 | 19 562 MiB | 11.7 s |
 
