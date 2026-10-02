@@ -55,6 +55,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Realtime Speech-to-Speech](#-realtime-speech-to-speech-v1realtime)
 - [Image Generation (Stable Diffusion)](#-image-generation-stable-diffusion)
 - [Translation (malaga)](#-translation-malaga)
+- [Document OCR (TeleOCR)](#-document-ocr-teleocr)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
 - [RAG: Reranking & the zvec Vector Store](#-rag-reranking--the-zvec-vector-store)
 - [OpenAI API Integration](#-openai-api-integration)
@@ -1264,6 +1265,54 @@ Measured on an RTX 4090 through zallama (q4_k_m): cold start 1.6 s including CUD
 short sentence in every direction, 64 long sentences in 0.26 s. VRAM is 1.0 GB idle and peaks at 1.6 GB on large batches of
 long sentences, hence `mem_gb: 1.6`. Translation defaults to the `services` eviction group.
 Every `params` key: [CONFIG.md](CONFIG.md#translation-backend-malaga-server).
+
+---
+
+## 📄 Document OCR (TeleOCR)
+
+Document parsing runs on the **`teleocr-server`** backend: [teleocr-rs](https://github.com/rzafiamy/teleocr-rs)
+is a Rust/Candle port of [TeleOCR](https://huggingface.co/XingChen-AGI/TeleOCR) (China Telecom, Apache-2.0,
+~1.2B params, first on OmniDocBench v1.6), with the model in one GGUF. llama.cpp cannot load this model
+(head_dim 128 ≠ hidden/heads and per-head QK-norm). Pages go through the official two-stage pipeline:
+layout on a 1036×1036 copy, then every block cropped from the full page and recognized with its own
+prompt (text, LaTeX formulas, OTSL tables → HTML, code). Models declare `modality: ocr`.
+
+**1. Build** (installs `bin/teleocr` and `bin/libpdfium.so`):
+```bash
+./build-teleocr.sh            # or --cpu; TELEOCR_SRC=/path/to/checkout to build a local tree
+```
+
+**2. Get a model**: download `XingChen-AGI/TeleOCR` and convert it:
+```bash
+bin/teleocr convert ./TeleOCR -o ~/.zallama/models/teleocr-q8v.gguf --vision-dtype q8_0
+```
+
+**3. Register**:
+```yaml
+  - name: teleocr
+    file: teleocr-q8v.gguf
+    modality: ocr
+    backend: teleocr-server
+    mem_gb: 7.0
+    params:
+      batch: 8
+```
+
+**4. Parse**: `POST /v1/ocr`, multipart or JSON:
+```bash
+curl -s http://localhost:11435/v1/ocr -F model=teleocr -F file=@paper.pdf -F pages=1-3 | jq -r .markdown
+curl -s http://localhost:11435/v1/ocr -H 'content-type: application/json' \
+  -d '{"model": "teleocr", "task": "table", "image": "data:image/png;base64,..."}'
+```
+`task=parse` (default) returns `markdown` and `blocks` (type, bbox, polygon, content; a PDF returns
+`pages`). Single-prompt tasks (`text`, `table`, `formula`, `code`, `layout`, `figure`, `seal`) return
+`content` (post-processed: HTML table, `$$…$$` formula) and `raw`. For photographed or curved pages use
+`mode=segmentation`.
+
+Measured on an RTX 4090 (q8v GGUF): greedy output is token-identical to the transformers reference on the
+model card's samples; ~225 tokens/s per sequence; a full page in ~3.2 s at batch 8 (layout of all pages
+batched, then all their blocks). OCR defaults to the `primary` eviction group: at `mem_gb: 7` it does not
+fit next to a 21 GB model. Every `params` key: [CONFIG.md](CONFIG.md#ocr-backend-teleocr-server).
 
 ---
 

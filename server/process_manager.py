@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from .backends import ASR, EMBEDDING, IMAGE, NORMALIZATION, RERANK, TEXT, TRANSLATION, TTS, Backend, get_backend
+from .backends import ASR, EMBEDDING, IMAGE, NORMALIZATION, OCR, RERANK, TEXT, TRANSLATION, TTS, Backend, get_backend
 from .config import resolve_binary
 
 logger = logging.getLogger("zallama.process_manager")
@@ -280,6 +280,9 @@ class ProcessManager:
         TTS: "services",
         TRANSLATION: "services",
         NORMALIZATION: "services",
+        # Document OCR holds a few GB while parsing (vision tower over full
+        # pages, batched block decoding): it competes with the big models.
+        OCR: "primary",
     }
 
     @classmethod

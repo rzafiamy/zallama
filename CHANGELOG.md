@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Document OCR (`POST /v1/ocr`, `modality: ocr`)** — new `teleocr-server` backend running
+  [teleocr-rs](https://github.com/rzafiamy/teleocr-rs), a Rust/Candle + GGUF port of TeleOCR
+  (~1.2B, OmniDocBench v1.6 leader). Page images and PDFs (PDFium, 200 DPI) go to Markdown and
+  typed blocks: layout → per-block text / LaTeX / HTML tables / code, `mode=segmentation` for
+  photographed pages. Single-prompt tasks (`text`, `table`, `formula`, `code`, `layout`,
+  `figure`, `seal`) too. `build-teleocr.sh` installs `bin/teleocr` and `bin/libpdfium.so`.
+  ~3.2 s per page on an RTX 4090; OCR defaults to the `primary` eviction group.
+
 ### Fixed
 - **Realtime voice choice ignored silently** — `/v1/realtime` dropped any voice the TTS didn't
   know (OpenAI SDKs send `alloy`, `marin`…) and spoke the default while `session.updated` echoed

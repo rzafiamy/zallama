@@ -660,6 +660,33 @@ from the daemon's environment.
 long sentences (measured, RTX 4090); q8_0 needs ~0.2 GB more. `device: cpu`
 uses no VRAM — leave `mem_gb` unset — but is ~50× slower.
 
+## `ocr` (backend: `teleocr-server`)
+
+Source: `TeleOcrServerBackend`, wrapping `teleocr serve` from
+[rzafiamy/teleocr-rs](https://github.com/rzafiamy/teleocr-rs) (TeleOCR, a
+~1.2B document-parsing VLM, in Rust/Candle with GGUF weights). Build with
+`./build-teleocr.sh`, which also installs `bin/libpdfium.so` for PDF input.
+Default backend for `modality: ocr`, default eviction group `primary`.
+
+Serves only `/v1/ocr` (JSON with a base64 / data-URI `image`, or multipart
+with a `file`): `task=parse` (default) runs layout → per-block recognition and
+returns `markdown` + `blocks`; `text`, `table`, `formula`, `code`, `layout`,
+`layout_seg`, `figure`, `seal` run one prompt. Request fields: `mode`
+(`detection` | `segmentation` for photographed pages), `paratext` (keep
+headers / footers in the Markdown), `max_tokens`, and for PDFs `pages`
+(`"1-3,5"`) and `dpi` (200).
+
+| key | CLI flag | default |
+|---|---|---|
+| `batch` | `--batch` (sequences decoded together while parsing) | 8 |
+| `max_pixels` | `--max-pixels` (cap on resized image area) | 12845056 |
+| `threads` | `--threads` (CPU inference) | all cores |
+| `device: cpu` or `n_gpu_layers: 0` | `--cpu` | GPU when present |
+
+`mem_gb`: the q8v GGUF (Q8_0 text and vision, 1.5 GB) peaks at +4.9 GB at
+batch 4, +6.4 GB at batch 8 and +8.6 GB at batch 16 while parsing PDF pages
+(RTX 4090). Batch 8 parses ~3.2 s per page, batch 1 ~6.5 s.
+
 ---
 
 ## Daemon-wide config (`config.yaml`, not per-model)

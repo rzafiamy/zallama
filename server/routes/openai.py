@@ -14,6 +14,7 @@ Implements:
   POST /v1/audio/speech           (TTS — JSON audio output, kokoro-server)
   POST /v1/images/generations     (Image generation — JSON output, sd-server)
   POST /v1/images/edits           (Image editing — multipart upload, sd-server)
+  POST /v1/ocr                    (document OCR — image or PDF to Markdown, teleocr-server)
 """
 from __future__ import annotations
 
@@ -1086,3 +1087,59 @@ async def images_edits(
                              "type": "upstream_error"}}
     return JSONResponse(content=content, status_code=resp.status_code)
 
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/ocr  (document OCR / parsing)
+# ---------------------------------------------------------------------------
+@router.post("/ocr")
+async def ocr(
+    request: Request,
+    pm=Depends(get_pm),
+    registry=Depends(get_registry),
+):
+    """Parse a page image or a PDF with an OCR model (teleocr-server).
+
+    JSON `{model, image: base64 | data URI, task?, mode?, paratext?,
+    max_tokens?, pages?, dpi?}` or multipart (`model`, `file`, same fields).
+    task=parse (default) returns `{markdown, blocks, ...}` (a PDF returns
+    `{markdown, pages}`); text / table / formula / code / layout / figure /
+    seal run one recognition prompt and return `{content, raw}`.
+    """
+    ctype = request.headers.get("content-type", "")
+    if ctype.startswith("multipart/form-data"):
+        form = await request.form()
+        model_name = (form.get("model") or "").strip()
+        if not model_name:
+            raise HTTPException(status_code=400, detail="'model' field is required")
+        files, data = [], {}
+        for key, value in form.multi_items():
+            if hasattr(value, "read") and hasattr(value, "filename"):
+                content = await value.read()
+                files.append((key, (value.filename or key, content,
+                                    value.content_type or "application/octet-stream")))
+            elif key != "model":
+                data[key] = value
+        send = {"data": data, "files": files}
+    else:
+        body = await request.json()
+        model_name = _model_id_from_body(body)
+        send = {"json": {k: v for k, v in body.items() if k != "model"}}
+
+    inst = await _resolve_instance(model_name, pm, registry, endpoint="ocr")
+    inst.touch()
+    async with pm.serving(inst, "ocr") as rec:
+        async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
+            try:
+                resp = await client.post(f"{inst.base_url}/v1/ocr", **send)
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"teleocr-server error: {e}")
+        if resp.status_code != 200:
+            pm.request_log.finish(rec, error=f"HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {"error": {"message": resp.text or "non-JSON response", "type": "upstream_error"}}
+    if resp.status_code == 200 and isinstance(payload, dict):
+        payload["model"] = model_name
+    return JSONResponse(content=payload, status_code=resp.status_code)

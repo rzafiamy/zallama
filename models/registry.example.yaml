@@ -138,6 +138,19 @@ models:
       device: cuda
       languages: [fr, en, mg]
 
+  # --- Document OCR: TeleOCR (teleocr-rs) -------------------------------------
+  # Page image or PDF -> Markdown + typed blocks on POST /v1/ocr only (no chat).
+  # Build with build-teleocr.sh; the GGUF comes from
+  #   teleocr convert <XingChen-AGI/TeleOCR dir> -o teleocr-q8v.gguf --vision-dtype q8_0
+  - name: teleocr
+    file: teleocr-q8v.gguf
+    modality: ocr
+    backend: teleocr-server
+    description: "TeleOCR 1.2B document parsing (layout, text, tables, formulas)"
+    mem_gb: 7.0        # measured peak parsing 6 PDF pages at batch 8
+    params:
+      batch: 8         # blocks decoded together; ~0.6 GB per extra sequence
+
   # --- TTS: Malagasy speech (Meta MMS-TTS on malaga) ----------------------------
   # facebook/mms-tts-mlg (VITS, CC-BY-NC-4.0 — non-commercial) converted with
   #   malaga convert --hf <hf-dir> -o mms-tts-mlg-f16.gguf      (f16 by default)

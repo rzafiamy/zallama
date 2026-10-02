@@ -63,8 +63,13 @@ TRANSLATION = "translation"
 # Markdown to words. Serves /v1/normalize; the TTS route calls it before the
 # engine when a TTS entry names it in `params.normalizer`.
 NORMALIZATION = "normalization"
+# Document OCR / parsing (teleocr-server): page image or PDF in, Markdown and
+# typed blocks (text, tables as HTML, formulas as LaTeX) out. Its own
+# modality because the model only answers its fixed task prompts: it serves
+# /v1/ocr, not general chat.
+OCR = "ocr"
 
-ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING, TRANSLATION, NORMALIZATION}
+ALL_MODALITIES = {TEXT, ASR, TTS, IMAGE, RERANK, EMBEDDING, TRANSLATION, NORMALIZATION, OCR}
 
 # Default backend for each modality. This is the canonical "which engine serves
 # this modality" map; the downloader and the model-management API both resolve
@@ -80,6 +85,7 @@ MODALITY_BACKEND: dict[str, str | None] = {
     IMAGE: "sd-server",
     TRANSLATION: "malaga-server",
     NORMALIZATION: "tn-server",
+    OCR: "teleocr-server",
 }
 
 
@@ -118,6 +124,7 @@ ENDPOINT_MODALITY = {
     "rerank": RERANK,
     "translate": TRANSLATION,
     "normalize": NORMALIZATION,
+    "ocr": OCR,
 }
 
 
@@ -1199,6 +1206,57 @@ class TnServerBackend:
         return "/health"
 
 
+class TeleOcrServerBackend:
+    """`teleocr serve` (rzafiamy/teleocr-rs) — TeleOCR, a ~1.4B document
+    parsing VLM (Qwen2.5-VL vision tower + Qwen3-style decoder), from one GGUF
+    written by `teleocr convert`. Build with build-teleocr.sh, which installs
+    `teleocr` (and libpdfium.so for PDF input) into ./bin/.
+
+    Contract: `serve --model <gguf> --host --port [--cpu] [--threads N]`,
+    GET /health, POST /v1/ocr: JSON `{image: base64|data URI, task?, mode?,
+    paratext?, max_tokens?, pages?, dpi?}` or multipart (`file` + the same
+    fields). task=parse (default) runs layout → per-block recognition and
+    returns Markdown + blocks; text/table/formula/code/layout/figure/seal run
+    one prompt. PDFs are rendered at 200 DPI and every page is parsed.
+    """
+    name = "teleocr-server"
+    binary_name = "teleocr"
+    modalities = {OCR}
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [
+            binary, "serve",
+            "--model", str(model_path),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+            "--model-id", entry["name"],
+        ]
+        # The entry's own params only (llama_server.default_params do not
+        # apply to this engine).
+        params = entry.get("params") or {}
+        if params.get("device") == "cpu" or params.get("n_gpu_layers") == 0:
+            args.append("--cpu")
+        if params.get("threads") not in (None, ""):
+            args += ["--threads", str(params["threads"])]
+        if params.get("max_pixels") not in (None, ""):
+            args += ["--max-pixels", str(params["max_pixels"])]
+        # Blocks decoded together when parsing a page; VRAM grows with it.
+        if params.get("batch") not in (None, ""):
+            args += ["--batch", str(params["batch"])]
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
 # ---------------------------------------------------------------------------
 # Registry of backends
 # ---------------------------------------------------------------------------
@@ -1216,6 +1274,7 @@ _BACKENDS: dict[str, Backend] = {
     SdServerBackend.name: SdServerBackend(),
     MalagaServerBackend.name: MalagaServerBackend(),
     TnServerBackend.name: TnServerBackend(),
+    TeleOcrServerBackend.name: TeleOcrServerBackend(),
 }
 
 DEFAULT_BACKEND = LlamaServerBackend.name
