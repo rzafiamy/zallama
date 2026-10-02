@@ -140,24 +140,25 @@ realtime:
 
 ### Making room: a lighter entry for the resident 27B
 
-What the Qwen3.8-27B-Q4_K_M launch line costs in VRAM (measured, q4_0 KV, MTP):
+What the Qwen3.8-27B-Q4_K_M launch line costs in VRAM (measured, q4_0 KV, MTP),
+and the time to answer about a 1280×800 screenshot (~1 000 image tokens):
 
-| variant | VRAM |
-|---|---|
-| parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`Qwen3.8-27B-Q4_K_M`) | 21 298 MiB |
-| parallel 2, no kv_unified | 21 232 MiB |
-| parallel 1 | 20 700 MiB |
-| **parallel 1 + `no_mmproj_offload: true`** (`Qwen3.8-27B-Q4_K_M-lite`) | **19 562 MiB** |
-| … + ctx 65536 | 18 666 MiB |
-| … + ctx 32768 | 17 800 MiB |
+| variant | VRAM | screenshot |
+|---|---|---|
+| parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`Qwen3.8-27B-Q4_K_M`) | 21 298 MiB | |
+| parallel 2, no kv_unified | 21 232 MiB | |
+| parallel 1 | 20 700 MiB | 1.2 s |
+| **parallel 1, ctx 65536** (`Qwen3.8-27B-Q4_K_M-lite`) | **19 876 MiB** | **1.2 s** |
+| parallel 1, ctx 32768 | ~17 800 MiB | |
+| parallel 1 + `no_mmproj_offload: true` (mmproj on CPU), ctx 98304 | 19 562 MiB | 11.7 s |
 
 kv_unified costs nothing by itself (the slots share one ctx_size); the second
 slot costs 0.6 GB, the BF16 mmproj on GPU 1.1 GB, and every 32K of context
-~0.9 GB. With the `-lite` entry the card holds the 27B + gemma-e2b-voice +
-pocket-tts on CUDA at 22.3 GB (2.2 GB free). Vision still works, with the
-image encoded on CPU (1.15 s for a small image); a vision request did not grow
-the 27B's VRAM. Two entries on one file are two processes: a client asking for
-the other name evicts this one and reloads it.
+~0.9 GB. The mmproj stays on GPU: on CPU a screenshot takes 11.7 s, too slow
+for a browser agent. 64K still holds ~50 screenshot steps. With `-lite`, the
+card holds the 27B + gemma-e2b-voice + pocket-tts on CUDA at 22.6 GB (1.9 GB
+free). Two entries on one file are two processes: a client asking for the
+other name evicts this one and reloads it.
 
 ## Protocol notes
 
