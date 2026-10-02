@@ -166,6 +166,23 @@ card holds the 27B + gemma-e2b-voice + pocket-tts on CUDA at 22.6 GB (1.9 GB
 free). Two entries on one file are two processes: a client asking for the
 other name evicts this one and reloads it.
 
+### KV cache type: same type for K and V
+
+Measured on Gemma 4 12B, 98K context, 1 slot, MTP, vision on GPU (VRAM after
+a vision request; prefill on a 4.3K-token prompt):
+
+| cache_type_k / v | VRAM | prefill |
+|---|---|---|
+| f16 / f16 | 10 866 MiB | 4 674 tok/s |
+| q8_0 / q8_0 | 10 220 MiB | 5 080 tok/s |
+| **q4_0 / q4_0** | **9 716 MiB** | **5 551 tok/s** |
+| q8_0 / q4_0 | 9 466 MiB | **94 tok/s** |
+
+Mixed K/V types look smallest but have no CUDA flash-attention kernel: the
+attention falls back to the CPU (a 30K-token prompt timed out after 10 min).
+q4_0/q4_0 kept quality here: needle-in-a-haystack 3/3 at 31.8K tokens, tool
+calls 30/30. Entry: `gemma12b-q4-96k1s-mv-k4-9.5g`.
+
 ## Protocol notes
 
 - Audio in: `input_audio_buffer.append`, base64 PCM16 mono, 24 kHz by default
