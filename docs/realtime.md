@@ -18,7 +18,7 @@ Code: `server/routes/realtime.py` (session, protocol, pipeline),
 ```yaml
 # ~/.zallama/config.yaml
 realtime:
-  llm_model: "gemma-e2b-voice"      # Gemma-4-E2B, ctx_size 32768, parallel 1, evict_group voice
+  llm_model: "gemma4-e2b-qat-q4kxl-32k-1s-nomtp-nommproj-kvq8"   # alias: gemma-e2b-voice
   asr_model: "parakeet-tdt-v3-cpu"  # CPU, no VRAM
   tts_model: "pocket-tts-voice"     # CPU language router → pocket-tts-fr-cpu / -en-cpu (see VRAM below)
   voice: "estelle"
@@ -52,7 +52,7 @@ end of speech to the first audio byte sent:
 
 | LLM | VRAM | ASR | LLM TTFT | first audio | tools (4 cases) |
 |---|---|---|---|---|---|
-| **gemma-e2b-voice** (Gemma-4-E2B QAT, ctx 32768) | 1.9 GB | 78–168 ms | 24–36 ms | **506–531 ms** | 30/30 |
+| **gemma4-e2b-qat-q4kxl-32k-1s-nomtp-nommproj-kvq8** (alias gemma-e2b-voice) | 1.9 GB | 78–168 ms | 24–36 ms | **506–531 ms** | 30/30 |
 | gemma-4-12b-it-Q4_K_M (MTP head, 60–100 % accepted) | 11.8 GB | 73–139 ms | 79–160 ms | 506–641 ms | 4/4 |
 | Qwen3.8-27B-Q4_K_M (MTP, hybrid) | 20.8 GB | 75–135 ms | 240–380 ms | 640–830 ms | 4/4 |
 | qwen3-0.6b-q8_0 | 1.4 GB | 80–170 ms | 16–20 ms | 506 ms | invents answers |
@@ -145,17 +145,17 @@ and the time to answer about a 1280×800 screenshot (~1 000 image tokens):
 
 | variant | VRAM | screenshot |
 |---|---|---|
-| parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`Qwen3.8-27B-Q4_K_M`) | 21 298 MiB | |
+| parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`qwen3.8-27b-q4km-96k-2s-mtp-mmproj-kvq4`, was `Qwen3.8-27B-Q4_K_M`) | 21 298 MiB | |
 | parallel 2, no kv_unified | 21 232 MiB | |
 | parallel 1 | 20 700 MiB | 1.2 s |
-| **parallel 1, ctx 65536** (`Qwen3.8-27B-Q4_K_M-lite`) | **19 876 MiB** | **1.2 s** |
+| **parallel 1, ctx 65536** (`qwen3.8-27b-q4km-64k-1s-mtp-mmproj-kvq4` (was `Qwen3.8-27B-Q4_K_M-lite`)) | **19 876 MiB** | **1.2 s** |
 | parallel 1, ctx 32768 | ~17 800 MiB | |
 | parallel 1 + `no_mmproj_offload: true` (mmproj on CPU), ctx 98304 | 19 562 MiB | 11.7 s |
 
 kv_unified costs nothing by itself (the slots share one ctx_size); the second
 slot costs 0.6 GB, the BF16 mmproj on GPU 1.1 GB, and every 32K of context
 ~0.9 GB. The mmproj stays on GPU: on CPU a screenshot takes 11.7 s, too slow
-for a browser agent. 64K still holds ~50 screenshot steps. With `-lite`, the
+for a browser agent. 64K still holds ~50 screenshot steps. With the 64K one-slot entry, the
 card holds the 27B + gemma-e2b-voice + pocket-tts on CUDA at 22.6 GB (1.9 GB
 free). Two entries on one file are two processes: a client asking for the
 other name evicts this one and reloads it.
