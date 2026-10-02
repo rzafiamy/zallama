@@ -154,7 +154,7 @@ and the time to answer about a 1280×800 screenshot (~1 000 image tokens):
 | parallel 2 + kv_unified, ctx 98304, mmproj on GPU (`qwen27b-q4-96k2s-mv-k4-20.8g`, alias `Qwen3.8-27B-Q4_K_M`) | 21 298 MiB | |
 | parallel 2, no kv_unified | 21 232 MiB | |
 | parallel 1 | 20 700 MiB | 1.2 s |
-| **parallel 1, ctx 65536** (`qwen27b-q4-64k1s-mv-k4-19.9g` (alias `Qwen3.8-27B-Q4_K_M-lite`)) | **19 876 MiB** | **1.2 s** |
+| **parallel 1, ctx 65536** (`qwen27b-q4-64k1s-mv-k4-19.4g` (alias `Qwen3.8-27B-Q4_K_M-lite`)) | **19 876 MiB** | **1.2 s** |
 | parallel 1, ctx 32768 | ~17 800 MiB | |
 | parallel 1 + `no_mmproj_offload: true` (mmproj on CPU), ctx 98304 | 19 562 MiB | 11.7 s |
 
