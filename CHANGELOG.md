@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Long voice conversations overflowing the LLM context** — `/v1/realtime` sent the whole
+  history every turn, so past the voice LLM's ctx_size every reply failed. The oldest turns are
+  now dropped (down to 60 % of `realtime.history_tokens`, default ctx − max_tokens). The
+  `gemma-e2b-voice` example goes from 8K to 32K context: +78 MB of VRAM (its KV cache is tiny).
+
 ## [1.28.0] - 2026-10-02
 
 ### Added

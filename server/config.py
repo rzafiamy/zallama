@@ -77,6 +77,7 @@ DEFAULTS: dict[str, Any] = {
         "language": "",           # force a language ("" = follow the user's)
         "temperature": 0.7,
         "max_tokens": 400,
+        "history_tokens": 0,      # history budget; 0 = the voice LLM's context minus max_tokens
         "vad_threshold": 0.5,
         "silence_duration_ms": 500,  # silence that ends a user turn
         "speculative_ms": 200,       # silence after which ASR+LLM start speculatively

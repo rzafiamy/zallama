@@ -3180,6 +3180,7 @@ _CONFIG_KEY_HELP = {
     "realtime.language": "Force the reply language (empty = follow the user)",
     "realtime.temperature": "Voice LLM temperature",
     "realtime.max_tokens": "Max tokens per spoken reply",
+    "realtime.history_tokens": "History budget, oldest turns dropped beyond it (0 = LLM ctx - max_tokens)",
     "realtime.vad_threshold": "Silero speech probability threshold",
     "realtime.silence_duration_ms": "Silence that ends a user turn (main latency knob)",
     "realtime.speculative_ms": "Silence after which ASR + LLM start speculatively",

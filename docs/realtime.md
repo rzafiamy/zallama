@@ -18,7 +18,7 @@ Code: `server/routes/realtime.py` (session, protocol, pipeline),
 ```yaml
 # ~/.zallama/config.yaml
 realtime:
-  llm_model: "gemma-e2b-voice"      # Gemma-4-E2B, ctx_size 8192, parallel 1, evict_group voice
+  llm_model: "gemma-e2b-voice"      # Gemma-4-E2B, ctx_size 32768, parallel 1, evict_group voice
   asr_model: "parakeet-tdt-v3-cpu"  # CPU, no VRAM
   tts_model: "pocket-tts"           # language-routing entry → pocket-tts-fr / -en
   voice: "estelle"
@@ -52,7 +52,7 @@ end of speech to the first audio byte sent:
 
 | LLM | VRAM | ASR | LLM TTFT | first audio | tools (4 cases) |
 |---|---|---|---|---|---|
-| **gemma-e2b-voice** (Gemma-4-E2B QAT, ctx 8192) | 1.8 GB | 78–168 ms | 24–36 ms | **506–531 ms** | 30/30 |
+| **gemma-e2b-voice** (Gemma-4-E2B QAT, ctx 32768) | 1.9 GB | 78–168 ms | 24–36 ms | **506–531 ms** | 30/30 |
 | gemma-4-12b-it-Q4_K_M (MTP head, 60–100 % accepted) | 11.8 GB | 73–139 ms | 79–160 ms | 506–641 ms | 4/4 |
 | Qwen3.8-27B-Q4_K_M (MTP, hybrid) | 20.8 GB | 75–135 ms | 240–380 ms | 640–830 ms | 4/4 |
 | qwen3-0.6b-q8_0 | 1.4 GB | 80–170 ms | 16–20 ms | 506 ms | invents answers |
@@ -105,6 +105,19 @@ often (every dropped speculative turn, every barge-in truncation), so the
 production 27B keeps its checkpoints. A dedicated voice LLM instance with
 `--ctx-checkpoints 0` and `speculative_ms` disabled (set it ≥
 `silence_duration_ms`) would trade the speculation for a ~50 ms TTFT.
+
+### Context size and history
+
+Gemma-4-E2B's KV cache is tiny (20 of 35 layers share KV, one KV head, most
+layers on a 512-token sliding window), so context is cheap. Measured VRAM of
+gemma-e2b-voice (q8_0 KV): 8K 1.84 GB, **32K 1.92 GB**, 128K 2.51 GB. 32K is
+the largest that fits beside the 27B + pocket-tts (~24.1 of 24.56 GB).
+
+The session keeps the conversation under the LLM's context: past
+`history_tokens` (default: the slot's ctx_size − max_tokens − 256, tokens
+estimated at 3 chars each), the oldest turns are dropped down to 60 % of the
+budget in one go, starting again on a user message. Each trim re-prefills the
+history once, hence the big step instead of one turn at a time.
 
 ## Protocol notes
 

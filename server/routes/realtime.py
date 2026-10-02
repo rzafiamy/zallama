@@ -686,7 +686,49 @@ class RealtimeSession:
         if self.conf["instructions"]:
             system = f"{system}\n\n{self.conf['instructions']}".strip()
         msgs = [{"role": "system", "content": system}] if system else []
+        self._trim_history(msgs)
         return msgs + [it["msg"] for it in self.items]
+
+    def _llm_ctx(self) -> int:
+        """Context of one llama-server slot of the voice LLM."""
+        try:
+            entry = self.registry.get(self.llm_model)
+        except Exception:
+            return 4096
+        params = {**(self.cfg.get("llama_server") or {}).get("default_params", {}),
+                  **(entry.get("params") or {})}
+        ctx = int(params.get("ctx_size") or 4096)
+        parallel = max(1, int(params.get("parallel") or 1))
+        return ctx if params.get("kv_unified") else ctx // parallel
+
+    def _trim_history(self, head: list) -> None:
+        """Drop the oldest turns once the prompt would overflow the LLM's
+        context (llama-server rejects it, and the turn would fail).
+
+        Tokens are estimated at 3 characters each (French runs ~3.5-4). It
+        trims down to 60% of the budget at once rather than one turn per
+        reply: every trim changes the prompt's start, so the whole history is
+        prefilled again, and that should happen rarely.
+        """
+        budget = int(self.rt.get("history_tokens") or 0) or (
+            self._llm_ctx() - self.conf["max_tokens"] - 256)
+        est = lambda obj: len(json.dumps(obj, ensure_ascii=False)) // 3 + 4
+        fixed = sum(est(m) for m in head) + est(_chat_tools(self.conf["tools"]))
+        sizes = [est(it["msg"]) for it in self.items]
+        if fixed + sum(sizes) <= budget:
+            return
+        target, total, cut = int(budget * 0.6), fixed + sum(sizes), 0
+        while cut < len(self.items) and total > target:
+            total -= sizes[cut]
+            cut += 1
+        # Start on a user message: never on a tool result or an assistant
+        # tool call whose request was dropped.
+        while cut < len(self.items) and self.items[cut]["msg"].get("role") != "user":
+            cut += 1
+        if cut:
+            logger.info("realtime %s: history trimmed, %d of %d items dropped (budget %d tokens)",
+                        self.session_id, cut, len(self.items), budget)
+            del self.items[:cut]
 
     async def warm(self) -> None:
         """Load the models and prefill the system prompt + tools, so the first
