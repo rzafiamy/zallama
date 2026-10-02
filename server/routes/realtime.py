@@ -255,9 +255,6 @@ class Turn:
                 self.transcript.set_result(text)
                 if not text or self.aborted:
                     return
-                lang = detect_language(text)
-                if lang:
-                    s.language = lang
                 messages = messages + [{"role": "user", "content": text}]
             await self._respond(messages)
         except asyncio.CancelledError:
@@ -311,6 +308,9 @@ class Turn:
             phrases.put_nowait(None)
             if tts:
                 await tts
+            # The whole reply says more about its language than its first phrase.
+            if (lang := detect_language(self.text)):
+                s.language = lang
             self._close_message(audio_out)
             self._emit_tool_calls(calls)
             self.push(self._done_event("completed"))
@@ -320,14 +320,17 @@ class Turn:
 
     async def _tts_loop(self, phrases: asyncio.Queue) -> None:
         s = self.s
+        lang = None     # one TTS language per reply: no model switch mid-sentence
         while (phrase := await phrases.get()) is not None:
+            if lang is None:
+                lang = s.tts_language(phrase)
             text = _speakable(phrase)
             start = self.audio_ms
             self.push({"type": "response.output_audio_transcript.delta", "response_id": self.response_id,
                        "item_id": self.msg_item_id, "output_index": 0, "content_index": 0,
                        "delta": phrase})
             t = time.monotonic()
-            async for pcm in s.synthesize(text):
+            async for pcm in s.synthesize(text, lang):
                 if "tts_first_ms" not in self.lat:
                     self.lat["tts_first_ms"] = (time.monotonic() - t) * 1000
                 self.audio_ms += len(pcm) / 2 * 1000 / OUT_RATE
@@ -438,13 +441,14 @@ class RealtimeSession:
         self.pm = get_pm()
         self.registry = get_registry()
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
-        self.stack = AsyncExitStack()
         self.send_lock = asyncio.Lock()
         self.session_id = _id("sess")
         self.llm_model = llm_model or rt.get("llm_model") or ""
         self.asr_model = rt.get("asr_model") or ""
         self.tts_model = rt.get("tts_model") or ""
         self.instances: dict[str, object] = {}
+        self.holds: dict[str, AsyncExitStack] = {}
+        self.tts_name: str | None = None       # TTS model currently held
         self.inst_locks: dict[str, asyncio.Lock] = {}
         self.conf = {
             "instructions": "",
@@ -468,7 +472,7 @@ class RealtimeSession:
                 "interrupt_response": True,
             },
         }
-        self.language = rt.get("language") or None   # sticky, from the last transcript
+        self.language = rt.get("language") or None   # sticky: language of the last reply
         self.items: list[dict] = []    # {"id", "msg"} in conversation order
         self.vad: SileroVad | None = None
         self.vad_path = self._vad_path()
@@ -534,19 +538,35 @@ class RealtimeSession:
                 inst = await _resolve_instance(name, self.pm, self.registry, endpoint=endpoint)
             except HTTPException as e:
                 raise RuntimeError(f"{name}: {e.detail}") from None
-            await self.stack.enter_async_context(self.pm.serving(inst))
+            hold = AsyncExitStack()
+            await hold.enter_async_context(self.pm.serving(inst))
+            self.holds[name] = hold
             self.instances[name] = inst
             return inst
 
+    async def release(self, name: str) -> None:
+        """Stop holding a backend, so it can be evicted again."""
+        self.instances.pop(name, None)
+        hold = self.holds.pop(name, None)
+        if hold:
+            await hold.aclose()
+
     # -- models ------------------------------------------------------------
-    def tts_target(self) -> tuple[str, dict]:
+    def tts_language(self, phrase: str) -> str | None:
+        """Language to speak a reply in: forced by the session, else detected
+        on the reply's first phrase, else the previous reply's (detection
+        abstains on short phrases like "Salut !"). The user's language is not
+        used: the reply's is what the voice must match."""
+        return self.conf["language"] or detect_language(phrase) or self.language
+
+    def tts_target(self, lang: str | None = None) -> tuple[str, dict]:
         """The TTS entry to use: a language-routing entry (params.languages)
-        picks its model from the session/transcript language."""
+        picks its model from `lang` (default: the session's)."""
         entry = self.registry.get(self.tts_model)
         routes = (entry.get("params") or {}).get("languages")
         if isinstance(routes, dict) and routes:
             params = entry.get("params") or {}
-            lang = self.conf["language"] or self.language
+            lang = lang or self.conf["language"] or self.language
             if lang not in routes:
                 lang = params.get("default_language")
                 if lang not in routes:
@@ -607,10 +627,29 @@ class RealtimeSession:
         body.update(extra)
         return body
 
-    async def synthesize(self, text: str):
+    async def tts_instance(self, lang: str | None):
+        """The TTS backend for `lang`. One per-language model (pocket-tts) is
+        held at a time: switching releases the previous one first so it can be
+        evicted to make room, and if the new one can't start the previous one
+        keeps speaking (wrong accent beats silence)."""
+        name, entry = self.tts_target(lang)
+        prev = self.tts_name
+        if prev and prev != name:
+            await self.release(prev)
+            try:
+                inst = await self.instance(name, "audio/speech")
+            except Exception as e:
+                logger.warning("realtime: TTS %s unavailable, staying on %s: %s", name, prev, e)
+                name, entry = prev, self.registry.get(prev)
+                inst = await self.instance(name, "audio/speech")
+        else:
+            inst = await self.instance(name, "audio/speech")
+        self.tts_name = name
+        return inst, name, entry
+
+    async def synthesize(self, text: str, lang: str | None = None):
         """Yield 24 kHz PCM16 bytes for `text` as the TTS produces it."""
-        name, entry = self.tts_target()
-        inst = await self.instance(name, "audio/speech")
+        inst, name, entry = await self.tts_instance(lang)
         inst.touch()
         backend = ModelRegistry.backend_of(entry)
         voice = self.conf["voice"]
@@ -655,7 +694,7 @@ class RealtimeSession:
         tasks = [self.instance(self.llm_model, "chat/completions"),
                  self.instance(self.asr_model, "audio/transcriptions")]
         if "audio" in self.conf["modalities"]:
-            tasks.append(self.instance(self.tts_target()[0], "audio/speech"))
+            tasks.append(self.tts_instance(None))
         await asyncio.gather(*tasks)
         self._prefill()
 
@@ -1049,7 +1088,8 @@ class RealtimeSession:
                 t.cancel()
         for t in list(self.bg):
             t.cancel()
-        await self.stack.aclose()
+        for name in list(self.holds):
+            await self.release(name)
         await self.http.aclose()
 
 
