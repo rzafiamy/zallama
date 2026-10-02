@@ -149,6 +149,188 @@ def _next_phrase(buf: str, first: bool) -> tuple[str, str] | None:
     return None
 
 
+def _lenient_args(body: str) -> str:
+    """Arguments of a tool call written as text, as a JSON string. Gemma
+    writes `{city:<|"|>Lyon<|"|>,n:5}` (bare keys, special string quotes);
+    without the special tokens that is `{city:"Lyon"}` or `{city:Lyon}`."""
+    t = body.replace('<|"|>', '"')
+    attempts = [t, re.sub(r'([{,]\s*)([A-Za-z_][\w-]*)\s*:', r'\1"\2":', t)]
+
+    def quote_bare(m: re.Match) -> str:
+        v = m.group(1)
+        return ": " + (v if v in ("true", "false", "null") else json.dumps(v))
+    attempts.append(re.sub(r':\s*([^"\d\[{\s-][^,}]*?)\s*(?=[,}])', quote_bare, attempts[1]))
+    for a in attempts:
+        try:
+            return json.dumps(json.loads(a), ensure_ascii=False)
+        except ValueError:
+            continue
+    return t
+
+
+class TextToolCalls:
+    """Pull tool calls the LLM wrote as text out of its content stream.
+
+    When llama.cpp's parser misses a call (small models, a broken special
+    token), the content carries the model's raw syntax: Gemma's
+    `call:name{...}` (inside `<|tool_call>...<tool_call|>`) or Hermes/Qwen's
+    `<tool_call>{"name":..., "arguments":...}</tool_call>`. Spoken, that is
+    noise read before the tool even runs. `feed()` holds back anything that
+    may be the start of such a call (even split across chunks), turns a
+    complete one naming a declared tool into a call, and gives back the rest
+    as text. A `call:` that names no declared tool stays text. After a call,
+    the model's further prose is usually an invented tool result, so it is
+    dropped, not spoken.
+    """
+    _CALL = "call:"
+    _OPEN = ("<|tool_call>", "<tool_call>")
+    _DROP = ("<tool_call|>", "</tool_call>", '<|"|>')
+    _NAME = re.compile(r"[A-Za-z_][\w.-]*")
+
+    def __init__(self, names):
+        self.names = set(names)
+        self.buf = ""
+        self.seen = False
+
+    def feed(self, text: str) -> tuple[str, list[dict]]:
+        self.buf += text
+        return self._scan(final=False)
+
+    def finish(self) -> tuple[str, list[dict]]:
+        return self._scan(final=True)
+
+    def _markers(self):
+        return (self._CALL, *self._OPEN, *self._DROP)
+
+    def _find(self, buf: str) -> tuple[int | None, str | None]:
+        best, which = None, None
+        for m in self._markers():
+            start = 0
+            while (i := buf.find(m, start)) != -1:
+                # "call:" only as a word: not "recall:"
+                if m == self._CALL and i > 0 and (buf[i - 1].isalnum() or buf[i - 1] == "_"):
+                    start = i + 1
+                    continue
+                if best is None or i < best:
+                    best, which = i, m
+                break
+        return best, which
+
+    def _tail(self, buf: str) -> int:
+        """Length of the end of `buf` that may be the start of a marker."""
+        keep = 0
+        for m in self._markers():
+            for k in range(min(len(m) - 1, len(buf)), 0, -1):
+                if buf.endswith(m[:k]):
+                    keep = max(keep, k)
+                    break
+        return keep
+
+    def _scan(self, final: bool) -> tuple[str, list[dict]]:
+        out: list[str] = []
+        calls: list[dict] = []
+
+        def say(t: str):
+            if t and not self.seen:
+                out.append(t)
+        while self.buf:
+            i, marker = self._find(self.buf)
+            if i is None:
+                keep = 0 if final else self._tail(self.buf)
+                say(self.buf[:len(self.buf) - keep])
+                self.buf = self.buf[len(self.buf) - keep:]
+                break
+            say(self.buf[:i])
+            self.buf = self.buf[i:]
+            if marker in self._DROP:
+                self.buf = self.buf[len(marker):]
+                continue
+            res = self._parse(marker, final)
+            if res is None:             # incomplete: wait for more text
+                if final:
+                    logger.info("realtime: dropped an unfinished text tool call: %r", self.buf[:200])
+                    self.buf = ""
+                break
+            used, call, as_text = res
+            if call:
+                calls.append(call)
+                self.seen = True
+            elif as_text:
+                say(self.buf[:used])
+            self.buf = self.buf[used:]
+        return "".join(out), calls
+
+    def _parse(self, marker: str, final: bool):
+        """(chars used, call or None, speak the used text?) or None if the
+        buffer ends before the call does."""
+        buf, pos = self.buf, len(marker)
+        if marker in self._OPEN:
+            rest = buf[pos:].lstrip()
+            pos = len(buf) - len(rest)
+            if not rest or (len(rest) < len(self._CALL) and self._CALL.startswith(rest)):
+                return None if not final else (len(buf), None, False)
+            if rest.startswith(self._CALL):
+                pos += len(self._CALL)
+            elif rest.startswith("{"):          # Hermes JSON
+                end = self._match_brace(buf, pos)
+                if end is None:
+                    return None
+                try:
+                    obj = json.loads(buf[pos:end])
+                except ValueError:
+                    obj = {}
+                name = obj.get("name") if isinstance(obj, dict) else None
+                if name in self.names:
+                    args = obj.get("arguments", {})
+                    args = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+                    return end, {"id": "", "name": name, "arguments": args}, False
+                return end, None, False
+            else:
+                return pos, None, False          # stray special token: drop it
+        m = self._NAME.match(buf, pos)
+        if not m or m.end() == len(buf):
+            return None if not final else (len(buf), None, marker == self._CALL)
+        name = m.group(0)
+        brace = m.end()
+        while brace < len(buf) and buf[brace] == " ":
+            brace += 1
+        if brace == len(buf):
+            return None if not final else (len(buf), None, marker == self._CALL)
+        if name not in self.names or buf[brace] != "{":
+            return len(self._CALL) if marker == self._CALL else pos, None, marker == self._CALL
+        end = self._match_brace(buf, brace)
+        if end is None:
+            return None
+        return end, {"id": "", "name": name, "arguments": _lenient_args(buf[brace:end])}, False
+
+    @staticmethod
+    def _match_brace(buf: str, start: int) -> int | None:
+        """Index after the brace closing the one at `start`, or None."""
+        depth, i, in_str = 0, start, False
+        while i < len(buf):
+            if buf.startswith('<|"|>', i):
+                in_str = not in_str
+                i += 5
+                continue
+            ch = buf[i]
+            if in_str:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            i += 1
+        return None
+
+
 def _chat_tools(tools: list) -> list:
     """Realtime tools are flat ({type, name, description, parameters}); chat
     completions nest them under `function`. Accept either."""
@@ -277,6 +459,30 @@ class Turn:
         try:
             pending, first = "", True
             calls: dict[int, dict] = {}
+            text_calls = TextToolCalls(t["function"]["name"] for t in _chat_tools(s.conf["tools"]))
+
+            def say(content: str) -> None:
+                nonlocal pending, first
+                self._open_message()
+                self.text += content
+                if not audio_out:
+                    self.push({"type": "response.output_text.delta", "response_id": self.response_id,
+                               "item_id": self.msg_item_id, "output_index": 0, "content_index": 0,
+                               "delta": content})
+                    return
+                pending += content
+                while (cut := _next_phrase(pending, first)) is not None:
+                    phrase, pending = cut
+                    if _speakable(phrase):
+                        phrases.put_nowait(phrase)
+                        first = False
+
+            def add_text_calls(found: list[dict]) -> None:
+                for c in found:
+                    logger.info("realtime: tool call written as text, run as a call: %s%s",
+                                c["name"], c["arguments"][:200])
+                    calls[10_000 + len(calls)] = c   # after the parsed ones
+
             t0 = time.monotonic()
             async for delta in s.chat_stream(messages):
                 if "llm_ttft_ms" not in self.lat:
@@ -290,19 +496,14 @@ class Turn:
                 content = delta.get("content")
                 if not content:
                     continue
-                self._open_message()
-                self.text += content
-                if not audio_out:
-                    self.push({"type": "response.output_text.delta", "response_id": self.response_id,
-                               "item_id": self.msg_item_id, "output_index": 0, "content_index": 0,
-                               "delta": content})
-                    continue
-                pending += content
-                while (cut := _next_phrase(pending, first)) is not None:
-                    phrase, pending = cut
-                    if _speakable(phrase):
-                        phrases.put_nowait(phrase)
-                        first = False
+                text, found = text_calls.feed(content)
+                add_text_calls(found)
+                if text:
+                    say(text)
+            text, found = text_calls.finish()
+            add_text_calls(found)
+            if text:
+                say(text)
             if audio_out and _speakable(pending):
                 phrases.put_nowait(pending)
             phrases.put_nowait(None)

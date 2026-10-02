@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-language models behind it. Settable with `zallama set <model> hidden=true`.
 
 ### Fixed
+- **Voice read tool-call syntax aloud** — when the LLM wrote a tool call as text (Gemma's
+  `call:get_weather{city:<|"|>Lyon<|"|>}`, Hermes `<tool_call>{…}</tool_call>`, which llama.cpp's
+  parser sometimes misses), `/v1/realtime` spoke it before the client could run the tool. The
+  session now holds such text back, emits it as a real `function_call` when it names a declared
+  tool, and drops the prose that follows (usually an invented result).
 - **Long voice conversations overflowing the LLM context** — `/v1/realtime` sent the whole
   history every turn, so past the voice LLM's ctx_size every reply failed. The oldest turns are
   now dropped (down to 60 % of `realtime.history_tokens`, default ctx − max_tokens). The

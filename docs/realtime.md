@@ -182,6 +182,14 @@ other name evicts this one and reloads it.
   `session.update`: `language`, `turn_detection.speculative_ms`,
   `turn_detection.barge_in_ms`. `response.done.response.zallama.latency_ms`
   reports `asr_ms`, `llm_ttft_ms`, `tts_first_ms`, `first_audio_ms`.
+- Tool calls written as text: when llama.cpp's parser misses a call, the
+  content carries the model's raw syntax (Gemma `call:name{city:<|"|>Lyon<|"|>}`,
+  inside `<|tool_call>…<tool_call|>`; Hermes/Qwen `<tool_call>{"name":…}</tool_call>`).
+  The session holds back text that may start such a call (even split across
+  chunks), runs a complete one naming a declared tool as a real
+  `function_call`, and never sends it to the TTS. A `call:` naming no declared
+  tool is spoken as normal text; prose after a text call (usually an invented
+  tool result) is dropped. Each one is logged ("tool call written as text").
 - Auth: same API key as HTTP (the HTTP middleware never sees WebSockets), as
   `Authorization: Bearer` or the `openai-insecure-api-key.<key>` subprotocol
   (browsers). Loopback is let through.
