@@ -6,3 +6,4 @@ pyyaml>=6.0.1
 requests>=2.31.0
 numpy>=1.24.0
 zvec>=0.5.1            # in-process HNSW vector DB for RAG (server/zvec)
+onnxruntime>=1.17      # Silero VAD for /v1/realtime (CPU)

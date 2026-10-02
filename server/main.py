@@ -39,6 +39,7 @@ from server.model_registry import ModelRegistry
 from server.process_manager import ProcessManager
 from server import dependencies
 from server.routes import openai as openai_routes
+from server.routes import realtime as realtime_routes
 from server.routes import models as model_routes
 from server.routes import health as health_routes
 from server.routes import zvec as zvec_routes
@@ -158,6 +159,11 @@ def _install_auth(app: FastAPI, cfg: dict, public_prefixes: tuple[str, ...]) -> 
 
     loopback_hosts = {"127.0.0.1", "::1"}
 
+    # The HTTP middleware never sees WebSocket connections; /v1/realtime
+    # checks the same key through this.
+    from .routes.realtime import make_key_checker
+    app.state.check_api_key = make_key_checker(expected_digest, expires_at)
+
     @app.middleware("http")
     async def require_api_key(request: Request, call_next):
         # CORS preflight requests never carry an Authorization header, so
@@ -221,11 +227,12 @@ def create_app(cfg: dict) -> FastAPI:
         redoc_url="/redoc",
     )
     app.state.cfg = cfg
-    _install_auth(app, cfg, public_prefixes=("/health",))
+    _install_auth(app, cfg, public_prefixes=("/health", "/realtime"))
     _install_cors(app)
 
     app.include_router(health_routes.router)
     app.include_router(openai_routes.router)
+    app.include_router(realtime_routes.router)
     app.include_router(zvec_routes.router)
 
     admin_url = f"http://{cfg['zallama']['admin_host']}:{cfg['zallama']['admin_port']}"

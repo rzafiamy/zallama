@@ -52,6 +52,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 - [Vision (Multimodal) Models](#️-vision-multimodal-models)
 - [Speech-to-Text (ASR)](#-speech-to-text-asr)
 - [Text-to-Speech (TTS)](#-text-to-speech-tts)
+- [Realtime Speech-to-Speech](#-realtime-speech-to-speech-v1realtime)
 - [Image Generation (Stable Diffusion)](#-image-generation-stable-diffusion)
 - [Translation (malaga)](#-translation-malaga)
 - [Backends & Modalities (Architecture)](#-backends--modalities-architecture)
@@ -1117,6 +1118,22 @@ curl http://localhost:11435/v1/audio/speech \
 > aborts startup instead of serving silent audio.
 
 ---
+
+## 🎧 Realtime Speech-to-Speech (`/v1/realtime`)
+
+A WebSocket voice agent speaking the OpenAI Realtime protocol: Silero VAD → ASR → LLM (tool
+calls run on the client) → streamed TTS, with speculative turns and barge-in. Point it at three
+registered models and try the browser demo at `http://localhost:<port>/realtime`:
+
+```yaml
+realtime:
+  llm_model: "Qwen3.8-27B-Q4_K_M"
+  asr_model: "parakeet-tdt-v3-cpu"
+  tts_model: "pocket-tts"
+```
+
+The VAD needs `silero_vad.onnx` in `models_dir`. Setup, protocol notes and latency
+measurements: [docs/realtime.md](docs/realtime.md).
 
 ## 🎨 Image Generation (Stable Diffusion)
 

@@ -85,6 +85,28 @@ rag:
 #                ZALLAMA_ZVEC_DIR, ZALLAMA_RAG_TOP_K.
 # Register a reranker model with `modality: rerank, backend: rerank-server`.
 
+
+# --- Realtime speech-to-speech (/v1/realtime) -------------------------------
+# WebSocket endpoint speaking the OpenAI Realtime protocol: Silero VAD -> ASR
+# -> LLM (streamed, client-side tools) -> TTS (streamed). The three models are
+# registry names; nothing starts until they are set. Browser demo: GET /realtime.
+# VAD model: silero_vad.onnx in models_dir (see docs/realtime.md).
+realtime:
+  llm_model: ""            # text model with tool calling (?model= overrides per session)
+  asr_model: ""            # e.g. parakeet-tdt-v3-cpu (no VRAM, ~100 ms per utterance)
+  tts_model: ""            # e.g. pocket-tts (streams PCM; first audio in ~30 ms)
+  vad_model: "silero_vad.onnx"
+  voice: ""                # default voice ("" = the TTS model's default)
+  language: ""             # force a language ("" = follow the user's)
+  temperature: 0.7
+  max_tokens: 400
+  vad_threshold: 0.5
+  silence_duration_ms: 500 # silence that ends a user turn (the main latency knob)
+  speculative_ms: 200      # silence after which ASR + LLM start speculatively
+  prefix_padding_ms: 300
+  min_speech_ms: 96
+  barge_in_ms: 250         # speech needed to interrupt the assistant
+
 # --- Other backends (ASR / TTS / image) -------------------------------------
 # Additional modalities run on their own backend binary but reuse the lifecycle
 # settings above (port_start, startup_timeout, idle_timeout, the memory budget).

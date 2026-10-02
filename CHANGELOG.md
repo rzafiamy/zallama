@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Realtime speech-to-speech: `/v1/realtime` (WebSocket)** — OpenAI Realtime protocol subset
+  (GA event names, `?events=beta`): Silero VAD → ASR → LLM with client-side tool calls → TTS,
+  all streamed. Speculative turns start ASR + LLM at 200 ms of silence and only speak once the
+  turn commits at 500 ms; the first phrase goes to the TTS at the first comma; pocket-tts PCM is
+  streamed frame by frame (first audio 25–60 ms); barge-in cancels the reply and cuts the
+  history to what was played. Measured end of speech → first audio: 506–531 ms with Gemma-4-E2B (fits beside the 27B,
+  30/30 single-step tool calls), 506–641 ms with gemma-4-12b,
+  640–830 ms with Qwen3.8-27B (hybrid: ~200 ms of context-checkpoint cost per request). Browser demo at `GET /realtime`. Configure the
+  `realtime:` section (`llm_model`, `asr_model`, `tts_model`) and put `silero_vad.onnx` in
+  `models_dir`; new dependency `onnxruntime`. See docs/realtime.md.
+
 ## [1.27.1] - 2026-10-02
 
 ### Fixed

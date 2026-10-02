@@ -64,6 +64,25 @@ DEFAULTS: dict[str, Any] = {
         "zvec_dir": "~/.zallama/zvec",  # SQLite vector store location
         "default_top_k": 5,      # default candidates returned by a zvec query
     },
+    # Speech-to-speech over WebSocket (/v1/realtime): VAD -> ASR -> LLM -> TTS.
+    # The three models are registry names; the endpoint refuses to start a
+    # session until they are set. See docs/realtime.md.
+    "realtime": {
+        "llm_model": "",          # text model (tool calling); ?model= overrides per session
+        "asr_model": "",          # asr model (parakeet-rs-server on CPU is ~40x realtime)
+        "tts_model": "",          # tts model; pocket-tts streams, others are per phrase
+        "vad_model": "silero_vad.onnx",  # Silero VAD ONNX, relative to models_dir
+        "voice": "",              # default voice ("" = the TTS model's own)
+        "language": "",           # force a language ("" = follow the user's)
+        "temperature": 0.7,
+        "max_tokens": 400,
+        "vad_threshold": 0.5,
+        "silence_duration_ms": 500,  # silence that ends a user turn
+        "speculative_ms": 200,       # silence after which ASR+LLM start speculatively
+        "prefix_padding_ms": 300,    # audio kept before detected speech
+        "min_speech_ms": 96,         # speech needed to open a turn
+        "barge_in_ms": 250,          # speech needed to interrupt the assistant
+    },
 }
 
 
