@@ -159,6 +159,35 @@ models:
       # vowel_floor_ms: 45          # anti-"choppy" vowel floors (0 = model as is)
       # final_vowel_floor_ms: 65
 
+  # --- TTS: French / English speech (Kyutai Pocket TTS, Rust/GGUF) -------------
+  # Build: ./build-pocket-tts.sh (CUDA; --cpu for CPU). One GGUF per language,
+  # weights + tokenizer + the 27 predefined voices in one file:
+  #   bin/pocket-tts convert --variant french  --voices all -o pocket-tts-french-q8_0.gguf
+  #   bin/pocket-tts convert --variant english --voices all -o pocket-tts-english-q8_0.gguf
+  # (gated voice-cloning weights: accept kyutai/pocket-tts on HF + `hf auth login`
+  # before converting; without them everything works except cloning from WAV.)
+  # Weights CC-BY-4.0 (Kyutai). ~28x real time on a 4090, ~7x on CPU (q8_0).
+  # Other languages: --variant german | italian | spanish | portuguese | dutch.
+  - name: pocket-tts-fr
+    file: pocket-tts-french-q8_0.gguf
+    modality: tts
+    backend: pocket-tts-server
+    description: "Pocket TTS French (Kyutai, 24 kHz, 27 voices, default estelle)"
+    mem_gb: 0.9        # measured 808 MiB incl. CUDA context
+    params:
+      device: cuda     # cpu also works (~7x real time); threads: 1-4 on CPU
+      # voice: estelle           # default voice when the request names none
+      # temperature: 0.3         # model default
+
+  - name: pocket-tts-en
+    file: pocket-tts-english-q8_0.gguf
+    modality: tts
+    backend: pocket-tts-server
+    description: "Pocket TTS English (Kyutai, 24 kHz, 27 voices, default alba)"
+    mem_gb: 0.9
+    params:
+      device: cuda
+
   # --- RAG: embedding model ---------------------------------------------------
   # Runs llama-server in --embedding mode via the embedding-server backend and
   # serves POST /v1/embeddings. zvec uses this to embed & search documents; set

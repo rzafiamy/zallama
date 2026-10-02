@@ -75,6 +75,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🔌 **A real OpenAI `/v1` surface** | Chat, Completions, Embeddings — streaming included — so existing SDKs and tools just work. |
 | 👁️ **Vision** | Attach an `mmproj` projector and send images straight through `/v1/chat/completions`. |
 | 🎙️ **Speech-to-text** | `/v1/audio/transcriptions`, any input format auto-transcoded via `ffmpeg`, multilingual models supported. |
+| 🗣️ **Text-to-speech** | `/v1/audio/speech` on Kokoro (8 languages), Pocket TTS (French, English and more, ~28x real time in 0.8 GB), Voxtral-4B-TTS and MMS-TTS Malagasy. |
 | 🎨 **Image Generation** | `/v1/images/generations` and `/v1/images/edits` powered by `sd-server` (stable-diffusion.cpp), plus `zallama generate` CLI. |
 | 🌍 **Translation** | `/v1/translate` on NLLB-200 via `malaga` — French / English ↔ Malagasy, ~10 ms per sentence, batched. |
 | 🔎 **RAG, built in** | A reranker at `/v1/rerank` plus **zvec**, an embedded HNSW vector store — no external vector DB to run. |
@@ -84,7 +85,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🧠 **Memory awareness** | Set a `mem_budget_gb` and Zallama evicts least-recently-used models to make room — automatically. |
 | 🔒 **Locked down by default** | Binds to `127.0.0.1`, optional Bearer-token auth, sane timeouts out of the box. |
 
-Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, `sd-server`, `malaga`), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, `image`, `translation`); new modalities are added as new backends, not as changes scattered across the codebase.
+Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, `pocket-tts`, `sd-server`, `malaga`), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, `image`, `translation`); new modalities are added as new backends, not as changes scattered across the codebase.
 
 ---
 
@@ -115,6 +116,9 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 # kokoro.cpp (TTS / voice synthesis) — requires a release tag/branch name
 ./build-ggml-kokoro.cpp.sh v0.3.0
+
+# pocket-tts (TTS, Kyutai Pocket TTS in Rust/GGUF; needs cargo + nvcc, or --cpu)
+./build-pocket-tts.sh
 
 # stable-diffusion.cpp (Image generation) — requires a release tag/branch name
 ./build-ggml-stable-diffusion.cpp.sh master
@@ -814,6 +818,335 @@ hf download altunenes/parakeet-rs --include "nemotron-3-diarization/*" --local-d
 python parakeet-rs/server/scripts/convert_tdt_fp16.py $M/parakeet-tdt-0.6b-v3-onnx $M/parakeet-tdt-0.6b-v3-onnx-fp16
 ```
 
+**3. Register** — one model, two entries, so each client picks CPU or GPU by name
+(both are in `models/registry.example.yaml`; parameters in
+[CONFIG.md](CONFIG.md#asr-backend-parakeet-rs-server--asr--speaker-diarization)):
+```yaml
+- name: parakeet-tdt-v3-cpu          # no VRAM, ~39x realtime
+  modality: asr
+  backend: parakeet-rs-server
+  file: /bank2/zallama/models/parakeet-tdt-0.6b-v3-onnx
+  artifacts:
+    diarization: /bank2/zallama/models/nemotron-3-diarization/nemotron3_diar_v3.onnx
+  evict_group: services
+  params: {device: cpu, threads: 8}
+
+- name: parakeet-tdt-v3-gpu          # 2.1 GB peak VRAM, ~57x realtime
+  modality: asr
+  backend: parakeet-rs-server
+  file: /bank2/zallama/models/parakeet-tdt-0.6b-v3-onnx-fp16
+  artifacts:
+    diarization: /bank2/zallama/models/nemotron-3-diarization/nemotron3_diar_v3.onnx
+  mem_gb: 2.2
+  evict_group: services
+  params: {device: cuda, diarization_device: cpu, threads: 8}
+```
+
+**4. Use**:
+```bash
+# who said what
+curl http://localhost:6767/v1/audio/transcriptions -F model=parakeet-tdt-v3-cpu \
+  -F file=@meeting.m4a -F response_format=diarized_json
+# subtitles with speaker tags
+curl http://localhost:6767/v1/audio/transcriptions -F model=parakeet-tdt-v3-gpu \
+  -F file=@meeting.m4a -F response_format=srt -F diarize=true
+# speaker turns only
+curl http://localhost:6767/v1/audio/diarize -F model=parakeet-tdt-v3-cpu \
+  -F file=@meeting.m4a -F response_format=rttm
+```
+
+**API** (`parakeet-rs-server` models):
+
+| Endpoint | Field | Values |
+|---|---|---|
+| `POST /v1/audio/transcriptions` | `response_format` | `json` (default), `text`, `verbose_json`, `srt`, `vtt`, `diarized_json` |
+| | `timestamp_granularities[]` | `word` adds `words[]` to `verbose_json` |
+| | `diarize` | `true` adds speakers to `verbose_json` / `srt` (`[A]`) / `vtt` (`<v A>`) |
+| | `stream` | `true` streams SSE `transcript.text.delta` events, then one `transcript.text.done` event (`json` / `text` only) |
+| `POST /v1/audio/diarize` | `response_format` | `json` (default: `num_speakers`, `speakers`, `segments[{speaker,start,end}]`), `rttm` |
+
+`diarized_json` segments look like
+`{"type":"transcript.text.segment","id":"seg_0","start":0.0,"end":6.88,"speaker":"A","text":"…"}`.
+Speakers are labelled `A`, `B`, … in order of first appearance (up to 8). Errors
+use OpenAI's `{"error":{"message","type","param","code"}}` shape.
+
+**Benchmark** — RTX 4090 host (32 cores), 9.4-minute French recording:
+
+| Setup | Time | Speed | VRAM idle → peak |
+|---|---|---|---|
+| `parakeet-tdt-v3-cpu` (fp32, 8 threads, diarization included) | 14.5 s | 39× realtime | 0 |
+| `parakeet-tdt-v3-gpu` (fp16, diarization on CPU) | 9.8 s | 57× | 1.7 → 2.1 GB |
+| fp16, diarization on GPU (`diarization_device: cuda`) | 5.6 s | 101× | 2.2 → 2.6 GB |
+| parakeet.cpp `parakeet-server` q8 (for reference) | 4.9 s | 115× | 1.3 → **13.8 GB** |
+
+parakeet.cpp decodes the whole file in one pass, so its VRAM grows with the
+file's length. Next to a 21.5 GB LLM that allocation fails and the server
+segfaults. `parakeet-rs-server` stays flat. Its transcripts differ from
+parakeet.cpp's on 1.6% of words; fp16 and fp32 gave identical transcripts.
+
+### Streaming ASR — Voxtral Mini 4B Realtime
+
+Mistral's streaming ASR model isn't in mainline llama.cpp yet, but
+[mirek190/audio.cpp](https://github.com/mirek190/audio.cpp) ships a native,
+GGUF-backed server for it. Runs on the **`audiocpp-server`** backend —
+explicit `backend: audiocpp-server` in the registry entry, since
+`parakeet-server` stays the default for `modality: asr`.
+
+**1. Build the binary** (installs `audiocpp-server` into `./bin/`):
+```bash
+./build-ggml-audio.cpp.sh
+```
+
+**2. Download the model** — just the `.gguf` (config/tokenizer metadata is
+embedded in it), from HF
+[`audio-cpp/audio.cpp-gguf`](https://huggingface.co/audio-cpp/audio.cpp-gguf)
+(prefix `Voxtral-Mini-4B-Realtime-2602-GGUF/`, `q8_0` recommended, ~5.1 GB) —
+into its own directory, then register it:
+```bash
+zallama set voxtral-realtime backend=audiocpp-server modality=asr \
+  file=/bank2/zallama/models/Voxtral-Mini-4B-Realtime-2602-GGUF
+```
+
+Same `POST /v1/audio/transcriptions` contract as parakeet-server. audio.cpp
+also exposes a true-streaming `POST /v1/audio/transcriptions/live` upstream
+that zallama doesn't proxy today.
+
+---
+
+## 🗣️ Text-to-Speech (TTS)
+
+Speech synthesis runs on the **`kokoro-server`** backend ([kokoro.cpp](https://github.com/rzafiamy/kokoro.cpp)) and is exposed at the OpenAI-compatible `POST /v1/audio/speech` endpoint.
+
+**1. Build the binary** (installs `kokoro-server` and `kokoro-cli` into `./bin/`):
+```bash
+./build-ggml-kokoro.cpp.sh v0.3.0
+```
+
+**2. Pull a model** (auto-registered as `modality: tts`, `backend: kokoro-server`):
+```bash
+zallama pull kokoro:82m     # Kokoro-82M, 54 voices across 8 languages
+```
+
+**3. Synthesize** — the response is a WAV stream:
+```bash
+curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kokoro:82m","input":"Bonjour, comment allez-vous ?"}' \
+  -o speech.wav
+```
+
+### Voice selection
+
+Kokoro takes no language argument — it phonemizes according to the **voice prefix** (`ff_siwis` → French, `af_heart` → American English, `if_sara` → Italian, …). Sending French text with an English voice therefore reads it with English sounds.
+
+So when a request names **no** voice, Zallama guesses the language from the text and picks that language's voice ([`server/tts_lang.py`](server/tts_lang.py)). Precedence:
+
+| | |
+|---|---|
+| 1. `voice` in the request | always wins — auto-selection never overrides an explicit choice |
+| 2. detected language | `fr` → `ff_siwis`, `en` → `af_heart`, plus `es`/`it`/`pt`/`hi`/`ja`/`zh` |
+| 3. the model's registry `voice` param | used when the language can't be determined |
+| 4. kokoro's own default | when no registry default is set either |
+
+Detection is a small built-in heuristic, not a language identifier: CJK and Devanagari are settled by script, the Latin languages by function-word frequency. It deliberately answers "unknown" for very short inputs — `"Merci"` and `"Mercy"` are not distinguishable in five letters — and falls through to your registry default there. Pin `voice` in the request whenever you need a guaranteed result.
+
+```bash
+# Explicit voice — no detection, no surprises
+curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"kokoro:82m","input":"Bonjour !","voice":"ff_siwis"}' \
+  -o speech.wav
+```
+
+> Install **espeak-ng** (see [Installation](#2-build-the-inference-engines)) — without it kokoro falls back to a bundled phonemizer that is ~2.5x slower.
+
+Language detection only applies to `kokoro-server` models (it yields Kokoro voice names). The other TTS
+backends below get the request's `voice`, else the registry `voice` param, else their own default.
+
+### Pocket TTS (French, English, …) — pocket-tts
+
+[Kyutai's Pocket TTS](https://github.com/kyutai-labs/pocket-tts) (~100M parameters, 24 kHz) in Rust/GGUF
+([rzafiamy/pocket-tts-rs](https://github.com/rzafiamy/pocket-tts-rs)), on the **`pocket-tts-server`**
+backend. One model per language, one GGUF file holding the weights, the tokenizer and the 27 predefined
+voices. Weights are CC-BY-4.0 (Kyutai): commercial use is fine with attribution.
+
+**1. Build** (installs `bin/pocket-tts`; needs `cargo` and, for the GPU build, `nvcc`):
+```bash
+./build-pocket-tts.sh            # or --cpu / --metal; POCKET_TTS_SRC=/path/to/checkout for a local tree
+```
+
+**2. Convert a model** (downloads from Hugging Face once; `german`, `italian`, `spanish`, `portuguese`,
+`dutch` work the same way):
+```bash
+bin/pocket-tts convert --variant french  --voices all -o /bank2/zallama/models/pocket-tts-french-q8_0.gguf
+bin/pocket-tts convert --variant english --voices all -o /bank2/zallama/models/pocket-tts-english-q8_0.gguf
+```
+Voice cloning from a WAV needs the gated `kyutai/pocket-tts` weights: accept the license on Hugging Face and
+run `hf auth login` before converting. Without them everything else works.
+
+**3. Register** (both entries are in `models/registry.example.yaml`):
+```yaml
+  - name: pocket-tts-fr
+    file: pocket-tts-french-q8_0.gguf
+    modality: tts
+    backend: pocket-tts-server
+    mem_gb: 0.9
+    params:
+      device: cuda        # or cpu (~7x real time)
+```
+
+**4. Synthesize:**
+```bash
+curl http://localhost:11435/v1/audio/speech -H "Content-Type: application/json" \
+  -d '{"model":"pocket-tts-fr","input":"Bonjour, comment allez-vous ?","voice":"jean"}' -o speech.wav
+```
+
+Without `voice` the model's native default speaks (`estelle` in French, `alba` in English). `voice` takes
+a predefined name or inline audio (`data:audio/wav;base64,…`) to clone a voice; server-side paths and
+`hf://` URLs are refused with a `400`. `speed` is not supported and is ignored.
+
+Measured on an RTX 4090 through zallama: cold start 0.7 s (spawn, load, warm-up and the first sentence),
+then ~110 ms per sentence (~28x real time); 808 MiB VRAM, hence `mem_gb: 0.9`.
+
+### Voxtral-4B-TTS
+
+Mistral's TTS model has no mature native server yet, so this ships a thin
+server of our own (`patches/voxtral-tts-server.cpp`, ~150 lines) on top of
+[mudler/voxtral-tts.c](https://github.com/mudler/voxtral-tts.c)'s real
+pure-C/CUDA inference engine — same `--model`/`--host`/`--port` CLI and
+`POST /v1/audio/speech` contract as kokoro-server. Runs on the
+**`voxtral-tts-server`** backend — explicit `backend: voxtral-tts-server` in
+the registry entry, since `kokoro-server` stays the default for `modality: tts`.
+
+**1. Build the binary** (installs `voxtral-tts-server` into `./bin/`):
+```bash
+./build-voxtral-tts.sh
+```
+
+**2. Download the model** — `consolidated.safetensors` (~8 GB) + `tekken.json`
++ the `voice_embedding/` directory (one `.pt` per built-in voice — required
+for named voices like `fr_female` to resolve) from HF
+[`mistralai/Voxtral-4B-TTS-2603`](https://huggingface.co/mistralai/Voxtral-4B-TTS-2603)
+— into a directory, then register it:
+```bash
+zallama set voxtral-4b-tts backend=voxtral-tts-server modality=tts \
+  file=/bank2/zallama/models/Voxtral-4B-TTS-2603
+```
+
+**3. Synthesize:**
+```bash
+curl http://localhost:11435/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"voxtral-4b-tts","input":"Bonjour, comment allez-vous ?","voice":"fr_female"}' \
+  -o speech.wav
+```
+
+`speed` isn't supported by the engine and is silently ignored if sent.
+
+> **License:** the model weights are Mistral's, under
+> [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) —
+> **non-commercial use only**. Unlike some third-party wrappers of the same
+> engine, this server has no silent fallback: a model that fails to load
+> aborts startup instead of serving silent audio.
+
+---
+
+## 🎨 Image Generation (Stable Diffusion)
+
+Text-to-image runs on the **`sd-server`** backend ([stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)) and is exposed at the OpenAI-compatible `POST /v1/images/generations` endpoint.
+
+**1. Build the binary** (installs `sd-server` and the `sd` CLI into `./bin/`):
+```bash
+./build-ggml-stable-diffusion.cpp.sh master
+```
+The script builds with CUDA when `nvcc` is found and falls back to a CPU build otherwise.
+
+**2. Pull a model** (auto-registered as `modality: image`, `backend: sd-server`):
+```bash
+zallama pull sd:1.5        # Stable Diffusion v1.5
+zallama pull sdxl:turbo    # SDXL Turbo — few-step, near real-time
+zallama pull flux:klein    # FLUX Klein (Compact 4-bit, fast 4-step generation)
+zallama pull qwen-image:20b # Qwen-Image 20B (MMDiT image generation)
+```
+Diffusion weights ship as `.safetensors` / `.ckpt` rather than GGUF, and the downloader accepts those extensions for image repos. Already have weights locally? Register them directly:
+```bash
+zallama add sd15 /path/to/v1-5-pruned-emaonly.safetensors --modality image
+```
+
+**3. Generate** — from the CLI:
+```bash
+zallama generate sd:1.5 "a lighthouse at dawn, cinematic" --output dawn.png --size 512x512 --steps 20
+```
+or over HTTP:
+```bash
+curl http://localhost:11435/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model":"sd:1.5","prompt":"a lighthouse at dawn","size":"512x512","response_format":"b64_json"}'
+```
+
+Generation knobs (`steps`, `cfg_scale`, `sampler`, `negative_prompt`) can be set once per model and reused for every request:
+```bash
+zallama set sd:1.5 steps=25 cfg_scale=7.5
+```
+The daemon applies those registry values to any request that does not specify them. Auxiliary weights (`vae`, `taesd`, `control_net`, `clip_l`, `clip_g`, `t5xxl`) are passed to `sd-server` at launch when registered as artifacts on the model.
+
+**Speed.** `diffusion_fa` (flash attention in the diffusion model) is the one switch that is always worth it — **1.73x** on FLUX at 1024×1024, measured. `fa` adds nothing on top of it, and `vae_conv_direct` costs **2.7x** the wall time for 0.5 GiB. On models of ~20 steps and up, `cache_mode` (`easycache`, `dbcache`, `taylorseer`, `spectrum`) reuses block activations across timesteps; below that there is no redundancy to skip.
+
+**VRAM: look at the text encoder first.** A FLUX stack spends more on `t5xxl_fp16.safetensors` (9.8 GB) than on Q4_0 diffusion weights (6.8 GB). Registering a quantized encoder instead takes the resident stack from 17.0 to **11.8 GiB** with no visible quality change — which is the difference between an image model that evicts your text model on every request and one that sits beside it.
+
+**Large images.** The VAE decode buffer grows with the square of the image size and is allocated *after* the whole stack is resident, so a generation can sample all its steps and then die at the final decode. `vae_tiling` decodes the latent in patches instead. It is a trade, not a free win — measured at 0.5 GiB saved for 20 % of the clock — so turn it on when you need the room and measure when you do not:
+```bash
+zallama set flux:klein diffusion_fa=true vae_tiling=false
+zallama bench flux:klein --image-size 1024x1024 --sweep vae_tiling=true,false
+```
+The other memory switches are `max_vram` + `stream_layers` (graph-cut segmented execution — prefer these over `offload_to_cpu`), `auto_fit`, `taesd` (tiny autoencoder, far faster decode), `eager_load`, `mmap`, and `backend` for per-component placement (e.g. `backend=te=cpu`). Tile geometry is tunable with `vae_tile_size`, `vae_tile_overlap` and `vae_relative_tile_size`. Full measured write-up: [Tuning Image Generation](docs/sd-tuning.md).
+
+### Image editing — `POST /v1/images/edits`
+
+The OpenAI edits contract: `multipart/form-data` with `model`, `prompt`, one or more `image[]` uploads (legacy single `image` also accepted), and optional `mask`, `n`, `size`. The form is forwarded to `sd-server`'s own `/v1/images/edits`, which makes the first image the init image and passes every image as a reference — what edit-capable models (Qwen-Image 2.1, Flux Kontext) condition on.
+```bash
+curl http://localhost:11435/v1/images/edits \
+  -F model=qwen-image:2.1 \
+  -F 'prompt=Put sunglasses on the sloth and make the background a sunny beach' \
+  -F 'image[]=@sloth.png' -F size=1024x1024 \
+  | jq -r '.data[0].b64_json' | base64 -d > edited.png
+```
+The OpenAI SDK works unchanged: `client.images.edit(model="qwen-image:2.1", image=[open("sloth.png", "rb")], prompt=...)`. Sampling knobs are not OpenAI edit fields, so they come from the model's registry `params`; to override one per request, embed a native block in the prompt: `... <sd_cpp_extra_args>{"sample_params":{"sample_steps":30}}</sd_cpp_extra_args>`.
+
+**Qwen-Image 2.1** (needs stable-diffusion.cpp `master` from 2026-09-20 or later — rebuild with `./build-ggml-stable-diffusion.cpp.sh master`). The [unsloth GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-GGUF) is the denoiser only; it takes the VAE and a Qwen3-VL-8B text encoder as artifacts, and the encoder's vision projector as `llm_vision` — without it the model cannot see the images it is asked to edit. Q8_0 at 1024×1024 / 20 steps: ~28 s on an RTX 4090, ~15 GB resident.
+```yaml
+- name: qwen-image:2.1
+  file: qwen-image-2.1-Q8_0.gguf                      # unsloth/Qwen-Image-2.1-GGUF
+  modality: image
+  backend: sd-server
+  mem_gb: 15.0
+  artifacts:
+    vae: qwen_image_2.1_vae_bf16.safetensors          # unsloth/Qwen-Image-2.1-FP8, vae/
+    llm: Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf         # unsloth/Qwen3-VL-8B-Instruct-GGUF
+    llm_vision: mmproj-BF16-Qwen3-VL-8B-Instruct.gguf # same repo, mmproj-BF16.gguf
+  params: {steps: 20, cfg_scale: 6.0, sampler: euler, diffusion_fa: true, eager_load: true}
+```
+
+> Image models are not chat models: `zallama run <name>` refuses them and points you at `zallama generate`.
+
+---
+
+## 🌍 Translation (malaga)
+
+Machine translation runs on the **`malaga-server`** backend: [malaga](https://github.com/rzafiamy/malaga)
+serves Meta's NLLB-200 (encoder-decoder, which llama.cpp cannot run) converted to GGUF, with fused CUDA
+kernels and CUDA Graphs. Tuned for French / English ↔ Malagasy, but any NLLB-200 pair works
+(`mg → fr`, `deu_Latn`, …). Models declare `modality: translation`.
+
+**1. Build** (installs `bin/malaga`; needs `cargo` and, for the GPU build, `nvcc`):
+```bash
+./build-malaga.sh            # or --cpu; MALAGA_SRC=/path/to/checkout to build a local tree
+```
+
+**2. Get a model** — in a malaga checkout, `scripts/download.sh 600M` downloads NLLB-200 distilled 600M
+and converts it; copy `models/gguf/nllb-200-distilled-600M-q4_k_m.gguf` into your models dir.
+`q4_k_m` is the recommended preset: fastest, and FLORES-200 quality identical to f32.
+
 **3. Register**:
 ```yaml
   - name: malaga
@@ -852,7 +1185,7 @@ Every `params` key: [CONFIG.md](CONFIG.md#translation-backend-malaga-server).
 
 Zallama separates the **generic process lifecycle** (spawn, health-check, port assignment, LRU eviction, kill) from **engine-specific logic** (which binary to run, how to build its arguments, which health path to poll). The latter lives behind a `Backend` abstraction in [`server/backends.py`](server/backends.py).
 
-This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` covers TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation and editing (`/v1/images/generations`, `/v1/images/edits`); `MalagaServerBackend` covers translation (`/v1/translate`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
+This is the seam for new modalities. `LlamaServerBackend` covers text, chat, and vision; `EmbeddingServerBackend` runs `llama-server --embedding` for `/v1/embeddings`; `RerankServerBackend` runs `llama-server --reranking` for `/v1/rerank`; `ParakeetServerBackend` covers ASR (`/v1/audio/transcriptions`); `KokoroServerBackend` and `PocketTtsServerBackend` cover TTS (`/v1/audio/speech`); `SdServerBackend` covers image generation and editing (`/v1/images/generations`, `/v1/images/edits`); `MalagaServerBackend` covers translation (`/v1/translate`). Each one arrived as a new `Backend` subclass plus a matching endpoint proxy — no changes to the process manager or registry schema.
 
 ---
 

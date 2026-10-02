@@ -16,6 +16,7 @@ as *new Backend subclasses* rather than as cross-cutting changes:
   - ParakeetServerBackend → ASR        (parakeet-server)
   - ParakeetRsServerBackend → ASR + diarization (parakeet-rs-server)
   - KokoroServerBackend   → TTS        (kokoro-server)
+  - PocketTtsServerBackend→ TTS        (pocket-tts serve, Pocket TTS GGUF)
   - SdServerBackend       → image gen  (sd-server / stable-diffusion.cpp)
   - MalagaServerBackend   → translation (malaga serve, NLLB-200 GGUF)
 
@@ -715,6 +716,68 @@ class VoxtralTtsServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# pocket-tts backend (TTS — Kyutai Pocket TTS, Rust/GGUF)
+# ---------------------------------------------------------------------------
+class PocketTtsServerBackend:
+    """`pocket-tts serve` (rzafiamy/pocket-tts-rs) — Kyutai's Pocket TTS
+    (~100M params, English, French, German, Italian, Spanish, Portuguese,
+    Dutch) from one GGUF written by `pocket-tts convert`. Build it with
+    build-pocket-tts.sh, which installs `pocket-tts` into ./bin/.
+
+    Contract: `serve --model <gguf> --host --port`, GET /health (the server
+    binds only after the model is loaded and a warmup generation ran) and
+    POST /v1/audio/speech (OpenAI shape: `input`, optional `voice`; WAV out,
+    24 kHz). One model = one language; without `voice` the server uses
+    `params.voice` or the language's native default (estelle, alba, ...).
+    `speed` is not supported by the model and is ignored.
+    """
+    name = "pocket-tts-server"
+    binary_name = "pocket-tts"
+    modalities = {TTS}
+
+    # Params that take a value: registry/config key -> CLI flag.
+    _PARAM_MAP = {
+        "device": "--device",              # cpu | cuda | cuda:N | metal
+        "threads": "--threads",            # CPU threads (1-4 is best)
+        "voice": "--voice",                # default voice for requests
+        "temperature": "--temperature",
+        "lsd_decode_steps": "--lsd-decode-steps",
+        "eos_threshold": "--eos-threshold",
+        "noise_clamp": "--noise-clamp",
+        "prewarm_voices": "--prewarm-voices",  # "alba,jean"
+        "voice_cache_capacity": "--voice-cache-capacity",
+    }
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [
+            binary, "serve",
+            "--model", str(model_path),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+        # The entry's own params only: merged_params also carries
+        # llama_server.default_params, whose `threads: 8` would slow batch-1
+        # decoding (pocket-tts is fastest at 1-4 threads and picks
+        # min(4, cores) by itself).
+        params = entry.get("params") or {}
+        for key, flag in self._PARAM_MAP.items():
+            if params.get(key) not in (None, ""):
+                args += [flag, str(params[key])]
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # sd-server backend (Image Generation / stable-diffusion.cpp)
 # ---------------------------------------------------------------------------
 class SdServerBackend:
@@ -1037,6 +1100,7 @@ _BACKENDS: dict[str, Backend] = {
     AudioCppServerBackend.name: AudioCppServerBackend(),
     KokoroServerBackend.name: KokoroServerBackend(),
     VoxtralTtsServerBackend.name: VoxtralTtsServerBackend(),
+    PocketTtsServerBackend.name: PocketTtsServerBackend(),
     SdServerBackend.name: SdServerBackend(),
     MalagaServerBackend.name: MalagaServerBackend(),
 }

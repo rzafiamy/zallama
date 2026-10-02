@@ -351,6 +351,44 @@ fields; the registry's `params.voice`/`params.speed` are applied by the
 
 ---
 
+## `tts` (backend: `pocket-tts-server`) — Kyutai Pocket TTS
+
+Source: `PocketTtsServerBackend`. Runs `pocket-tts serve` from
+[rzafiamy/pocket-tts-rs](https://github.com/rzafiamy/pocket-tts-rs) (build with
+`./build-pocket-tts.sh`). `file` is one GGUF written by
+`pocket-tts convert --variant <language> --voices all` (weights, tokenizer and
+voices; one language per file). Set `backend: pocket-tts-server` explicitly —
+`kokoro-server` stays the default for `modality: tts`.
+
+`POST /v1/audio/speech`: JSON in (`input`, optional `voice`), WAV out (24 kHz
+mono). `GET /health` answers once the model is loaded and warmed up.
+
+Only the entry's own `params` are forwarded — `llama_server.default_params`
+(`threads: 8`, …) are not, since more than 4 threads slows batch-1 decoding.
+
+| key | CLI flag | notes |
+|---|---|---|
+| `device` | `--device` | `cpu` (default), `cuda`, `cuda:N`, `metal` |
+| `threads` | `--threads` | CPU threads; default `min(4, cores)`, 1–4 is fastest |
+| `voice` | `--voice` | default voice when the request names none; default: the language's native voice (`estelle`, `alba`, …) |
+| `temperature` | `--temperature` | sampling temperature; default: the model's (0.3) |
+| `lsd_decode_steps` | `--lsd-decode-steps` | sampler steps (more = slower, marginally better); default 1 |
+| `eos_threshold` | `--eos-threshold` | more negative = longer tail; default -4.0 |
+| `noise_clamp` | `--noise-clamp` | clamp sampling noise to [-x, x] |
+| `prewarm_voices` | `--prewarm-voices` | comma-separated voices resolved at startup |
+| `voice_cache_capacity` | `--voice-cache-capacity` | resolved voices kept in memory; default 64 |
+
+Request `voice`: a predefined name or inline audio
+(`data:audio/wav;base64,…`, voice cloning — needs a GGUF converted with access
+to the gated `kyutai/pocket-tts` weights). Server-side paths and `hf://` URLs,
+which `pocket-tts` itself accepts, are refused by zallama with a `400`. `speed`
+is ignored. No language auto-detection: each model speaks one language.
+
+Measured (RTX 4090, q8_0, 27 voices embedded): 808 MiB VRAM → `mem_gb: 0.9`;
+cold start 0.7 s, ~110 ms per sentence. Weights: CC-BY-4.0 (Kyutai).
+
+---
+
 ## `tts` (backend: `voxtral-tts-server`) — Voxtral-4B-TTS-2603
 
 Source: `VoxtralTtsServerBackend`, a thin server of ours

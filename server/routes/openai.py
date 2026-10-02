@@ -676,13 +676,25 @@ def _sanitize_tts_input(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned.replace("_", "")).strip()
 
 
+_POCKET_VOICE_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _pocket_voice_allowed(voice: str) -> bool:
+    """A predefined voice name or inline audio — not a path or hf:// URL."""
+    v = voice.strip()
+    return bool(_POCKET_VOICE_NAME.fullmatch(v)) or (
+        v.startswith("data:audio/") and "base64," in v
+    )
+
+
 @router.post("/audio/speech")
 async def audio_speech(
     request: Request,
     pm=Depends(get_pm),
     registry=Depends(get_registry),
 ):
-    """Proxy an OpenAI-style speech request to a TTS backend (kokoro-server).
+    """Proxy an OpenAI-style speech request to a TTS backend (kokoro-server,
+    pocket-tts, voxtral-tts-server, malaga).
 
     JSON in, audio out: the client posts {model, input, voice, ...} and the
     backend returns binary audio (WAV). We pick the instance from `model`, then
@@ -703,9 +715,11 @@ async def audio_speech(
     # request body (its CLI exposes no such launch flags), so this is the only
     # place a registered default can take effect. An explicit client value wins.
     try:
-        params = registry.get(model_name).get("params") or {}
+        entry = registry.get(model_name)
     except Exception:
-        params = {}
+        entry = {}
+    params = entry.get("params") or {}
+    backend_name = entry.get("backend")
     if "speed" in params and "speed" not in body:
         body["speed"] = params["speed"]
 
@@ -717,13 +731,30 @@ async def audio_speech(
     # request voice > detected language > registry default > kokoro's own
     # default, so a caller that asks for a voice always gets it, and the
     # registry default still covers text we can't place.
+    #
+    # The guess yields *Kokoro* voice names, so it only applies to
+    # kokoro-server. Other TTS backends get the registry default or their own
+    # (pocket-tts: one language per model, native default voice).
     voice = body.get("voice")
     if not (isinstance(voice, str) and voice.strip()):
-        chosen = voice_for_text(body.get("input") or "", fallback=params.get("voice"))
+        if backend_name in (None, "kokoro-server"):
+            chosen = voice_for_text(body.get("input") or "", fallback=params.get("voice"))
+        else:
+            chosen = params.get("voice")
         if chosen:
             body["voice"] = chosen
         else:
             body.pop("voice", None)
+    elif backend_name == "pocket-tts-server" and not _pocket_voice_allowed(voice):
+        # pocket-tts also accepts a server-side file path or an hf:// URL as
+        # `voice`; through zallama that would let any client make the server
+        # open local files or download arbitrary repos. Names and inline audio
+        # (data:audio/...;base64,...) only.
+        raise HTTPException(
+            status_code=400,
+            detail="voice must be a predefined voice name (e.g. 'estelle', 'alba') "
+                   "or inline audio 'data:audio/wav;base64,...' for cloning",
+        )
 
     upstream_url = f"{inst.base_url}/v1/audio/speech"
     async with pm.serving(inst, "audio/speech"):
@@ -731,8 +762,8 @@ async def audio_speech(
             try:
                 resp = await client.post(upstream_url, json=body)
             except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=f"kokoro-server error: {e}")
-    # kokoro-server returns audio/wav on success, or a JSON error body otherwise;
+                raise HTTPException(status_code=502, detail=f"{backend_name or 'kokoro-server'} error: {e}")
+    # TTS servers return audio/wav on success, or a JSON error body otherwise;
     # pass the upstream content and content type straight back to the client.
     return Response(
         content=resp.content,

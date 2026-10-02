@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`pocket-tts-server` backend (TTS)** — Kyutai's Pocket TTS (~100M params, 24 kHz) through
+  `pocket-tts serve` from rzafiamy/pocket-tts-rs (Rust/GGUF), built by `build-pocket-tts.sh`.
+  One GGUF per language with the 27 predefined voices embedded; `pocket-tts-fr` and
+  `pocket-tts-en` (q8_0) in `models/registry.example.yaml`. Measured on an RTX 4090 through
+  zallama: 808 MiB VRAM, cold start 0.7 s, ~110 ms per sentence. Params: `device`, `threads`,
+  `voice`, `temperature`, `lsd_decode_steps`, `eos_threshold`, `noise_clamp`,
+  `prewarm_voices`, `voice_cache_capacity` (CONFIG.md).
+
+### Changed
+- `/v1/audio/speech` guesses a voice from the text's language only for `kokoro-server`
+  models: the guess is a Kokoro voice name (`ff_siwis`, …), which Voxtral, malaga and
+  pocket-tts do not know. Those backends now get the registry `voice` or their own default.
+- For `pocket-tts-server` models, `voice` must be a voice name or inline
+  `data:audio/…;base64,` audio; server-side paths and `hf://` URLs get a `400`.
+
+### Fixed
+- README: restored the sections lost in the v1.21.0 translation rework (end of the
+  parakeet-rs ASR section, Voxtral streaming ASR, Text-to-Speech, Image Generation and the
+  start of Translation); the table of contents pointed at sections that no longer existed.
+
 ## [1.23.1] - 2026-10-01
 
 ### Changed
