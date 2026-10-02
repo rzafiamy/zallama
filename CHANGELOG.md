@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-10-02
+
 ### Added
 - **Realtime speech-to-speech: `/v1/realtime` (WebSocket)** — OpenAI Realtime protocol subset
   (GA event names, `?events=beta`): Silero VAD → ASR → LLM with client-side tool calls → TTS,
@@ -818,7 +820,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.27.1...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.28.0...HEAD
+[1.28.0]: https://github.com/rzafiamy/zallama/compare/v1.27.1...v1.28.0
 [1.27.1]: https://github.com/rzafiamy/zallama/compare/v1.27.0...v1.27.1
 [1.27.0]: https://github.com/rzafiamy/zallama/compare/v1.26.1...v1.27.0
 [1.26.1]: https://github.com/rzafiamy/zallama/compare/v1.26.0...v1.26.1
