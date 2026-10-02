@@ -838,6 +838,10 @@ class PocketTtsServerBackend:
         # `normalize: false` turns that off (e.g. to measure without it).
         if params.get("normalize") is False:
             args.append("--no-normalize")
+        # Shortened silence between generated chunks (on by default in
+        # pocket-tts); `tight_pauses: false` restores the long pauses.
+        if params.get("tight_pauses") is not None:
+            args += ["--tight-pauses", "true" if params["tight_pauses"] else "false"]
         return args
 
     def health_path(self) -> str:

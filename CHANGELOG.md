@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Choppy and garbled long answers on pocket-tts** — rebuild with `./build-pocket-tts.sh` and
+  `./build-tn.sh v0.2.0`. pocket-tts generates a long text chunk by chunk and ended each chunk
+  with a full end-of-sentence silence, so sentences split at a comma had 0.6–0.8 s gaps
+  (now 160 ms; 320 ms after a sentence; `params.tight_pauses: false` restores them). tn 0.2.0
+  reads e-mails, URLs, IP addresses, version numbers (`Qwen-Image 2.0` → "deux point zéro"),
+  ranges and slashes, which turned half of a 2-minute chat answer into noise.
+
 ## [1.27.0] - 2026-10-02
 
 ### Added

@@ -438,6 +438,7 @@ Only the entry's own `params` are forwarded — `llama_server.default_params`
 | `noise_clamp` | `--noise-clamp` | clamp sampling noise to [-x, x] |
 | `prewarm_voices` | `--prewarm-voices` | comma-separated voices resolved at startup |
 | `normalize` | `--no-normalize` when `false` | pocket-tts spells out numbers itself (the tn rules); `false` turns that off |
+| `tight_pauses` | `--tight-pauses true\|false` | default on: silence between generated chunks cut to 320 ms after a sentence, 160 ms after a comma split (long sentences otherwise sound choppy) |
 | `voice_cache_capacity` | `--voice-cache-capacity` | resolved voices kept in memory; default 64 |
 
 Text: pocket-tts spells out numbers, times, amounts, units and abbreviations
