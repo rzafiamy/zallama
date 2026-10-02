@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-10-02
+
 ### Added
 - **`pocket-tts-server` backend (TTS)** — Kyutai's Pocket TTS (~100M params, 24 kHz) through
   `pocket-tts serve` from rzafiamy/pocket-tts-rs (Rust/GGUF), built by `build-pocket-tts.sh`.
@@ -731,7 +733,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.23.1...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.24.0...HEAD
+[1.24.0]: https://github.com/rzafiamy/zallama/compare/v1.23.1...v1.24.0
 [1.23.1]: https://github.com/rzafiamy/zallama/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/rzafiamy/zallama/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/rzafiamy/zallama/compare/v1.21.0...v1.22.0
