@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   history every turn, so past the voice LLM's ctx_size every reply failed. The oldest turns are
   now dropped (down to 60 % of `realtime.history_tokens`, default ctx − max_tokens). The
   `gemma-e2b-voice` example goes from 8K to 32K context: +78 MB of VRAM (its KV cache is tiny).
+- **Voice TTS out of GPU memory next to a resident 27B** — pocket-tts allocates during synthesis
+  and failed with `CUDA_ERROR_OUT_OF_MEMORY` with ~490 MB left. docs/realtime.md now runs the
+  voice TTS on CPU (`device: cpu` pocket-tts entries behind a language router): first audio
+  60–130 ms instead of 25–60 ms, 1.28 GB of VRAM left at peak.
 
 ## [1.28.0] - 2026-10-02
 

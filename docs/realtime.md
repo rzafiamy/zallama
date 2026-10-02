@@ -20,7 +20,7 @@ Code: `server/routes/realtime.py` (session, protocol, pipeline),
 realtime:
   llm_model: "gemma-e2b-voice"      # Gemma-4-E2B, ctx_size 32768, parallel 1, evict_group voice
   asr_model: "parakeet-tdt-v3-cpu"  # CPU, no VRAM
-  tts_model: "pocket-tts"           # language-routing entry → pocket-tts-fr / -en
+  tts_model: "pocket-tts-voice"     # CPU language router → pocket-tts-fr-cpu / -en-cpu (see VRAM below)
   voice: "estelle"
 ```
 
@@ -118,6 +118,25 @@ The session keeps the conversation under the LLM's context: past
 estimated at 3 chars each), the oldest turns are dropped down to 60 % of the
 budget in one go, starting again on a user message. Each trim re-prefills the
 history once, hence the big step instead of one turn at a time.
+
+### VRAM: run the voice TTS on CPU next to a big resident model
+
+pocket-tts allocates its working memory *during* each synthesis (llama-server
+reserves everything at startup). With the 27B (21.3 GB) + gemma-e2b-voice
+32K (1.9 GB) + pocket-tts on CUDA (0.8 GB), the card sat at 24 072 of
+24 564 MiB and pocket-tts failed every request with `CUDA_ERROR_OUT_OF_MEMORY`.
+
+So the voice uses CPU entries: `pocket-tts-voice` (language router) →
+`pocket-tts-fr-cpu` / `pocket-tts-en-cpu` (`device: cpu`, `threads: 4`,
+`mem_gb: 0.01`, evict_group `voice`). Measured: first audio 60–130 ms per
+phrase (GPU: 25–60 ms), 4.6–6.4× realtime, so streaming stays ahead of
+playback; peak VRAM during a full fr/en session 23 281 MiB (1.28 GB free).
+Switching language costs one cold model load (~0.8 s) the first time.
+
+```yaml
+realtime:
+  tts_model: "pocket-tts-voice"
+```
 
 ## Protocol notes
 
