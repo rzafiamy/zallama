@@ -71,6 +71,7 @@ DEFAULTS: dict[str, Any] = {
         "llm_model": "",          # text model (tool calling); ?model= overrides per session
         "asr_model": "",          # asr model (parakeet-rs-server on CPU is ~40x realtime)
         "tts_model": "",          # tts model; pocket-tts streams, others are per phrase
+        "demo": False,            # serve the browser demo page at GET /realtime
         "vad_model": "silero_vad.onnx",  # Silero VAD ONNX, relative to models_dir
         "voice": "",              # default voice ("" = the TTS model's own)
         "language": "",           # force a language ("" = follow the user's)

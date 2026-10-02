@@ -2,7 +2,9 @@
 
 A WebSocket voice agent that speaks a subset of the **OpenAI Realtime** protocol
 (GA event names; `?events=beta` for the older ones). OpenAI SDKs, pipecat or
-LiveKit clients connect unchanged. Browser demo: `GET /realtime`.
+LiveKit clients connect unchanged. Browser demo: `GET /realtime`, **off by
+default** (`zallama realtime demo on|off`, then restart; while on, the page is
+public but its WebSocket still needs the API key; off, `/realtime` is a 404).
 
 ```
 mic PCM16 24 kHz ─▶ Silero VAD ─▶ ASR ─▶ LLM (streamed, tools) ─▶ phrase chunker ─▶ TTS (streamed) ─▶ PCM16 24 kHz

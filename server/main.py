@@ -227,7 +227,10 @@ def create_app(cfg: dict) -> FastAPI:
         redoc_url="/redoc",
     )
     app.state.cfg = cfg
-    _install_auth(app, cfg, public_prefixes=("/health", "/realtime"))
+    # The realtime demo page is public only while enabled (the WebSocket it
+    # opens still needs the key); disabled, /realtime is a 404.
+    demo = bool((cfg.get("realtime") or {}).get("demo"))
+    _install_auth(app, cfg, public_prefixes=("/health", "/realtime") if demo else ("/health",))
     _install_cors(app)
 
     app.include_router(health_routes.router)

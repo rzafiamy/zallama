@@ -95,6 +95,7 @@ realtime:
   llm_model: ""            # text model with tool calling (?model= overrides per session)
   asr_model: ""            # e.g. parakeet-tdt-v3-cpu (no VRAM, ~100 ms per utterance)
   tts_model: ""            # e.g. pocket-tts (streams PCM; first audio in ~30 ms)
+  demo: false              # browser demo at GET /realtime (no auth on the page itself)
   vad_model: "silero_vad.onnx"
   voice: ""                # default voice ("" = the TTS model's default)
   language: ""             # force a language ("" = follow the user's)

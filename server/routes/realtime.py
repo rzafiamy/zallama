@@ -51,7 +51,7 @@ from pathlib import Path
 
 import httpx
 import numpy as np
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from ..dependencies import get_pm, get_registry
@@ -1171,8 +1171,11 @@ def _is_text(name: str) -> bool:
 
 
 @router.get("/realtime", include_in_schema=False)
-async def realtime_demo():
-    """Browser demo: talk to /v1/realtime with the microphone."""
+async def realtime_demo(request: Request):
+    """Browser demo: talk to /v1/realtime with the microphone. Off unless
+    `realtime.demo: true` (`zallama realtime demo on`)."""
+    if not (request.app.state.cfg.get("realtime") or {}).get("demo"):
+        raise HTTPException(status_code=404, detail="Not Found")
     return FileResponse(Path(__file__).with_name("realtime_demo.html"), media_type="text/html")
 
 

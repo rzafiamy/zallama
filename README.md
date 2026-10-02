@@ -1123,7 +1123,8 @@ curl http://localhost:11435/v1/audio/speech \
 
 A WebSocket voice agent speaking the OpenAI Realtime protocol: Silero VAD → ASR → LLM (tool
 calls run on the client) → streamed TTS, with speculative turns and barge-in. Point it at three
-registered models and try the browser demo at `http://localhost:<port>/realtime`:
+registered models; `zallama realtime demo on` (then restart) serves a browser demo at
+`http://localhost:<port>/realtime` (off by default, since the page needs no key):
 
 ```yaml
 realtime:

@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   30/30 single-step tool calls), 506–641 ms with gemma-4-12b,
   640–830 ms with Qwen3.8-27B (hybrid: ~200 ms of context-checkpoint cost per request). Browser demo at `GET /realtime`. Configure the
   `realtime:` section (`llm_model`, `asr_model`, `tts_model`) and put `silero_vad.onnx` in
-  `models_dir`; new dependency `onnxruntime`. See docs/realtime.md.
+  `models_dir`; new dependency `onnxruntime`. The demo page is off by default:
+  `zallama realtime demo on|off` (and `zallama realtime` shows the settings, which
+  `zallama config set realtime.<key>` now accepts). See docs/realtime.md.
 
 ## [1.27.1] - 2026-10-02
 
