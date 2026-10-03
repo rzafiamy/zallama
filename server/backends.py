@@ -1388,6 +1388,12 @@ class TeleOcrServerBackend:
         # Blocks decoded together when parsing a page; VRAM grows with it.
         if params.get("batch") not in (None, ""):
             args += ["--batch", str(params["batch"])]
+        # Memory bounds (teleocr-rs >= 0.2.0): pages above this many pixels
+        # are downscaled before cropping; KV positions per decoding batch.
+        if params.get("max_page_pixels") not in (None, ""):
+            args += ["--max-page-pixels", str(params["max_page_pixels"])]
+        if params.get("kv_budget") not in (None, ""):
+            args += ["--kv-budget", str(params["kv_budget"])]
         return args
 
     def health_path(self) -> str:

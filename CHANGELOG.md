@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.32.0] - 2026-10-03
+
+### Changed
+- **TeleOCR backend on teleocr-rs 0.2.0** (`./build-teleocr.sh` now builds the `v0.2.0` tag):
+  large inputs no longer run the GPU out of memory — a 12 Mpx phone photo used to OOM a 24 GB
+  GPU. The text prefill runs in chunks (14.4 → 5.3 GB peak on a 4.5 Mpx crop, output still
+  token-exact), pages above 4.5 Mpx are downscaled before cropping, decoding batches are cut at
+  a KV budget with a one-by-one retry on CUDA OOM, and the server gives its cached GPU memory
+  back after each request (~2 GB idle). Also fixes PDFs after the first one in a server's life
+  (`PdfiumLibraryBindingsAlreadyInitialized`) and clips page ranges past the last page.
+
+### Added
+- `teleocr-server` params `max_page_pixels` (`--max-page-pixels`, default 4500000) and
+  `kv_budget` (`--kv-budget`, default 16384 positions = 3.7 GB of KV cache).
+
 ## [1.31.0] - 2026-10-03
 
 ### Added

@@ -734,12 +734,19 @@ headers / footers in the Markdown), `max_tokens`, and for PDFs `pages`
 |---|---|---|
 | `batch` | `--batch` (sequences decoded together while parsing) | 8 |
 | `max_pixels` | `--max-pixels` (cap on resized image area) | 12845056 |
+| `max_page_pixels` | `--max-page-pixels` (parsing: larger pages are downscaled before their blocks are cropped) | 4500000 |
+| `kv_budget` | `--kv-budget` (KV positions one decoding batch may use; 16384 = 3.7 GB of F32 cache) | 16384 |
 | `threads` | `--threads` (CPU inference) | all cores |
 | `device: cpu` or `n_gpu_layers: 0` | `--cpu` | GPU when present |
 
 `mem_gb`: the q8v GGUF (Q8_0 text and vision, 1.5 GB) peaks at +4.9 GB at
 batch 4, +6.4 GB at batch 8 and +8.6 GB at batch 16 while parsing PDF pages
-(RTX 4090). Batch 8 parses ~3.2 s per page, batch 1 ~6.5 s.
+(RTX 4090). Batch 8 parses ~3.2 s per page, batch 1 ~6.5 s. Since
+teleocr-rs 0.2.0 large inputs stay bounded (chunked prefill, page
+downscaling, `kv_budget`, one-by-one retry on CUDA OOM: a 12 Mpx phone photo
+no longer runs a 24 GB GPU out of memory), and the server returns its cached
+GPU memory after each request (~2 GB idle). `max_page_pixels` and
+`kv_budget` need teleocr-rs ≥ 0.2.0.
 
 ---
 

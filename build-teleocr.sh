@@ -4,7 +4,7 @@
 # and install it as ./bin/teleocr, with libpdfium.so for PDF input, for the
 # `teleocr-server` backend.
 #
-# Usage: ./build-teleocr.sh [branch-or-tag] [--cpu]
+# Usage: ./build-teleocr.sh [branch-or-tag] [--cpu]   (default: v0.2.0)
 #   (default)        CUDA build (needs nvcc)
 #   --cpu            CPU-only build
 # Environment:
@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-REF="main"
+REF="v0.2.0"
 CUDA=1
 for arg in "$@"; do
     case "$arg" in

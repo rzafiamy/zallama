@@ -39,3 +39,8 @@ docs/performance.md.
 - ~225 tok/s per sequence; ~3.2 s per page at batch 8 (layouts of all pages
   batched, then all blocks). VRAM +6.4 GB at batch 8 (F32 KV cache), so it
   cannot sit next to the 21 GB 27B: default eviction group `primary`.
+- teleocr-rs 0.2.0 (2026-10-03) bounds memory on large inputs: prefill in
+  1024-position chunks (14.4 → 5.3 GB peak on a 4.5 Mpx crop), pages above
+  4.5 Mpx downscaled (`max_page_pixels`), batches cut at a KV budget
+  (`kv_budget`) with a one-by-one retry on OOM, CUDA pool trimmed after each
+  request (~2 GB idle). 12 Mpx phone photos used to OOM the 24 GB GPU.
