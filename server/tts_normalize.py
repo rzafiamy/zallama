@@ -35,16 +35,34 @@ import httpx
 
 logger = logging.getLogger("zallama.tts_normalize")
 
-# What the rules leave to the LLM: digits, Roman numerals (2+ capitals,
-# alone or with an ordinal suffix: "XIV", "XVIIe", "VIIIth"; "Ier"), and
-# short capitalized abbreviations inside a sentence ("St. James", "Oct. 21").
-# Single capitals are not Roman numerals here: "Le", "Ce", "I".
-NEEDS_LLM = re.compile(
-    r"[0-9]"
-    r"|\b[IVXLCDM]{2,}(?:e|er|re|ème|th|st|nd|rd)?\b"
+# What the rules leave to the LLM: digits, symbols tn did not read
+# (`+`, `%`, `€`, `#`...), Roman numerals (canonical ones of 2+ capitals,
+# alone or with an ordinal suffix: "XIV", "XVIIe", "VIIIth"; "Ier") that are
+# not common acronyms, and short capitalized abbreviations inside a sentence
+# ("St. James", "Oct. 21"). Single capitals are not Roman numerals here:
+# "Le", "Ce", "I"; neither are "LLM", "CV" or "CD".
+_TRIGGERS = re.compile(
+    r"[0-9+%€$£#&=]"
     r"|\bIe?re?\b(?=\s)"
     r"|\b[A-Z][a-z]{0,2}\.(?=\s+\S)"
 )
+_ROMAN = re.compile(r"\b([IVXLCDM]{2,})(?:e|er|re|ème|th|st|nd|rd)?\b")
+_ROMAN_CANON = re.compile(r"M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})")
+# Valid numerals that are more often acronyms or words (as in tn's roman.rs).
+_ACRONYMS = {"CV", "CD", "DC", "MD", "CM", "DM", "MC", "CC", "CI", "DI", "LI", "MI", "MM",
+             "XL", "MIX", "DIV", "CIL", "MIL", "CLI", "CCC", "XXX", "VI", "MCM"}
+
+
+def needs_llm(sentence: str) -> bool:
+    """Whether a sentence still holds something the rules could not read."""
+    if _TRIGGERS.search(sentence):
+        return True
+    return any(
+        _ROMAN_CANON.fullmatch(m.group(1)) and m.group(1) not in _ACRONYMS
+        for m in _ROMAN.finditer(sentence)
+    )
+
+
 # Sentence boundary after tn's output (one line = one sentence, joined by spaces).
 _SENTENCE = re.compile(r"(?<=[.!?…:;])\s+")
 _WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*\.?")
@@ -63,6 +81,11 @@ SHOTS = [
      "The second edition sold fifteen thousand copies in twenty nineteen at nine dollars and ninety-nine cents each."),
     ("**Rappel** : M. Leroy arrive le 12/03 à 16h.",
      "Rappel : Monsieur Leroy arrive le douze mars à seize heures."),
+    ("Sous Napoléon III, au XIXe siècle, le tome II coûtait 12 € HT (+5 %).",
+     "Sous Napoléon trois, au dix-neuvième siècle, le tome deux coûtait douze euros hors taxes "
+     "(plus cinq pour cent)."),
+    ("Henry VIII ruled before World War II; see #4 and Elizabeth I.",
+     "Henry the Eighth ruled before World War Two; see number four and Elizabeth the First."),
 ]
 
 
@@ -125,7 +148,7 @@ async def normalize_for_tts(
         return out, "rules"
 
     sentences = _SENTENCE.split(out)
-    todo = [i for i, s in enumerate(sentences) if NEEDS_LLM.search(s)]
+    todo = [i for i, s in enumerate(sentences) if needs_llm(s)]
     if not todo:
         return out, "rules"
 

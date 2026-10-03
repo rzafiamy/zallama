@@ -364,7 +364,7 @@ numbers but not "1 250 000 €"). A `tts` entry opts in:
 | key | notes |
 |---|---|
 | `normalizer` | registry name of a `normalization` model (tn-server). Its rules and lexicon run first. |
-| `normalizer_llm` | optional registry name of a `text` model. With it, tn runs in *safe* mode (ambiguous numbers stay digits) and the LLM reads the sentences that still contain digits, Roman numerals or abbreviations — all of one request at once, few-shot, temperature 0. An answer that lost plain words of its sentence (or is empty or runaway) is replaced by tn's strict reading. |
+| `normalizer_llm` | optional registry name of a `text` model. With it, tn runs in *safe* mode (ambiguous numbers stay digits) and the LLM reads the sentences that still contain digits, symbols (`+ % € # &`), Roman numerals (canonical, not acronyms like `CV`, `CD`; `LLM` is not one) or abbreviations — all of one request at once, few-shot, temperature 0. An answer that lost plain words of its sentence (or is empty or runaway) is replaced by tn's strict reading. |
 | `language` | language for the rules when the route can't tell; precedence: language routing (`languages` entries) > `params.language` > detection from the text. Only `fr` and `en` have number rules. |
 
 The normalizer runs **before** the engine is started, so starting the LLM
