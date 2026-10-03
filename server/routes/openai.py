@@ -835,9 +835,22 @@ async def audio_speech(
     # One language decision for the request, used by the normalizer and by
     # the voice choice below: language routing > params.language > detection
     # on the whole text (more reliable than on what the normalizer returns).
-    lang = routed_language or params.get("language") or (
-        detect_language(raw_input) if isinstance(raw_input, str) else None
-    )
+    # A model that speaks several languages (XTTS) is told which one per
+    # request: there the request's `language` and detection come first and
+    # params.language is only the fallback.
+    detected = detect_language(raw_input) if isinstance(raw_input, str) else None
+    multilingual = getattr(get_backend(backend_name or "kokoro-server"), "LANGUAGES", None)
+    if multilingual:
+        requested = str(body.get("language") or "").strip().lower().split("-")[0]
+        if requested and requested not in multilingual:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{model_name}' speaks {', '.join(multilingual)}; "
+                       f"got language '{body.get('language')}'.",
+            )
+        lang = requested or (detected if detected in multilingual else None) or params.get("language")
+    else:
+        lang = routed_language or params.get("language") or detected
     if isinstance(raw_input, str):
         text = raw_input
         normalizer = params.get("normalizer")
@@ -915,18 +928,10 @@ async def audio_speech(
         else:
             body.pop("voice", None)
     # One XTTS model speaks every language, told by the request's `language`:
-    # the detected one when the client gave none (else the server's --lang).
+    # the one decided above when the client gave none (else the server's --lang).
     languages = getattr(backend_obj, "LANGUAGES", None)
-    if languages is not None:
-        requested = str(body.get("language") or "").strip().lower()
-        if requested and requested.split("-")[0] not in languages:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Model '{model_name}' speaks {', '.join(languages)}; "
-                       f"got language '{requested}'.",
-            )
-        if not requested and lang in languages:
-            body["language"] = lang
+    if languages is not None and not body.get("language") and lang in languages:
+        body["language"] = lang
     upstream_url = f"{inst.base_url}/v1/audio/speech"
     async with pm.serving(inst, "audio/speech"):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:
