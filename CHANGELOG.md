@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.31.0] - 2026-10-03
+
 ### Added
 - **XTTS-v2 text-to-speech (`backend: xtts-server`)** — runs
   [xtts-rs](https://github.com/rzafiamy/xtts-rs), a Rust/Candle + GGUF port of Coqui XTTS-v2:
@@ -14,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4090. `/v1/audio/speech` sends the request's `language` or the detected one; voice names match
   ignoring case and `_` (`claribel_dervla`). `/v1/realtime` streams it like pocket-tts (first
   audio ~40 ms). `build-xtts.sh` installs `bin/xtts`.
+
+### Fixed
+- **Normalizer LLM pass**: Gemma kept `Louis XIV` and `(+20 %)` as written — its few-shot
+  prompt had no Roman numeral, sign or tax abbreviation; two examples added. The pass is also
+  no longer triggered by acronyms that look like Roman numerals (`LLM`, `CV`, `CD`), which cost
+  ~190 ms per sentence for nothing; leftover symbols (`+ % € # &`) now trigger it. With
+  tn-server 0.3.0 (`./build-tn.sh`), the rules read most of these cases themselves: Roman
+  numerals in context, signs, `HT`/`TTC`.
 
 ## [1.30.0] - 2026-10-02
 
@@ -879,7 +889,8 @@ Initial release.
   `reasoning` is configurable per model.
 - **Embedded Web UI** and a config-driven architecture (global defaults + per-model params).
 
-[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.30.0...HEAD
+[Unreleased]: https://github.com/rzafiamy/zallama/compare/v1.31.0...HEAD
+[1.31.0]: https://github.com/rzafiamy/zallama/compare/v1.30.0...v1.31.0
 [1.30.0]: https://github.com/rzafiamy/zallama/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/rzafiamy/zallama/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/rzafiamy/zallama/compare/v1.27.1...v1.28.0
