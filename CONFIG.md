@@ -484,7 +484,8 @@ Source: `XttsServerBackend`. Runs `xtts serve` from
 `./build-xtts.sh`), a Rust/Candle port of Coqui XTTS-v2 (~470M params). `file`
 is one GGUF written by `xtts convert <coqui XTTS-v2 dir> -o xtts-v2-q4k.gguf
 --gpt-dtype q4k --no-cloning` (weights, tokenizer and the 58 built-in voices;
-276 MB, the voice-cloning encoders left out). Set
+276 MB, the voice-cloning encoders left out), or downloaded ready-made from
+[rleo/XTTS-v2-GGUF](https://huggingface.co/rleo/XTTS-v2-GGUF). Set
 `backend: xtts-server` explicitly. Weights under the Coqui Public Model
 License (non-commercial use).
 

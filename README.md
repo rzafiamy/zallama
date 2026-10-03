@@ -123,7 +123,7 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 ./build-pocket-tts.sh
 
 # xtts (TTS, Coqui XTTS-v2 in Rust/GGUF: French/English, 58 voices; needs cargo + nvcc)
-./build-xtts.sh
+./build-xtts.sh   # model: hf download rleo/XTTS-v2-GGUF xtts-v2-q4k.gguf (non-commercial CPML)
 
 # tn-server (text normalization in front of the TTS engines; cargo only)
 ./build-tn.sh
