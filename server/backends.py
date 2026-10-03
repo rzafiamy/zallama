@@ -17,6 +17,7 @@ as *new Backend subclasses* rather than as cross-cutting changes:
   - ParakeetRsServerBackend → ASR + diarization (parakeet-rs-server)
   - KokoroServerBackend   → TTS        (kokoro-server)
   - PocketTtsServerBackend→ TTS        (pocket-tts serve, Pocket TTS GGUF)
+  - XttsServerBackend     → TTS        (xtts serve, Coqui XTTS-v2 GGUF)
   - SdServerBackend       → image gen  (sd-server / stable-diffusion.cpp)
   - MalagaServerBackend   → translation (malaga serve, NLLB-200 GGUF)
   - TnServerBackend       → normalization (tn-server, text for TTS)
@@ -856,6 +857,142 @@ class PocketTtsServerBackend:
 
 
 # ---------------------------------------------------------------------------
+# xtts backend (TTS — Coqui XTTS-v2, Rust/GGUF)
+# ---------------------------------------------------------------------------
+def _gguf_string(path: Path, wanted: str) -> str | None:
+    """The string value of metadata key `wanted` in a GGUF header, or None.
+    Reads the header only (XTTS's tokenizer, a few hundred KB, comes first)."""
+    import struct
+
+    sizes = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+    STRING, ARRAY = 8, 9
+    with open(path, "rb") as f:
+        if f.read(4) != b"GGUF":
+            return None
+        f.read(4 + 8)  # version, tensor count
+        (kv_count,) = struct.unpack("<Q", f.read(8))
+
+        def read_str() -> str:
+            (n,) = struct.unpack("<Q", f.read(8))
+            return f.read(n).decode("utf-8", "replace")
+
+        def skip(tid: int) -> None:
+            if tid == STRING:
+                (n,) = struct.unpack("<Q", f.read(8))
+                f.seek(n, 1)
+            elif tid == ARRAY:
+                (elem,) = struct.unpack("<I", f.read(4))
+                (count,) = struct.unpack("<Q", f.read(8))
+                if elem in sizes:
+                    f.seek(sizes[elem] * count, 1)
+                else:
+                    for _ in range(count):
+                        skip(elem)
+            else:
+                f.seek(sizes[tid], 1)
+
+        for _ in range(kv_count):
+            key = read_str()
+            (tid,) = struct.unpack("<I", f.read(4))
+            if key == wanted and tid == STRING:
+                return read_str()
+            skip(tid)
+    return None
+
+
+class XttsServerBackend:
+    """`xtts serve` (rzafiamy/xtts-rs) — Coqui XTTS-v2 (~470M params, 58
+    built-in voices; French and English here) from one GGUF written by
+    `xtts convert`. Build it with build-xtts.sh, which installs
+    `xtts` into ./bin/. Weights under the Coqui Public Model License
+    (non-commercial).
+
+    Contract: `serve --model <gguf> --host --port`, GET /health (the server
+    binds only after the model is loaded and a warmup sentence was spoken),
+    POST /v1/audio/speech (OpenAI shape plus `language`; WAV or PCM out,
+    24 kHz) and POST /stream (`{text, voice, language}` in, raw PCM16 out as
+    it is decoded — the pocket-tts streaming contract, used by /v1/realtime).
+    One model speaks both languages: the request's `language` (or the one
+    detected from the text) picks it, `params.language` is the fallback.
+    """
+    name = "xtts-server"
+    binary_name = "xtts"
+    modalities = {TTS}
+    # Languages offered. XTTS speaks 14 (xtts-rs: en es fr de it pt pl tr
+    # ru nl cs ar hu hi), but only French and English are validated here
+    # (WER ~1 %); German, for one, babbles after the sentence, the original
+    # Coqui model included.
+    LANGUAGES = ("fr", "en")
+    _voices_cache: dict = {}
+
+    def voices(self, model_path: Path) -> list[str]:
+        """The built-in voices stored in the GGUF (`xtts.voices`)."""
+        st = model_path.stat()
+        key = (str(model_path), st.st_mtime_ns)
+        if key not in self._voices_cache:
+            raw = _gguf_string(model_path, "xtts.voices")
+            self._voices_cache[key] = json.loads(raw) if raw else []
+        return list(self._voices_cache[key])
+
+    @staticmethod
+    def match_voice(voice: str, voices: list[str]) -> str | None:
+        """The built-in voice `voice` names, ignoring case, `_` and `-`
+        ("claribel_dervla" -> "Claribel Dervla"), or None."""
+        norm = lambda v: " ".join(v.lower().replace("_", " ").replace("-", " ").split())
+        want = norm(voice)
+        return next((v for v in voices if norm(v) == want), None)
+
+    # Params that take a value: registry/config key -> CLI flag.
+    _PARAM_MAP = {
+        "device": "--device",              # cuda | cuda:N | cpu (~0.4x real time) | metal
+        "threads": "--threads",
+        "dtype": "--dtype",                # GPT activations: f32 (fastest) | f16 | bf16
+        "voice": "--voice",                # default voice ("Claribel Dervla")
+        "language": "--lang",              # default language (en)
+        "temperature": "--temperature",    # 0.75
+        "top_k": "--top-k",                # 50
+        "top_p": "--top-p",                # 0.85
+        "repetition_penalty": "--repetition-penalty",  # 5.0
+        "seed": "--seed",
+        "stop_prob": "--stop-prob",        # stop early once P(stop) >= this
+        "decode_chunk": "--decode-chunk",  # codes per decoder window (48)
+    }
+
+    def build_args(
+        self,
+        binary: str,
+        port: int,
+        model_path: Path,
+        entry: dict,
+        merged_params: dict,
+        artifacts: dict[str, Path],
+    ) -> list[str]:
+        args = [
+            binary, "serve",
+            "--model", str(model_path),
+            "--host", "127.0.0.1",
+            "--port", str(port),
+            "--model-id", str(entry.get("name") or "xtts-v2"),
+        ]
+        # The entry's own params only (merged_params carries llama-server
+        # defaults such as `threads: 8`).
+        params = entry.get("params") or {}
+        for key, flag in self._PARAM_MAP.items():
+            if params.get(key) not in (None, ""):
+                args += [flag, str(params[key])]
+        # xtts spells out numbers itself (the tn rules for fr/en, built in);
+        # `normalize: false` turns that off, e.g. behind zallama's normalizer.
+        if params.get("normalize") is False:
+            args.append("--no-normalize")
+        if params.get("greedy"):
+            args.append("--greedy")
+        return args
+
+    def health_path(self) -> str:
+        return "/health"
+
+
+# ---------------------------------------------------------------------------
 # sd-server backend (Image Generation / stable-diffusion.cpp)
 # ---------------------------------------------------------------------------
 class SdServerBackend:
@@ -1271,6 +1408,7 @@ _BACKENDS: dict[str, Backend] = {
     KokoroServerBackend.name: KokoroServerBackend(),
     VoxtralTtsServerBackend.name: VoxtralTtsServerBackend(),
     PocketTtsServerBackend.name: PocketTtsServerBackend(),
+    XttsServerBackend.name: XttsServerBackend(),
     SdServerBackend.name: SdServerBackend(),
     MalagaServerBackend.name: MalagaServerBackend(),
     TnServerBackend.name: TnServerBackend(),

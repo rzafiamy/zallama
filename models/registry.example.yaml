@@ -221,6 +221,26 @@ models:
       languages: {fr: pocket-tts-fr, en: pocket-tts-en}   # language -> registry name
       default_language: fr     # when the text is too short to tell
 
+  # --- TTS: French / English, 58 voices (Coqui XTTS-v2, Rust/GGUF) -----------
+  # Build: ./build-xtts.sh (CUDA). Convert the Coqui checkpoint
+  # (huggingface.co/coqui/XTTS-v2: model.pth, config.json, vocab.json,
+  # speakers_xtts.pth) into one GGUF:
+  #   bin/xtts convert <XTTS-v2 dir> -o xtts-v2-q4k.gguf --gpt-dtype q4k --no-cloning
+  # Weights: Coqui Public Model License (non-commercial). ~13x real time on a
+  # 4090, first streamed audio ~40 ms. Language: request "language" > detected.
+  - name: xtts
+    file: xtts-v2-q4k.gguf
+    modality: tts
+    backend: xtts-server
+    description: "XTTS-v2 (Coqui, 24 kHz, French/English, 58 voices)"
+    mem_gb: 1.1        # measured 1032 MiB peak incl. CUDA context
+    params:
+      device: cuda
+      language: fr               # when the request has none and detection abstains
+      normalizer: tn             # numbers, dates, amounts, Markdown -> words
+      normalizer_llm: gemma-e2b-tn   # Roman numerals, codes, phones (optional)
+      # voice: Claribel Dervla   # default voice
+
   # --- Text normalization for TTS (tn-server + optional LLM pass) -------------
   # TTS engines read digits, symbols and Markdown poorly. A TTS entry with
   # `params.normalizer: tn` gets its text through tn-server first (French and

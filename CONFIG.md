@@ -477,6 +477,60 @@ cold start 0.7 s, ~110 ms per sentence. Weights: CC-BY-4.0 (Kyutai).
 
 ---
 
+## `tts` (backend: `xtts-server`) — Coqui XTTS-v2
+
+Source: `XttsServerBackend`. Runs `xtts serve` from
+[rzafiamy/xtts-rs](https://github.com/rzafiamy/xtts-rs) (build with
+`./build-xtts.sh`), a Rust/Candle port of Coqui XTTS-v2 (~470M params). `file`
+is one GGUF written by `xtts convert <coqui XTTS-v2 dir> -o xtts-v2-q4k.gguf
+--gpt-dtype q4k --no-cloning` (weights, tokenizer and the 58 built-in voices;
+276 MB, the voice-cloning encoders left out). Set
+`backend: xtts-server` explicitly. Weights under the Coqui Public Model
+License (non-commercial use).
+
+One model speaks French and English with every voice (XTTS knows 12 more
+languages; zallama offers the two that were validated — German, for one,
+babbles after the sentence, the original Coqui model included). `/v1/audio/speech` passes the request's `language`
+(unsupported code → `400`), else the language detected from the text, else
+the server's default (`params.language`). `voice` is one of the 58 names
+(listed in `/v1/models/<id>`), matched ignoring case, `_` and `-`
+(`claribel_dervla` → `Claribel Dervla`); any other name falls back like for
+pocket-tts (`X-Zallama-Voice-Fallback`). No voice cloning yet. `speed` works
+(0.25–4). `/v1/realtime` streams from its `/stream` endpoint like pocket-tts
+(first audio ~40 ms after a phrase).
+
+Text: xtts spells out numbers and symbols itself (the tn rules, like
+pocket-tts) and zallama keeps the input's line breaks for it. For the full
+chain (tn safe mode + LLM pass) set `normalizer: tn` and `normalizer_llm`
+(see *Text normalization*); `/v1/realtime` streams straight to the engine and
+gets its built-in rules only. xtts drops the final period of each chunk it
+speaks: XTTS otherwise often reads it out loud ("point") or babbles after it
+(Parakeet WER fr 1.1 → 0.6 %, en 0.5 → 0.0 %); pauses between sentences and
+the ~170 ms of silence at the end are unchanged.
+
+Only the entry's own `params` are forwarded.
+
+| key | CLI flag | notes |
+|---|---|---|
+| `device` | `--device` | `cuda` (default when built with CUDA), `cuda:N`, `cpu` (~0.4x real time: too slow), `metal` |
+| `language` | `--lang` | default language when the request has none and detection abstains; default `en` |
+| `voice` | `--voice` | default voice; default `Claribel Dervla` |
+| `temperature`, `top_k`, `top_p`, `repetition_penalty` | same | sampling; defaults 0.75, 50, 0.85, 5.0 (Coqui's) |
+| `greedy` | `--greedy` when `true` | no sampling |
+| `seed` | `--seed` | fixed seed (default random) |
+| `stop_prob` | `--stop-prob` | stop once the stop code reaches this probability (0 = off) |
+| `decode_chunk` | `--decode-chunk` | codes per decoder window (~46 ms each); default 48 |
+| `dtype` | `--dtype` | GPT activations; `f32` (default) is fastest with quantized weights |
+| `normalize` | `--no-normalize` when `false` | xtts spells out numbers itself (fr/en tn rules) |
+
+Measured (RTX 4090, q4k, 58 voices embedded): 776 MiB idle (428 MiB of it is
+the bare CUDA context), 1032 MiB peak during a ~20 s utterance → `mem_gb: 1.1`
+(q8_0: 936 / 1224 MiB); ~13x real time, first streamed audio 35–45 ms; cold
+start ~1 s. Intelligibility (Parakeet WER, 2 voices × 3 seeds): q4k 0.6 % fr,
+0.0 % en; q6k and q8_0 are no better.
+
+---
+
 ## `tts` (backend: `voxtral-tts-server`) — Voxtral-4B-TTS-2603
 
 Source: `VoxtralTtsServerBackend`, a thin server of ours

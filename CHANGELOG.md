@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **XTTS-v2 text-to-speech (`backend: xtts-server`)** — runs
+  [xtts-rs](https://github.com/rzafiamy/xtts-rs), a Rust/Candle + GGUF port of Coqui XTTS-v2:
+  French and English, 58 voices, one 276 MB GGUF (q4k), ~1 GB VRAM, ~13x real time on an RTX
+  4090. `/v1/audio/speech` sends the request's `language` or the detected one; voice names match
+  ignoring case and `_` (`claribel_dervla`). `/v1/realtime` streams it like pocket-tts (first
+  audio ~40 ms). `build-xtts.sh` installs `bin/xtts`.
+
 ## [1.30.0] - 2026-10-02
 
 ### Added

@@ -87,7 +87,7 @@ You decide which models load, how much RAM/VRAM they get, when they sleep, and w
 | 🧠 **Memory awareness** | Set a `mem_budget_gb` and Zallama evicts least-recently-used models to make room — automatically. |
 | 🔒 **Locked down by default** | Binds to `127.0.0.1`, optional Bearer-token auth, sane timeouts out of the box. |
 
-Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, `pocket-tts`, `sd-server`, `malaga`), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, `image`, `translation`); new modalities are added as new backends, not as changes scattered across the codebase.
+Under the hood, Zallama is a **dynamic router and process manager** for your local GGUF models. Ask for a model, and it starts the right backend (`llama-server`, `parakeet-server`, `kokoro-server`, `pocket-tts`, `xtts`, `sd-server`, `malaga`), routes your request to it, and unloads it after a period of inactivity so your RAM/VRAM goes back to you. Each model declares a `modality` (`text`, `embedding`, `rerank`, `asr`, `tts`, `image`, `translation`); new modalities are added as new backends, not as changes scattered across the codebase.
 
 ---
 
@@ -121,6 +121,9 @@ Helper scripts build each engine and install the binaries into `./bin/` (the clo
 
 # pocket-tts (TTS, Kyutai Pocket TTS in Rust/GGUF; needs cargo + nvcc, or --cpu)
 ./build-pocket-tts.sh
+
+# xtts (TTS, Coqui XTTS-v2 in Rust/GGUF: French/English, 58 voices; needs cargo + nvcc)
+./build-xtts.sh
 
 # tn-server (text normalization in front of the TTS engines; cargo only)
 ./build-tn.sh

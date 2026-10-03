@@ -285,6 +285,8 @@ def _tts_info(entry: dict, backend_obj) -> dict:
     routes = params.get("languages")
     if isinstance(routes, dict) and routes:
         info["languages"] = sorted(routes)
+    elif getattr(backend_obj, "LANGUAGES", None):
+        info["languages"] = list(backend_obj.LANGUAGES)
     return info
 
 
@@ -703,7 +705,7 @@ def _sanitize_tts_input(text: str, keep_lines: bool = False) -> str:
     Strip control characters (Cc/Cf/Co/Cs), drop underscores (mispronounced),
     and collapse all whitespace runs to single spaces so the input is one line.
 
-    `keep_lines` (pocket-tts) keeps line breaks and underscores: its own
+    `keep_lines` (pocket-tts, xtts) keeps line breaks and underscores: its own
     normalizer reads headings and list items as one sentence per line and
     handles Markdown emphasis and snake_case.
     """
@@ -803,7 +805,7 @@ async def audio_speech(
     registry=Depends(get_registry),
 ):
     """Proxy an OpenAI-style speech request to a TTS backend (kokoro-server,
-    pocket-tts, voxtral-tts-server, malaga).
+    pocket-tts, xtts, voxtral-tts-server, malaga).
 
     JSON in, audio out: the client posts {model, input, voice, ...} and the
     backend returns binary audio (WAV). We pick the instance from `model`, then
@@ -854,7 +856,7 @@ async def audio_speech(
         # first blank line (its pipeline splits on `\n+` and drops trailing
         # chunks).
         body["input"] = _sanitize_tts_input(
-            text, keep_lines=backend_name == "pocket-tts-server"
+            text, keep_lines=backend_name in ("pocket-tts-server", "xtts-server")
         )
 
     # The engine is resolved after normalization: starting the normalizer's
@@ -893,6 +895,11 @@ async def audio_speech(
         )
     backend_obj = get_backend(backend_name or "kokoro-server")
     known = _tts_voices(entry, backend_obj, registry)
+    match = getattr(backend_obj, "match_voice", None)
+    if voice and known and match is not None:
+        # xtts voice names have spaces and capitals ("Claribel Dervla");
+        # accept "claribel_dervla" too.
+        voice = match(voice, known) or voice
     if voice and known is not None and voice not in known and not voice.startswith("data:"):
         voice_fallback, voice = voice, ""
     if voice:
@@ -907,6 +914,19 @@ async def audio_speech(
             body["voice"] = chosen
         else:
             body.pop("voice", None)
+    # One XTTS model speaks every language, told by the request's `language`:
+    # the detected one when the client gave none (else the server's --lang).
+    languages = getattr(backend_obj, "LANGUAGES", None)
+    if languages is not None:
+        requested = str(body.get("language") or "").strip().lower()
+        if requested and requested.split("-")[0] not in languages:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{model_name}' speaks {', '.join(languages)}; "
+                       f"got language '{requested}'.",
+            )
+        if not requested and lang in languages:
+            body["language"] = lang
     upstream_url = f"{inst.base_url}/v1/audio/speech"
     async with pm.serving(inst, "audio/speech"):
         async with httpx.AsyncClient(timeout=_request_timeout(request)) as client:

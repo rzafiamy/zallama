@@ -866,12 +866,22 @@ class RealtimeSession:
         inst.touch()
         backend = ModelRegistry.backend_of(entry)
         voice = self.conf["voice"]
-        if backend == "pocket-tts-server":
-            from ..backends import PocketTtsServerBackend
+        if backend in ("pocket-tts-server", "xtts-server"):
+            from ..backends import PocketTtsServerBackend, XttsServerBackend
             body = {"text": text}
+            if backend == "xtts-server":
+                # One model, every language: say which. An unknown voice
+                # would fail the stream, so it falls back to the default.
+                lang = lang or self.conf["language"] or self.language
+                if lang in XttsServerBackend.LANGUAGES:
+                    body["language"] = lang
+                if voice:
+                    known = XttsServerBackend().voices(self.registry.resolve_path(entry))
+                    if match := XttsServerBackend.match_voice(voice, known):
+                        body["voice"] = match
             # A predefined name, or inline audio to clone ("data:audio/wav;
             # base64,..."); never a path or hf:// URL (see openai.py).
-            if voice in PocketTtsServerBackend.VOICES or (
+            elif voice in PocketTtsServerBackend.VOICES or (
                     voice.startswith("data:audio/") and "base64," in voice):
                 body["voice"] = voice
             async with self.pm.serving(inst, "audio/speech", stream=True):
@@ -1011,6 +1021,9 @@ class RealtimeSession:
         if isinstance(voice, str):
             voice = voice.strip()
             known = self.tts_voices()
+            if voice and known and voice not in known:
+                from ..backends import XttsServerBackend
+                voice = XttsServerBackend.match_voice(voice, known) or voice
             if not voice or voice.startswith("data:audio/") or known is None or voice in known:
                 conf["voice"] = voice
             else:
